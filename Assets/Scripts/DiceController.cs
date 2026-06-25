@@ -1,83 +1,83 @@
+using System;
 using UnityEngine;
+using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 /// <summary>
-/// Controls a D20 dice: rolling via mouse click, detecting when it stops,
-// and reporting the top face value via a UI Text component.
+/// Controls a D20 dice: rolling via click on the die, detecting when it stops,
+/// and reporting the top face value via a UI Text component.
 /// </summary>
 [RequireComponent(typeof(Rigidbody))]
+[RequireComponent(typeof(DiceMeshGenerator))]
 public class DiceController : MonoBehaviour
 {
     [Header("References")]
     [Tooltip("UI Text element to display the rolled value")]
     public Text resultText;
 
+    [Tooltip("Camera used for click detection. Falls back to Camera.main.")]
+    public Camera raycastCamera;
+
     [Header("Physics")]
     [Tooltip("Base force applied when rolling")]
     public float throwForce = 5f;
+
     [Tooltip("Base torque applied when rolling")]
     public float throwTorque = 5f;
 
-    // Normals of the 20 faces of an icosahedron (normalized)
-    private static readonly Vector3[] faceNormals = new Vector3[]
-    {
-        new Vector3( 0.000f,  0.894f,  0.447f),
-        new Vector3( 0.000f,  0.894f, -0.447f),
-        new Vector3( 0.723f,  0.447f,  0.526f),
-        new Vector3(-0.723f,  0.447f,  0.526f),
-        new Vector3(-0.276f,  0.447f,  0.851f),
-        new Vector3( 0.276f,  0.447f,  0.851f),
-        new Vector3( 0.894f,  0.000f,  0.447f),
-        new Vector3( 0.894f,  0.000f, -0.447f),
-        new Vector3( 0.276f, -0.447f,  0.851f),
-        new Vector3(-0.276f, -0.447f,  0.851f),
-        new Vector3(-0.723f, -0.447f,  0.526f),
-        new Vector3( 0.723f, -0.447f,  0.526f),
-        new Vector3( 0.000f, -0.894f,  0.447f),
-        new Vector3( 0.000f, -0.894f, -0.447f),
-        new Vector3(-0.723f, -0.447f, -0.526f),
-        new Vector3( 0.723f, -0.447f, -0.526f),
-        new Vector3(-0.276f, -0.447f, -0.851f),
-        new Vector3( 0.276f, -0.447f, -0.851f),
-        new Vector3(-0.894f,  0.000f,  0.447f),
-        new Vector3(-0.894f,  0.000f, -0.447f)
-    };
+    [Tooltip("Minimum upward impulse so the die lifts off the surface")]
+    public float minUpwardForce = 1f;
 
-    // Mapping from face index to die value (standard D20 ordering)
-    private static readonly int[] faceValues = new int[]
-    {
-        1, 2, 3, 4, 5,
-        6, 7, 8, 9, 10,
-        11,12,13,14,15,
-        16,17,18,19,20
-    };
+    public event Action<int> OnRolled;
 
     private Rigidbody rb;
-    private bool wasSleeping = false;
+    private Vector3[] faceNormals;
+    private int[] faceValues;
+    private bool wasSleeping = true;
+    private bool hasThrown;
 
     private void Awake()
     {
         rb = GetComponent<Rigidbody>();
-        // Ensure the die starts stationary
         rb.Sleep();
+    }
+
+    private void Start()
+    {
+        DiceMeshGenerator meshGenerator = GetComponent<DiceMeshGenerator>();
+        faceNormals = meshGenerator.FaceNormals;
+        faceValues = meshGenerator.FaceValues;
+
+        if (raycastCamera == null)
+            raycastCamera = Camera.main;
     }
 
     private void Update()
     {
-        // Detect left mouse click
-        if (Input.GetMouseButtonDown(0))
-        {
+        if (TryGetDiceClick())
             Roll();
-        }
 
-        // Detect when die comes to rest
         bool sleeping = rb.IsSleeping();
-        if (!wasSleeping && sleeping)
-        {
-            // Just came to rest
+        if (hasThrown && !wasSleeping && sleeping)
             ShowResult();
-        }
+
         wasSleeping = sleeping;
+    }
+
+    bool TryGetDiceClick()
+    {
+        if (Mouse.current == null || !Mouse.current.leftButton.wasPressedThisFrame)
+            return false;
+
+        Camera cam = raycastCamera != null ? raycastCamera : Camera.main;
+        if (cam == null)
+            return false;
+
+        Ray ray = cam.ScreenPointToRay(Mouse.current.position.ReadValue());
+        if (!Physics.Raycast(ray, out RaycastHit hit))
+            return false;
+
+        return hit.rigidbody == rb;
     }
 
     /// <summary>
@@ -85,30 +85,26 @@ public class DiceController : MonoBehaviour
     /// </summary>
     public void Roll()
     {
-        // Wake up the rigidbody if it was sleeping
+        hasThrown = true;
         rb.WakeUp();
 
-        // Random direction and force
-        Vector3 force = Random.onUnitSphere * throwForce;
-        Vector3 torque = Random.onUnitSphere * throwTorque;
+        Vector3 force = UnityEngine.Random.onUnitSphere * throwForce;
+        force.y = Mathf.Max(force.y, minUpwardForce);
+
+        Vector3 torque = UnityEngine.Random.onUnitSphere * throwTorque;
 
         rb.AddForce(force, ForceMode.Impulse);
         rb.AddTorque(torque, ForceMode.Impulse);
 
-        // Clear previous result
         if (resultText != null)
             resultText.text = "";
     }
 
-    /// <summary>
-    /// Determines which face is currently on top and displays the value.
-    /// </summary>
-    private void ShowResult()
+    void ShowResult()
     {
         int bestIndex = 0;
         float bestDot = -1f;
 
-        // Transform each local face normal to world space and compare with up
         for (int i = 0; i < faceNormals.Length; i++)
         {
             Vector3 worldNormal = transform.TransformDirection(faceNormals[i]);
@@ -121,6 +117,8 @@ public class DiceController : MonoBehaviour
         }
 
         int value = faceValues[bestIndex];
+        OnRolled?.Invoke(value);
+
         if (resultText != null)
             resultText.text = $"Выпало: {value}";
         else
