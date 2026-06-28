@@ -1,7 +1,11 @@
 using System.Collections.Generic;
+using System.IO;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 /// <summary>
 /// UI-панель для спавна дайсов, броска, очистки и отображения результатов.
@@ -23,9 +27,11 @@ public class DiceUI : MonoBehaviour
     private bool _trackingRoll;
     private int _rollingCount;
     private Canvas _canvas;
+    private GridManager _gridManager;
 
     void Start()
     {
+        _gridManager = FindFirstObjectByType<GridManager>();
         BuildUI();
         if (DiceManager.Instance != null)
             DiceManager.Instance.OnAnyResult += OnDieResult;
@@ -109,11 +115,11 @@ public class DiceUI : MonoBehaviour
 
         // Считаем размеры
         int dieCols = 7; // d4..d100
-        int actionCols = 2; // Roll, Clear
         float totalW = padding * 2 + dieCols * buttonWidth + (dieCols - 1) * gap;
         float rowH = buttonHeight + gap;
+        float toggleH = 24f; // высота ряда с чекбоксом
         float resultH = 55f;
-        float totalH = padding * 3 + rowH * 2 + resultH;
+        float totalH = padding * 4 + rowH * 2 + toggleH + resultH;
 
         prt.sizeDelta = new Vector2(totalW, totalH);
         prt.anchoredPosition = new Vector2(padding, -padding);
@@ -129,10 +135,25 @@ public class DiceUI : MonoBehaviour
             MakeButton(panelGO.transform, labels[i], x, y, buttonWidth, buttonHeight, uiFont, () => SpawnDie(dt));
         }
 
-        // Roll + Clear (нижний ряд)
+        // Roll + Clear + Tex + ↺ ↻ (нижний ряд)
         float row2y = -padding - rowH;
-        MakeButton(panelGO.transform, "Roll", padding, row2y, buttonWidth, buttonHeight, uiFont, RollAll);
-        MakeButton(panelGO.transform, "Clear", padding + buttonWidth + gap, row2y, buttonWidth, buttonHeight, uiFont, ClearAll);
+        float bx = padding;
+        MakeButton(panelGO.transform, "Roll", bx, row2y, buttonWidth, buttonHeight, uiFont, RollAll);
+        bx += buttonWidth + gap;
+        MakeButton(panelGO.transform, "Clear", bx, row2y, buttonWidth, buttonHeight, uiFont, ClearAll);
+        bx += buttonWidth + gap;
+        MakeButton(panelGO.transform, "Tex", bx, row2y, buttonWidth, buttonHeight, uiFont, OpenTexturePicker);
+        bx += buttonWidth + gap;
+        MakeButton(panelGO.transform, "↺", bx, row2y, buttonWidth * 0.6f, buttonHeight, uiFont, () => RotateBoard(false));
+        bx += buttonWidth * 0.6f + gap;
+        MakeButton(panelGO.transform, "↻", bx, row2y, buttonWidth * 0.6f, buttonHeight, uiFont, () => RotateBoard(true));
+
+        // Чекбокс авторазмера (3-й ряд)
+        float row3y = -padding * 2 - rowH * 2;
+        MakeToggle(panelGO.transform, "Fit to tex", padding, row3y, uiFont,
+            _gridManager != null && _gridManager.autoResizeToTexture,
+            v => { if (_gridManager != null) _gridManager.autoResizeToTexture = v; }
+        );
 
         // Текст результатов
         GameObject textGO = new GameObject("ResultText");
@@ -148,7 +169,7 @@ public class DiceUI : MonoBehaviour
         trt.anchorMin = new Vector2(0, 1);
         trt.anchorMax = new Vector2(1, 1);
         trt.pivot = new Vector2(0, 1);
-        trt.anchoredPosition = new Vector2(padding, -padding * 2 - rowH * 2);
+        trt.anchoredPosition = new Vector2(padding, row3y - toggleH - padding);
         trt.sizeDelta = new Vector2(-padding * 2, resultH);
 
         UpdateResultText();
@@ -189,6 +210,57 @@ public class DiceUI : MonoBehaviour
         lrt.sizeDelta = Vector2.zero;
     }
 
+    void MakeToggle(Transform parent, string label, float x, float y, Font font, bool initialValue, UnityEngine.Events.UnityAction<bool> onChanged)
+    {
+        float toggleSize = 18f;
+        float labelW = 70f;
+
+        GameObject go = new GameObject($"Tgl_{label}");
+        go.transform.SetParent(parent, false);
+
+        // Background
+        Image bg = go.AddComponent<Image>();
+        bg.color = new Color(0.2f, 0.25f, 0.35f);
+
+        Toggle toggle = go.AddComponent<Toggle>();
+        toggle.isOn = initialValue;
+        toggle.onValueChanged.AddListener(onChanged);
+
+        RectTransform rt = go.GetComponent<RectTransform>();
+        rt.anchorMin = new Vector2(0, 1);
+        rt.anchorMax = new Vector2(0, 1);
+        rt.pivot = new Vector2(0, 1);
+        rt.sizeDelta = new Vector2(toggleSize, toggleSize);
+        rt.anchoredPosition = new Vector2(x, y);
+
+        // Checkmark
+        GameObject checkGO = new GameObject("Checkmark");
+        checkGO.transform.SetParent(go.transform, false);
+        Image checkImg = checkGO.AddComponent<Image>();
+        checkImg.color = new Color(0.4f, 0.7f, 1f);
+        RectTransform crt = checkGO.GetComponent<RectTransform>();
+        crt.anchorMin = new Vector2(0.15f, 0.15f);
+        crt.anchorMax = new Vector2(0.85f, 0.85f);
+        crt.sizeDelta = Vector2.zero;
+        toggle.graphic = checkImg;
+
+        // Label
+        GameObject labelGO = new GameObject("Label");
+        labelGO.transform.SetParent(parent, false);
+        Text txt = labelGO.AddComponent<Text>();
+        txt.text = label;
+        txt.font = font;
+        txt.fontSize = 14;
+        txt.color = new Color(0.8f, 0.85f, 0.9f);
+        txt.alignment = TextAnchor.MiddleLeft;
+        RectTransform lrt2 = txt.GetComponent<RectTransform>();
+        lrt2.anchorMin = new Vector2(0, 1);
+        lrt2.anchorMax = new Vector2(0, 1);
+        lrt2.pivot = new Vector2(0, 1);
+        lrt2.sizeDelta = new Vector2(labelW, toggleSize);
+        lrt2.anchoredPosition = new Vector2(x + toggleSize + 6f, y);
+    }
+
     // ══════════════════════════════════════════════
     //  Действия
     // ══════════════════════════════════════════════
@@ -225,6 +297,52 @@ public class DiceUI : MonoBehaviour
         _trackingRoll = false;
         _rollingCount = 0;
         UpdateResultText();
+    }
+
+    // ══════════════════════════════════════════════
+    //  Текстура геймборда
+    // ══════════════════════════════════════════════
+
+    void OpenTexturePicker()
+    {
+#if UNITY_EDITOR
+        string path = EditorUtility.OpenFilePanel("Выберите изображение", "", "png,jpg,jpeg,bmp,tga");
+        if (string.IsNullOrEmpty(path)) return;
+        ApplyTexture(path);
+#else
+        Debug.LogWarning("Texture picker работает только в Editor. В билде используйте свою реализацию.");
+#endif
+    }
+
+    void ApplyTexture(string filePath)
+    {
+        if (_gridManager == null)
+        {
+            _gridManager = FindFirstObjectByType<GridManager>();
+            if (_gridManager == null)
+            {
+                Debug.LogWarning("DiceUI: GridManager not found in scene");
+                return;
+            }
+        }
+
+        byte[] data = File.ReadAllBytes(filePath);
+        Texture2D tex = new Texture2D(2, 2);
+        if (!tex.LoadImage(data))
+        {
+            Debug.LogError($"DiceUI: failed to load image: {filePath}");
+            Destroy(tex);
+            return;
+        }
+
+        _gridManager.SetBoardTexture(tex);
+    }
+
+    void RotateBoard(bool clockwise)
+    {
+        if (_gridManager == null)
+            _gridManager = FindFirstObjectByType<GridManager>();
+        _gridManager?.RotateBoardTexture(clockwise);
     }
 
     // ══════════════════════════════════════════════
