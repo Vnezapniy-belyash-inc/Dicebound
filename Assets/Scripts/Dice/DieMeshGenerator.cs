@@ -23,11 +23,18 @@ public static class DieMeshGenerator
         switch (type)
         {
             case DieType.d4:  return BuildMesh(BuildTetrahedron(),    new[] { 1, 2, 3, 4 });
-            case DieType.d6:  return BuildMesh(BuildCube(),           new[] { 1, 2, 3, 4, 5, 6 });
-            case DieType.d8:  return BuildMesh(BuildOctahedron(),     new[] { 1, 2, 3, 4, 5, 6, 7, 8 });
-            case DieType.d10:  return BuildD10(new[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 0 });
-            case DieType.d100: return BuildD10(new[] { 10, 20, 30, 40, 50, 60, 70, 80, 90, 0 });
-            case DieType.d12: return BuildMesh(BuildDodecahedronVertices(),   new[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 });
+            // d6: -Z,+Z,-Y,+Y,-X,+X → противоположные грани: 1↔6, 2↔5, 3↔4
+            case DieType.d6:  return BuildMesh(BuildCube(),           new[] { 1, 6, 2, 5, 3, 4 });
+            // d8: верхние 0-3, нижние 4-7 → противоположные: 1↔8, 2↔7, 3↔6, 4↔5
+            case DieType.d8:  return BuildMesh(BuildOctahedron(),     new[] { 1, 2, 3, 4, 6, 5, 8, 7 });
+            // d10: top 0-4, bottom 0-4 → top_i ↔ bottom_(i+2) → 0↔9, 1↔8, 2↔7, 3↔6, 4↔5
+            case DieType.d10:  return BuildD10(new[] { 0, 1, 2, 3, 4, 6, 5, 9, 8, 7 });
+            // d100: 00↔90, 10↔80, 20↔70, 30↔60, 40↔50
+            case DieType.d100: return BuildD10(new[] { 0, 10, 20, 30, 40, 60, 50, 90, 80, 70 });
+            // d12: вокруг вершин икосаэдра 0..11 → vi↔противоположная: 1↔12, 2↔11, 5↔8, 6↔7, 9↔4, 10↔3
+            case DieType.d12: return BuildMesh(BuildDodecahedronVertices(),
+                              new[] { 1, 2, 11, 12, 5, 6, 7, 8, 9, 10, 3, 4 });
+            // d20: 1..20 (противоположные = 21)
             case DieType.d20: return BuildMesh(BuildIcosahedron(),    EnumerateFaceValues(20));
             default:          return (null, null);
         }

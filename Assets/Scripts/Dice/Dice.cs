@@ -35,7 +35,7 @@ public class Dice : MonoBehaviour
     // ─── публичное состояние ───
     public DieType DieType { get; private set; }
     public int Result { get; private set; } = -1;
-    public bool IsRolling { get; private set; }
+    public bool IsRolling { get; set; }
     public bool HasResult { get; private set; }
 
     /// <summary>Срабатывает когда кубик остановился и результат определён.</summary>
@@ -89,6 +89,9 @@ public class Dice : MonoBehaviour
 
         // Текст на гранях
         CreateFaceLabels();
+
+        // Компонент подсветки (для выделения)
+        gameObject.AddComponent<DiceHighlight>();
     }
 
     void CreateFaceLabels()
@@ -122,15 +125,16 @@ public class Dice : MonoBehaviour
             tm.alignment = TextAlignment.Center;
             tm.characterSize = 0.04f;
 
-            // Замена материала на кастомный шейдер с ZWrite On + clip
-            var mr = labelObj.GetComponent<MeshRenderer>();
-            Shader fontShader = Shader.Find("Custom/Font Opaque");
-            if (fontShader != null)
+            // Фикс: заменяем шейдер на кастомный с ZWrite On,
+            // чтобы цифры на задних гранях не просвечивали сквозь кубик
+            MeshRenderer mr = labelObj.GetComponent<MeshRenderer>();
+            if (mr != null)
             {
-                Material mat = new Material(fontShader);
-                mat.mainTexture = tm.font.material.mainTexture;
-                mat.color = textColor;
-                mr.material = mat;
+                Shader shader = Shader.Find("MeshokSGovnom/FontFaceUnlit");
+                if (shader != null)
+                {
+                    mr.material.shader = shader;
+                }
             }
         }
     }
