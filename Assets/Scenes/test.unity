@@ -220,6 +220,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::CameraMovement
   moveSpeed: 10
   scrollSpeed: 3
+  freeMoveSpeed: 12
+  freeLookSensitivity: 3
+  freeMinPitch: -89
+  freeMaxPitch: 89
 --- !u!20 &544160270
 Camera:
   m_ObjectHideFlags: 0
@@ -271,6 +275,55 @@ Camera:
   m_OcclusionCulling: 1
   m_StereoConvergence: 10
   m_StereoSeparation: 0.022
+--- !u!1 &664453337
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 664453339}
+  - component: {fileID: 664453338}
+  m_Layer: 0
+  m_Name: DiceUI
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &664453338
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 664453337}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a63a326935bae054c902a4ecb73f1b66, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::DiceUI
+  buttonWidth: 55
+  buttonHeight: 32
+  gap: 4
+  padding: 8
+  spawnSpread: 0.8
+--- !u!4 &664453339
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 664453337}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: -3.47307, y: 0, z: 7.71257}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &785883434
 GameObject:
   m_ObjectHideFlags: 0
@@ -452,6 +505,7 @@ GameObject:
   m_Component:
   - component: {fileID: 1552964289}
   - component: {fileID: 1552964288}
+  - component: {fileID: 1552964290}
   m_Layer: 0
   m_Name: DiceManager
   m_TagString: Untagged
@@ -474,6 +528,7 @@ MonoBehaviour:
   spawnHeight: 1.5
   spawnSpread: 0.3
   dicePhysics: {fileID: 0}
+  fontSize: 48
 --- !u!4 &1552964289
 Transform:
   m_ObjectHideFlags: 0
@@ -489,6 +544,23 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1552964290
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1552964287}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e5be7b54f3406444ebef6035affdf2f4, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::DiceDragHandler
+  dragHeight: 1.2
+  throwMultiplier: 1
+  areaThreshold: 5
+  shakeThreshold: 4
+  clusterStrength: 0.15
 --- !u!1 &2121101991
 GameObject:
   m_ObjectHideFlags: 0
@@ -611,3 +683,4 @@ SceneRoots:
   - {fileID: 2121101995}
   - {fileID: 1552964289}
   - {fileID: 785883436}
+  - {fileID: 664453339}
