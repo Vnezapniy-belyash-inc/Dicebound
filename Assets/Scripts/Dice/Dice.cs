@@ -41,6 +41,15 @@ public class Dice : MonoBehaviour
     /// <summary>Срабатывает когда кубик остановился и результат определён.</summary>
     public event Action<Dice> OnResultReady;
 
+    /// <summary>Сбрасывает состояние для ручного броска (drag-and-drop).</summary>
+    public void StartRolling()
+    {
+        IsRolling = true;
+        HasResult = false;
+        Result = -1;
+        _settleTimer = 0f;
+    }
+
     // ─── приватное ───
     private Rigidbody _rb;
     private DieFaceData[] _faces;
@@ -86,6 +95,7 @@ public class Dice : MonoBehaviour
         _rb.mass = 0.3f;
         _rb.angularDamping = 0.3f;
         _rb.linearDamping = 0.2f;
+        _rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
 
         // Текст на гранях
         CreateFaceLabels();

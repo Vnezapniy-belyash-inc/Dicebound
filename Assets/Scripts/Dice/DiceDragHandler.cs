@@ -32,6 +32,13 @@ public class DiceDragHandler : MonoBehaviour
     [Range(0f, 1f)]
     public float clusterStrength = 0.15f;
 
+    [Tooltip("Сила случайного вращения при броске дайса")]
+    [Range(0f, 20f)]
+    public float throwSpin = 5f;
+
+    [Tooltip("Максимальная скорость броска (предотвращает пролёт сквозь стены)")]
+    public float maxThrowSpeed = 30f;
+
     private readonly List<Dice> _selected = new();
     private bool _isDragging;
     private Vector3 _dragOffset;
@@ -207,29 +214,37 @@ public class DiceDragHandler : MonoBehaviour
         if (_selected.Contains(dice))
         {
             RemoveFromSelection(dice);
-            if (_selected.Count == 0) return;
         }
         else
         {
             AddToSelection(dice);
         }
-        StartDragging(ray);
     }
 
     void AddToSelection(Dice dice)
     {
-        if (_selected.Contains(dice)) return;
+        if (dice == null || _selected.Contains(dice)) return;
         _selected.Add(dice);
         dice.IsRolling = false;
-        dice.GetComponent<Rigidbody>().isKinematic = true;
-        dice.GetComponent<DiceHighlight>().SetHighlighted(true);
+        Rigidbody rb = dice.GetComponent<Rigidbody>();
+        if (rb != null)
+        {
+            rb.linearVelocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+            rb.isKinematic = true;
+        }
+        DiceHighlight hl = dice.GetComponent<DiceHighlight>();
+        if (hl != null) hl.SetHighlighted(true);
     }
 
     void RemoveFromSelection(Dice dice)
     {
+        if (dice == null) return;
         _selected.Remove(dice);
-        dice.GetComponent<Rigidbody>().isKinematic = false;
-        dice.GetComponent<DiceHighlight>().SetHighlighted(false);
+        Rigidbody rb = dice.GetComponent<Rigidbody>();
+        if (rb != null) rb.isKinematic = false;
+        DiceHighlight hl = dice.GetComponent<DiceHighlight>();
+        if (hl != null) hl.SetHighlighted(false);
     }
 
     void ClearSelection()
@@ -237,8 +252,13 @@ public class DiceDragHandler : MonoBehaviour
         _areaSelectPending = false;
         foreach (var d in _selected)
         {
-            d.GetComponent<Rigidbody>().isKinematic = false;
-            d.GetComponent<DiceHighlight>().SetHighlighted(false);
+            if (d != null)
+            {
+                Rigidbody rb = d.GetComponent<Rigidbody>();
+                if (rb != null) rb.isKinematic = false;
+                DiceHighlight hl = d.GetComponent<DiceHighlight>();
+                if (hl != null) hl.SetHighlighted(false);
+            }
         }
         _selected.Clear();
         _isDragging = false;
@@ -248,6 +268,20 @@ public class DiceDragHandler : MonoBehaviour
 
     void StartDragging(Ray ray)
     {
+        _velocity = Vector3.zero;
+        _isDragging = true;
+
+        // Поднимаем дайсы на высоту перетаскивания (до расчёта смещения!)
+        foreach (var d in _selected)
+        {
+            if (d != null)
+            {
+                Vector3 pos = d.transform.position;
+                pos.y = dragHeight;
+                d.transform.position = pos;
+            }
+        }
+
         // Единая плоскость на dragHeight — совпадает с DragAll, нет скачка
         Plane p = new Plane(Vector3.up, new Vector3(0, dragHeight, 0));
         if (p.Raycast(ray, out float dist))
@@ -260,9 +294,6 @@ public class DiceDragHandler : MonoBehaviour
             _prevMouseWorldPos = Vector3.zero;
             _dragOffset = Vector3.zero;
         }
-
-        _velocity = Vector3.zero;
-        _isDragging = true;
     }
 
     void DragAll(Mouse m)
@@ -280,7 +311,14 @@ public class DiceDragHandler : MonoBehaviour
 
         // Двигаем все выделенные дайсы
         foreach (var d in _selected)
-            d.transform.position += delta;
+        {
+            if (d != null)
+            {
+                Vector3 pos = d.transform.position + delta;
+                pos.y = dragHeight;
+                d.transform.position = pos;
+            }
+        }
 
         // Стряхивание в кучу: при быстрых движениях мыши стягиваем дайсы к курсору
         Vector2 mouseDelta = m.delta.ReadValue();
@@ -289,7 +327,14 @@ public class DiceDragHandler : MonoBehaviour
         {
             float t = Mathf.Clamp01((shakeSpeed - shakeThreshold) / shakeThreshold) * clusterStrength;
             foreach (var d in _selected)
-                d.transform.position = Vector3.Lerp(d.transform.position, currentMouseWorld, t);
+            {
+                if (d != null)
+                {
+                    Vector3 pos = Vector3.Lerp(d.transform.position, currentMouseWorld, t);
+                    pos.y = dragHeight;
+                    d.transform.position = pos;
+                }
+            }
 
             // Не даём дайсам войти друг в друга
             SeparateDice();
@@ -309,22 +354,44 @@ public class DiceDragHandler : MonoBehaviour
         Vector3 throwVelocity = _velocity * throwMultiplier;
         throwVelocity.y += 2f;
 
+        // Ограничение скорости (предотвращает пролёт сквозь стены)
+        if (throwVelocity.magnitude > maxThrowSpeed)
+            throwVelocity = throwVelocity.normalized * maxThrowSpeed;
+
         foreach (var d in _selected)
         {
+            if (d == null) continue;
             Rigidbody rb = d.GetComponent<Rigidbody>();
-            rb.isKinematic = false;
-            rb.linearVelocity = throwVelocity;
+            if (rb != null)
+            {
+                d.StartRolling();
+                rb.isKinematic = false;
+                rb.linearVelocity = throwVelocity;
+                rb.angularVelocity = Random.insideUnitSphere * throwSpin;
+            }
         }
 
         _isDragging = false;
+
+        // Уведомляем UI о ручном броске
+        var diceUI = FindAnyObjectByType<DiceUI>();
+        if (diceUI != null) diceUI.StartManualRoll(_selected.Count);
     }
 
     Vector3 GetSelectionCenter()
     {
         if (_selected.Count == 0) return Vector3.zero;
         Vector3 sum = Vector3.zero;
-        foreach (var d in _selected) sum += d.transform.position;
-        return sum / _selected.Count;
+        int count = 0;
+        foreach (var d in _selected)
+        {
+            if (d != null)
+            {
+                sum += d.transform.position;
+                count++;
+            }
+        }
+        return count > 0 ? sum / count : Vector3.zero;
     }
 
     void SeparateDice()
@@ -332,8 +399,10 @@ public class DiceDragHandler : MonoBehaviour
         const float minDist = 1.05f; // 2 × circumradius + зазор
         for (int i = 0; i < _selected.Count; i++)
         {
+            if (_selected[i] == null) continue;
             for (int j = i + 1; j < _selected.Count; j++)
             {
+                if (_selected[j] == null) continue;
                 Vector3 a = _selected[i].transform.position;
                 Vector3 b = _selected[j].transform.position;
                 Vector3 dir = b - a;

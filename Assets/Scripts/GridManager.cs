@@ -43,7 +43,7 @@ public class GridManager : MonoBehaviour
     public float wallHeight = 83f;
 
     [Tooltip("Толщина стен")]
-    public float wallThickness = 0.3f;
+    public float wallThickness = 3f;
 
     [Tooltip("PhysicMaterial для стен (упругость/трение)")]
     public PhysicsMaterial wallPhysics;
@@ -420,11 +420,10 @@ public class GridManager : MonoBehaviour
 #if UNITY_EDITOR
     void OnValidate()
     {
-        // Не перестраиваем в рантайме через OnValidate
-        if (!Application.isPlaying) return;
-
-        if (_gridLinesParent != null)
-            GenerateGridVisual();
+        // Валидация параметров без создания объектов
+        // (Unity 6 запрещает new GameObject/AddComponent в OnValidate)
+        if (gridWidth < 1) gridWidth = 1;
+        if (gridHeight < 1) gridHeight = 1;
     }
 #endif
 }
