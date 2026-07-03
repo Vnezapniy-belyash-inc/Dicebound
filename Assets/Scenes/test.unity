@@ -495,6 +495,84 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 50, y: -30, z: 0}
+--- !u!1 &1164828306
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1164828309}
+  - component: {fileID: 1164828308}
+  - component: {fileID: 1164828307}
+  m_Layer: 0
+  m_Name: Character
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1164828307
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1164828306}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ad388b623b441754cbff9b603119c4c8, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::CharacterSheetUI
+  characterData: {fileID: 1164828308}
+  panelWidth: 340
+  rowHeight: 46
+  headerHeight: 40
+  footerHeight: 46
+  padding: 12
+  fontSize: 18
+  titleFontSize: 22
+--- !u!114 &1164828308
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1164828306}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f212ab0ea8da4454b89c3a49cb70b571, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::CharacterData
+  strength: 10
+  dexterity: 10
+  constitution: 10
+  intelligence: 10
+  wisdom: 10
+  charisma: 10
+  proficiencyBonus: 2
+  strSaveProficient: 0
+  dexSaveProficient: 0
+  conSaveProficient: 0
+  intSaveProficient: 0
+  wisSaveProficient: 0
+  chaSaveProficient: 0
+--- !u!4 &1164828309
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1164828306}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: -11.42428, y: -9.79989, z: 3.84217}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1552964287
 GameObject:
   m_ObjectHideFlags: 0
@@ -561,6 +639,8 @@ MonoBehaviour:
   areaThreshold: 5
   shakeThreshold: 4
   clusterStrength: 0.15
+  throwSpin: 5
+  maxThrowSpeed: 30
 --- !u!1 &2121101991
 GameObject:
   m_ObjectHideFlags: 0
@@ -695,6 +775,12 @@ MonoBehaviour:
   yOffset: 0.005
   centerLineColor: {r: 0.4, g: 0.5, b: 0.7, a: 0.7}
   centerLineWidth: 0.06
+  createWalls: 1
+  wallHeight: 83
+  wallThickness: 3
+  wallPhysics: {fileID: 0}
+  autoResizeToTexture: 1
+  pixelsPerUnit: 100
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
@@ -705,3 +791,4 @@ SceneRoots:
   - {fileID: 1552964289}
   - {fileID: 785883436}
   - {fileID: 664453339}
+  - {fileID: 1164828309}
