@@ -5,6 +5,20 @@ using UnityEngine;
 /// </summary>
 public class CharacterData : MonoBehaviour
 {
+    [Header("Персонаж")]
+    public string characterName = "Безымянный персонаж";
+    public string className = "Волшебник";
+
+    [Header("Уровень и опыт")]
+    [Range(1, 20)] public int level = 1;
+    public int currentXP = 0;
+    public int maxXP = 300;
+
+    [Header("Боевые показатели")]
+    [Range(0, 30)] public int armorClass = 12;
+    public int currentHP = 10;
+    public int maxHP = 10;
+
     [Header("Базовые характеристики")]
     [Range(1, 30)] public int strength = 10;
     [Range(1, 30)] public int dexterity = 10;

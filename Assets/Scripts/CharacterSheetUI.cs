@@ -3,459 +3,642 @@ using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 /// <summary>
-/// Чарник D&D: статы блоками, навыки, пассивные чувства, владения. Клавиша C.
+/// Чарник D&D в стиле референса: блоки статов, навыки с кружками, пассивные чувства.
+/// Клавиша C.
 /// </summary>
 public class CharacterSheetUI : MonoBehaviour
 {
     public CharacterData characterData;
 
-    [Header("Размеры")]
-    public float panelW = 720f;
-    public float colW = 340f;
-    public float blockHdrH = 34f;
-    public float subRowH = 24f;
-    public float skillH = 28f;
-    public float blockGap = 6f;
-    public float pad = 14f;
+    float PW = 740f;  // ширина панели
+    float CW = 350f;  // ширина колонки
+    float HDR = 36f;  // высота заголовка стата
+    float SUB = 26f;  // высота подстроки проверка/спас
+    float SKH = 26f;  // высота строки навыка
+    float GAP = 6f;   // отступ между блоками
+    float PD = 14f;   // общий паддинг
+    float SBH = 90f;  // высота статус-бара
 
-    Canvas _canvas;
-    GameObject _panel;
+    Canvas _cv;
+    GameObject _pn;
     CharacterData _cd;
 
     // Статы
     Text[] _scoreTxt = new Text[6], _checkTxt = new Text[6], _saveTxt = new Text[6];
     Image[] _saveTgl = new Image[6];
 
-    // Навыки
-    Text[] _skillProfTxt = new Text[18], _skillBonusTxt = new Text[18];
+    // Навыки: текст-индикатор + бонус
+    Text[] _skIndTxt = new Text[18], _skBonTxt = new Text[18];
 
     // Низ
     Text _profTxt, _pasPerTxt, _pasInsTxt, _pasInvTxt;
-    InputField _otherInput;
 
-    // Цвета статов
-    static readonly Color[] StatClr = {
-        new(0.9f, 0.35f, 0.35f), new(0.35f, 0.75f, 0.9f), new(0.9f, 0.7f, 0.3f),
-        new(0.4f, 0.5f, 0.95f),  new(0.5f, 0.85f, 0.5f),  new(0.85f, 0.55f, 0.9f),
+    // Статус-бар
+    Text _nameTxt, _classTxt, _acTxt, _statusProfTxt, _hpTxt, _levelTxt;
+    InputField _xpInput;
+    Image _xpFill;
+
+    // Цвета статов (для акцентов)
+    static readonly Color[] SC = {
+        new(0.9f,0.35f,0.35f), new(0.35f,0.75f,0.9f), new(0.9f,0.7f,0.3f),
+        new(0.4f,0.5f,0.95f),  new(0.5f,0.85f,0.5f),  new(0.85f,0.55f,0.9f),
     };
 
-    static readonly string[] StatNames = { "СИЛА", "ЛОВКОСТЬ", "ТЕЛОСЛОЖЕНИЕ", "ИНТЕЛЛЕКТ", "МУДРОСТЬ", "ХАРИЗМА" };
+    static readonly string[] SN = { "СИЛА","ЛОВКОСТЬ","ТЕЛОСЛОЖЕНИЕ","ИНТЕЛЛЕКТ","МУДРОСТЬ","ХАРИЗМА" };
 
-    // Индексы навыков для каждого стата
-    static readonly int[][] StatSkills = {
-        new[]{0},             // STR: Атлетика
-        new[]{1,2,3},         // DEX: Акробатика, Ловкость рук, Скрытность
-        new int[]{},          // CON: нет
-        new[]{4,5,6,7,8},     // INT: Анализ, История, Магия, Природа, Религия
-        new[]{9,10,11,12,13}, // WIS: Восприятие, Выживание, Медицина, Проницательность, Уход за животными
-        new[]{14,15,16,17},   // CHA: Выступление, Запугивание, Обман, Убеждение
+    static readonly int[][] SS = {
+        new[]{0}, new[]{1,2,3}, new int[]{}, new[]{4,5,6,7,8}, new[]{9,10,11,12,13}, new[]{14,15,16,17},
     };
 
     void Start()
     {
-        _cd = characterData != null ? characterData : FindAnyObjectByType<CharacterData>();
+        _cd = characterData ? characterData : FindAnyObjectByType<CharacterData>();
         BuildUI();
-        if (_panel != null) _panel.SetActive(false);
+        if (_pn) _pn.SetActive(false);
     }
 
     void Update()
     {
         var k = Keyboard.current;
         if (k == null) return;
-        if (k.cKey.wasPressedThisFrame && _panel != null)
+        if (k.cKey.wasPressedThisFrame && _pn)
         {
-            _panel.SetActive(!_panel.activeSelf);
-            if (_panel.activeSelf) RefreshDisplay();
+            _pn.SetActive(!_pn.activeSelf);
+            if (_pn.activeSelf) RefreshDisplay();
         }
     }
 
-    // ═══════════════════════════════════════
-    //  Сборка
-    // ═══════════════════════════════════════
+    // ══════════════════════════════  Сборка  ══════════════════════════════
 
-    void BuildUI()
-    {
-        try { BuildUIInternal(); }
-        catch (System.Exception e) { Debug.LogError($"CharSheet fail: {e.Message}"); }
-    }
+    void BuildUI() { try { B(); } catch (System.Exception e) { Debug.LogError($"Sheet: {e.Message}"); } }
 
-    void BuildUIInternal()
+    void B()
     {
-        EnsureEventSystem();
+        EvSys();
         Font f = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-        _cd = _cd != null ? _cd : FindAnyObjectByType<CharacterData>();
-        if (_cd == null) { Debug.LogError("CharacterData not found"); return; }
+        if (!_cd) _cd = FindAnyObjectByType<CharacterData>();
+        if (!_cd) return;
 
         // Canvas
-        var cgo = NewGO("CharCanvas", typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
+        var cgo = GO("CharCanvas", typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
         cgo.transform.SetParent(transform, false);
-        _canvas = cgo.GetComponent<Canvas>();
-        _canvas.renderMode = RenderMode.ScreenSpaceOverlay; _canvas.sortingOrder = 15;
+        _cv = cgo.GetComponent<Canvas>();
+        _cv.renderMode = RenderMode.ScreenSpaceOverlay; _cv.sortingOrder = 15;
         var sc = cgo.GetComponent<CanvasScaler>();
         sc.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
         sc.referenceResolution = new Vector2(1920, 1080);
         sc.matchWidthOrHeight = 0.5f;
 
-        // Высота панели
-        float leftH = BlockH(0) + BlockH(2) + BlockH(3) + BlockH(5) + 3 * blockGap;
-        float rightH = BlockH(1) + BlockH(4) + blockGap;
-        float blocksH = Mathf.Max(leftH, rightH);
-        float bottomH = 130f;
-        float totalH = pad + 30f + pad + blocksH + pad + bottomH + pad;
+        // Высота (правая колонка: DEX + WIS + пассивные + владения)
+        float OTHER_H = 100f;
+        float lh = BlockH(0) + BlockH(2) + BlockH(3) + BlockH(5) + 3*GAP;
+        float rh = BlockH(1) + BlockH(4) + GAP + GAP + 88f + GAP + OTHER_H;
+        float blocks = Mathf.Max(lh, rh);
+        float th = SBH + PD + 30f + PD + blocks + PD;
 
         // Панель
-        _panel = NewGO("Panel", typeof(RectTransform), typeof(Image));
-        _panel.transform.SetParent(cgo.transform, false);
-        _panel.GetComponent<Image>().color = new Color(0.04f, 0.05f, 0.10f, 0.94f);
-        SetRect(_panel, A(0.5f, 0.5f), A(0.5f, 0.5f), A(0.5f, 0.5f), new(panelW, totalH), new(80, -10));
+        _pn = GO("Panel", typeof(RectTransform), typeof(Image));
+        _pn.transform.SetParent(cgo.transform, false);
+        _pn.GetComponent<Image>().color = new Color(0.05f, 0.07f, 0.11f, 0.96f); // тёмно-синий
+        RS(_pn, AC, AC, PC, new(PW, th), new(60, -10));
 
-        float cy = -pad;
+        float cy = -PD;
 
-        // Заголовок + Бонус мастерства
-        var t = MkText(_panel.transform, "ХАРАКТЕРИСТИКИ", f, 20, FontStyle.Bold, new Color(0.95f, 0.9f, 0.7f));
-        SetR(t, ATL, ATL, P(0, 1), new(0, 30f), new(pad, cy));
-        var pt = MkText(_panel.transform, "Бонус мастерства: +2", f, 16, FontStyle.Normal, new Color(0.7f, 0.75f, 0.85f));
-        SetR(pt, ATR, ATR, P(1, 1), new(220, 30f), new(-pad, cy));
-        _profTxt = pt.GetComponent<Text>();
-        cy -= 30f + pad;
+        // ── Статус-бар ──
+        cy = BuildStatusBar(cy, f);
+        cy -= PD;
 
-        // Левая колонка: СИЛА(0), ТЕЛ(2), ИНТ(3), ХАР(5)
-        float cxL = pad;
-        cy = BuildStatBlocks(cxL, cy, new[] { 0, 2, 3, 5 }, f);
+        // Заголовок
+        var t1 = Txt(_pn.transform, "ХАРАКТЕРИСТИКИ", f, 20, FontStyle.Bold, new Color(0.92f,0.88f,0.65f));
+        R(t1, AL, AL, PL, new(0,30f), new(PD,cy));
+        var t2 = Txt(_pn.transform, "Бонус мастерства: +2", f, 15, FontStyle.Normal, new Color(0.6f,0.65f,0.78f));
+        R(t2, AR, AR, PR, new(230,30f), new(-PD,cy));
+        _profTxt = t2.GetComponent<Text>();
+        cy -= 30f+PD;
 
-        // Правая колонка: ЛОВ(1), МДР(4) — стартуем с того же cy
-        float cxR = pad + colW + pad;
-        float rightCY = -pad - 30f - pad; // тот же старт что у левой
-        BuildStatBlocks(cxR, rightCY, new[] { 1, 4 }, f);
+        // Колонки
+        float syl = cy;
+        syl = Col(syl, PD, new[]{0,2,3,5}, f);
 
-        // Низ
-        float bottomY = cy - pad;
-        BuildBottom(_panel.transform, f, bottomY);
+        // Правая колонка: ЛОВКОСТЬ, МУДРОСТЬ, ПАССИВНЫЕ ЧУВСТВА
+        float syr = cy;
+        float rx = PD+CW+PD;
+        syr = Col(syr, rx, new[]{1}, f);
+        syr = Col(syr, rx, new[]{4}, f);
+        syr = BuildPassive(rx, syr, f);
+        syr -= GAP;
+        BuildOtherProf(rx, syr, OTHER_H, f);
     }
 
-    float BuildStatBlocks(float cx, float startY, int[] stats, Font f)
+    float BuildStatusBar(float y, Font f)
     {
-        float cy = startY;
-        foreach (int si in stats)
-        {
-            float h = BlockH(si);
-            BuildStatBlock(cx, cy, si, f);
-            cy -= h + blockGap;
-        }
+        float w = PW - PD*2; // ширина внутри панели
+        float r1 = 34f, r2 = 20f, r3 = 24f; // высоты трёх рядов
+
+        // ── Фон статус-бара ──
+        var bg = GO("StatusBar", typeof(RectTransform), typeof(Image));
+        bg.transform.SetParent(_pn.transform, false);
+        bg.GetComponent<Image>().color = new Color(0.06f, 0.08f, 0.14f, 0.85f);
+        R(bg, AL, AL, PL, new(w, SBH), new(PD, y));
+
+        float ry = -4f; // курсор внутри статус-бара
+
+        // ═══ Ряд 1: Имя, КБ, Владение, HP ═══
+        // Имя персонажа (InputField, слева)
+        var nameIF = MkInput(bg.transform, _cd.characterName, f, 18, FontStyle.Bold,
+            Color.white, new(0, r1), AL, AL, PL, new(280, r1), new(0, ry),
+            v => { if (_cd) _cd.characterName = v; });
+        _nameTxt = nameIF.textComponent;
+
+        // КБ (щит + число)
+        float acX = 310f;
+        var acBg = GO("AC", typeof(RectTransform), typeof(Image));
+        acBg.transform.SetParent(bg.transform, false);
+        acBg.GetComponent<Image>().color = new Color(0.1f, 0.12f, 0.2f);
+        R(acBg, AML, AML, PML, new(44, r1), new(acX, ry));
+        var acT = Txt(acBg.transform, _cd.armorClass.ToString(), f, 20, FontStyle.Bold, Color.white, TextAnchor.MiddleCenter);
+        R(acT, AC, AC, PC, new(44, r1), Vector2.zero);
+        _acTxt = acT.GetComponent<Text>();
+        // ± кнопки КБ
+        MkBtn(bg.transform, "-", f, new Color(0.45f,0.18f,0.18f), acX-20, ry, 16, 16,
+            () => { if(_cd)_cd.armorClass=Mathf.Clamp(_cd.armorClass-1,0,30); RefreshDisplay(); });
+        MkBtn(bg.transform, "+", f, new Color(0.18f,0.4f,0.22f), acX+46, ry, 16, 16,
+            () => { if(_cd)_cd.armorClass=Mathf.Clamp(_cd.armorClass+1,0,30); RefreshDisplay(); });
+
+        // Бонус владения
+        float prX = 400f;
+        var prT = Txt(bg.transform, $"+{_cd.proficiencyBonus}", f, 22, FontStyle.Bold, new Color(0.85f,0.8f,0.5f), TextAnchor.MiddleCenter);
+        R(prT, AML, AML, PML, new(50, r1), new(prX, ry));
+        _statusProfTxt = prT.GetComponent<Text>();
+
+        // HP (current/max)
+        float hpX = 500f;
+        var hpT = Txt(bg.transform, $"{_cd.currentHP}/{_cd.maxHP}", f, 20, FontStyle.Bold, new Color(0.95f,0.5f,0.5f), TextAnchor.MiddleCenter);
+        R(hpT, AML, AML, PML, new(100, r1), new(hpX, ry));
+        _hpTxt = hpT.GetComponent<Text>();
+        // ± кнопки HP
+        MkBtn(bg.transform, "-", f, new Color(0.45f,0.18f,0.18f), hpX-20, ry, 16, 16,
+            () => { if(_cd)_cd.currentHP=Mathf.Clamp(_cd.currentHP-1,0,_cd.maxHP); RefreshDisplay(); });
+        MkBtn(bg.transform, "+", f, new Color(0.18f,0.4f,0.22f), hpX+102, ry, 16, 16,
+            () => { if(_cd)_cd.currentHP=Mathf.Clamp(_cd.currentHP+1,0,_cd.maxHP); RefreshDisplay(); });
+        // ± кнопки MaxHP
+        MkBtn(bg.transform, "-", f, new Color(0.35f,0.15f,0.15f), hpX+122, ry, 12, 12,
+            () => { if(_cd)_cd.maxHP=Mathf.Max(1,_cd.maxHP-1); if(_cd.currentHP>_cd.maxHP)_cd.currentHP=_cd.maxHP; RefreshDisplay(); });
+        MkBtn(bg.transform, "+", f, new Color(0.15f,0.35f,0.18f), hpX+136, ry, 12, 12,
+            () => { if(_cd)_cd.maxHP=_cd.maxHP+1; RefreshDisplay(); });
+
+        ry -= r1 + 2f;
+
+        // ═══ Ряд 2: Класс, подписи КБ/ВЛАД/HP ═══
+        // Класс (InputField)
+        var classIF = MkInput(bg.transform, _cd.className, f, 14, FontStyle.Italic,
+            new Color(0.65f,0.7f,0.8f), new(0, r2), AL, AL, PL, new(200, r2), new(0, ry),
+            v => { if (_cd) _cd.className = v; });
+        _classTxt = classIF.textComponent;
+
+        // Подписи
+        var acLbl = Txt(bg.transform, "КБ", f, 12, FontStyle.Normal, new Color(0.5f,0.55f,0.65f), TextAnchor.MiddleCenter);
+        R(acLbl, AML, AML, PML, new(44, r2), new(acX, ry));
+        var prLbl = Txt(bg.transform, "ВЛАД", f, 12, FontStyle.Normal, new Color(0.5f,0.55f,0.65f), TextAnchor.MiddleCenter);
+        R(prLbl, AML, AML, PML, new(50, r2), new(prX, ry));
+        var hpLbl = Txt(bg.transform, "♥ ХП", f, 12, FontStyle.Normal, new Color(0.5f,0.55f,0.65f), TextAnchor.MiddleCenter);
+        R(hpLbl, AML, AML, PML, new(100, r2), new(hpX, ry));
+
+        ry -= r2 + 2f;
+
+        // ═══ Ряд 3: Уровень + XP-шкала ═══
+        // Уровень
+        var lvBg = GO("LV", typeof(RectTransform), typeof(Image));
+        lvBg.transform.SetParent(bg.transform, false);
+        lvBg.GetComponent<Image>().color = new Color(0.25f, 0.2f, 0.5f);
+        R(lvBg, AML, AML, PML, new(110, r3), new(0, ry));
+        var lvT = Txt(lvBg.transform, $"{_cd.level} УРОВЕНЬ", f, 13, FontStyle.Bold, Color.white, TextAnchor.MiddleCenter);
+        R(lvT, AC, AC, PC, new(110, r3), Vector2.zero);
+        _levelTxt = lvT.GetComponent<Text>();
+        // ± кнопки уровня
+        MkBtn(bg.transform, "-", f, new Color(0.4f,0.15f,0.25f), 114, ry, 16, r3,
+            () => { if(_cd)_cd.level=Mathf.Clamp(_cd.level-1,1,20); RefreshDisplay(); });
+        MkBtn(bg.transform, "+", f, new Color(0.25f,0.15f,0.4f), 132, ry, 16, r3,
+            () => { if(_cd)_cd.level=Mathf.Clamp(_cd.level+1,1,20); RefreshDisplay(); });
+
+        // XP-шкала
+        float xpX = 160f, xpW = 200f, xpH = r3;
+        var xpBg = GO("XPBg", typeof(RectTransform), typeof(Image));
+        xpBg.transform.SetParent(bg.transform, false);
+        xpBg.GetComponent<Image>().color = new Color(0.08f, 0.1f, 0.18f);
+        R(xpBg, AML, AML, PML, new(xpW, xpH-6), new(xpX, ry));
+
+        float frac = _cd.maxXP > 0 ? Mathf.Clamp01((float)_cd.currentXP / _cd.maxXP) : 0f;
+        var xpFill = GO("XPFill", typeof(RectTransform), typeof(Image));
+        xpFill.transform.SetParent(xpBg.transform, false);
+        xpFill.GetComponent<Image>().color = new Color(0.45f, 0.3f, 0.8f);
+        R(xpFill, AL, AL, PL, new(xpW * frac, xpH-6), Vector2.zero);
+        _xpFill = xpFill.GetComponent<Image>();
+
+        // XP — InputField для ручного ввода
+        var xpIF = MkInput(bg.transform, $"{_cd.currentXP}/{_cd.maxXP}", f, 12, FontStyle.Normal,
+            new Color(0.7f,0.7f,0.8f), new(80, r3), AL, AL, PL, new(80, r3), new(xpX+xpW+6, ry),
+            v => {
+                if (!_cd) return;
+                int slash = v.IndexOf('/');
+                if (slash > 0 && int.TryParse(v.Substring(0,slash), out int cxp))
+                    _cd.currentXP = Mathf.Clamp(cxp, 0, _cd.maxXP);
+                else if (int.TryParse(v, out int xp))
+                    _cd.currentXP = Mathf.Clamp(xp, 0, _cd.maxXP);
+                RefreshDisplay();
+            });
+        _xpInput = xpIF;
+
+        // Следующий уровень
+        var nextT = Txt(bg.transform, $"{_cd.level+1}", f, 13, FontStyle.Bold, new Color(0.5f,0.55f,0.7f), TextAnchor.MiddleCenter);
+        R(nextT, AML, AML, PML, new(30, r3), new(xpX+xpW+86, ry));
+
+        return y - SBH;
+    }
+
+    float Col(float cy, float cx, int[] stats, Font f)
+    {
+        foreach (int si in stats) { BuildBlock(cx, cy, si, f); cy -= BlockH(si)+GAP; }
         return cy;
     }
 
-    float BlockH(int si) => blockHdrH + subRowH + StatSkills[si].Length * skillH;
+    float BlockH(int si) => HDR + SUB + SS[si].Length * SKH;
 
-    void BuildStatBlock(float cx, float y, int si, Font f)
+    void BuildBlock(float cx, float y, int si, Font f)
     {
-        float w = colW;
-        Color clr = StatClr[si];
+        float w = CW;
         var cd = _cd;
 
         // ── Заголовок ──
-        var hdrGO = NewGO($"Hdr_{si}", typeof(RectTransform), typeof(Image));
-        hdrGO.transform.SetParent(_panel.transform, false);
-        hdrGO.GetComponent<Image>().color = new Color(0.08f, 0.10f, 0.16f, 0.8f);
-        SetR(hdrGO, ATL, ATL, P(0, 1), new(w, blockHdrH), new(cx, y));
+        var hg = GO("H", typeof(RectTransform), typeof(Image));
+        hg.transform.SetParent(_pn.transform, false);
+        hg.GetComponent<Image>().color = new Color(0.07f, 0.09f, 0.16f, 0.9f);
+        R(hg, AL, AL, PL, new(w, HDR), new(cx, y));
 
-        var nm = MkText(hdrGO.transform, StatNames[si], f, 17, FontStyle.Bold, clr);
-        SetR(nm, AML, AML, P(0, 0.5f), new(180, blockHdrH), new(8, 0));
+        var nm = Txt(hg.transform, SN[si], f, 17, FontStyle.Bold, Color.white);
+        R(nm, AML, AML, PML, new(200, HDR), new(10, 0));
 
-        // Счёт с +/−
-        int score = GetStatScore(si);
-        var sc = MkText(hdrGO.transform, score.ToString(), f, 17, FontStyle.Bold, Color.white);
-        SetR(sc, AML, AML, P(0, 0.5f), new(28, blockHdrH), new(w - 68, 0));
-        _scoreTxt[si] = sc.GetComponent<Text>();
+        // Бокс со счётом
+        var sb = GO("SB", typeof(RectTransform), typeof(Image));
+        sb.transform.SetParent(hg.transform, false);
+        sb.GetComponent<Image>().color = new Color(0.12f, 0.14f, 0.22f);
+        R(sb, AML, AML, PML, new(44, 24), new(w-100, 0));
 
-        // −
-        MkBtn(hdrGO.transform, "−", f, new Color(0.6f, 0.2f, 0.2f), w - 40, 16, 18, () => ChangeStat(si, -1));
-        // +
-        MkBtn(hdrGO.transform, "+", f, new Color(0.2f, 0.55f, 0.25f), w - 20, 16, 18, () => ChangeStat(si, +1));
+        int score = StatScore(si);
+        var st = Txt(sb.transform, score.ToString(), f, 16, FontStyle.Bold, Color.white, TextAnchor.MiddleCenter);
+        R(st, AC, AC, PC, new(44, 24), Vector2.zero);
+        _scoreTxt[si] = st.GetComponent<Text>();
 
-        // ── Подстрока: ПРОВЕРКА / СПАСБРОСОК ──
-        float sy = y - blockHdrH;
-        var subGO = NewGO($"Sub_{si}", typeof(RectTransform), typeof(Image));
-        subGO.transform.SetParent(_panel.transform, false);
-        subGO.GetComponent<Image>().color = new Color(0.06f, 0.08f, 0.14f, 0.5f);
-        SetR(subGO, ATL, ATL, P(0, 1), new(w, subRowH), new(cx, sy));
+        // ± кнопки
+        Btn(hg.transform, "-", f, new Color(0.55f,0.2f,0.2f), w-54, 16, 18, () => ChStat(si,-1));
+        Btn(hg.transform, "+", f, new Color(0.2f,0.5f,0.25f), w-22, 16, 18, () => ChStat(si,+1));
+
+        // ── Подстрока ──
+        float sy = y - HDR;
+        var sg = GO("S", typeof(RectTransform), typeof(Image));
+        sg.transform.SetParent(_pn.transform, false);
+        sg.GetComponent<Image>().color = new Color(0.06f, 0.08f, 0.14f, 0.7f);
+        R(sg, AL, AL, PL, new(w, SUB), new(cx, sy));
 
         // ПРОВЕРКА
-        var cl = MkText(subGO.transform, "ПРОВЕРКА", f, 12, FontStyle.Normal, new Color(0.55f, 0.6f, 0.7f));
-        SetR(cl, AML, AML, P(0, 0.5f), new(70, subRowH), new(8, 0));
-        int mod = GetStatMod(si);
-        var cv = MkText(subGO.transform, ModStr(mod), f, 13, FontStyle.Bold, ModClr(mod));
-        SetR(cv, AML, AML, P(0, 0.5f), new(30, subRowH), new(74, 0));
+        var cl = Txt(sg.transform, "ПРОВЕРКА", f, 11, FontStyle.Normal, new Color(0.5f,0.55f,0.65f));
+        R(cl, AML, AML, PML, new(65, SUB), new(10, 0));
+        // Бокс значения
+        var cb = GO("CB", typeof(RectTransform), typeof(Image));
+        cb.transform.SetParent(sg.transform, false);
+        cb.GetComponent<Image>().color = new Color(0.12f, 0.14f, 0.22f);
+        R(cb, AML, AML, PML, new(34, 20), new(76, 0));
+        int mod = StatMod(si);
+        var cv = Txt(cb.transform, ModS(mod), f, 14, FontStyle.Bold, ModC(mod), TextAnchor.MiddleCenter);
+        R(cv, AC, AC, PC, new(34, 20), Vector2.zero);
         _checkTxt[si] = cv.GetComponent<Text>();
 
         // СПАСБРОСОК
-        var sl = MkText(subGO.transform, "СПАСБРОСОК", f, 12, FontStyle.Normal, new Color(0.55f, 0.6f, 0.7f));
-        SetR(sl, AML, AML, P(0, 0.5f), new(80, subRowH), new(w / 2 + 0, 0));
-        int save = GetSaveVal(si);
-        var sv = MkText(subGO.transform, ModStr(save), f, 13, FontStyle.Bold, ModClr(save));
-        SetR(sv, AML, AML, P(0, 0.5f), new(30, subRowH), new(w / 2 + 76, 0));
+        var sl = Txt(sg.transform, "СПАСБРОСОК", f, 11, FontStyle.Normal, new Color(0.5f,0.55f,0.65f));
+        R(sl, AML, AML, PML, new(90, SUB), new(w/2-4, 0));
+        var svb = GO("SVB", typeof(RectTransform), typeof(Image));
+        svb.transform.SetParent(sg.transform, false);
+        svb.GetComponent<Image>().color = new Color(0.12f, 0.14f, 0.22f);
+        R(svb, AML, AML, PML, new(34, 20), new(w/2+86, 0));
+        int save = SaveVal(si);
+        var sv = Txt(svb.transform, ModS(save), f, 14, FontStyle.Bold, ModC(save), TextAnchor.MiddleCenter);
+        R(sv, AC, AC, PC, new(34, 20), Vector2.zero);
         _saveTxt[si] = sv.GetComponent<Text>();
 
-        // Тоггл владения спас-броском
-        bool profSave = GetSaveProf(si);
-        _saveTgl[si] = MkTgl(subGO.transform, w - 28, 16, profSave, v => SetSaveProf(si, v));
+        // Тоггл владения спасом (белый контур)
+        _saveTgl[si] = TglOutline(sg.transform, w-28, 16, SaveProf(si), v => SetSaveProf(si, v));
 
         // ── Навыки ──
-        var skillIndices = StatSkills[si];
-        for (int i = 0; i < skillIndices.Length; i++)
+        for (int i = 0; i < SS[si].Length; i++)
         {
-            int ski = skillIndices[i];
-            float ry = sy - subRowH - i * skillH;
+            int ki = SS[si][i];
+            float ry = sy - SUB - i*SKH;
 
-            var skGO = NewGO($"Sk_{ski}", typeof(RectTransform), typeof(Image));
-            skGO.transform.SetParent(_panel.transform, false);
-            skGO.GetComponent<Image>().color = new Color(0.07f, 0.09f, 0.18f, 0.6f);
-            SetR(skGO, ATL, ATL, P(0, 1), new(w, skillH), new(cx, ry));
+            var kg = GO("K", typeof(RectTransform), typeof(Image));
+            kg.transform.SetParent(_pn.transform, false);
+            kg.GetComponent<Image>().color = new Color(0.06f, 0.09f, 0.18f, 0.7f); // тёмно-синий
+            R(kg, AL, AL, PL, new(w, SKH), new(cx, ry));
 
-            // Индикатор владения (○/●/★)
-            int lvl = cd.skills[ski].ProfLevel;
-            string ind = lvl == 2 ? "★" : (lvl == 1 ? "●" : "○");
-            var it = MkText(skGO.transform, ind, f, 14, FontStyle.Normal,
-                lvl == 2 ? new Color(0.9f, 0.75f, 0.2f) : (lvl == 1 ? new Color(0.4f, 0.7f, 1f) : new Color(0.4f, 0.4f, 0.5f)));
-            SetR(it, AML, AML, P(0, 0.5f), new(20, skillH), new(6, 0));
-            _skillProfTxt[ski] = it.GetComponent<Text>();
+            // Кружок-индикатор владения
+            int lv = cd.skills[ki].ProfLevel;
+            string ic = lv == 2 ? "★" : (lv == 1 ? "●" : "○");
+            Color icc = lv == 2 ? new Color(0.9f,0.75f,0.2f) : (lv==1 ? new Color(0.35f,0.65f,1f) : new Color(0.3f,0.35f,0.45f));
+            var it = Txt(kg.transform, ic, f, 16, FontStyle.Normal, icc, TextAnchor.MiddleCenter);
+            R(it, AML, AML, PML, new(22, SKH), new(8, 0));
+            _skIndTxt[ki] = it.GetComponent<Text>();
 
-            // Кликабельная область для индикатора
-            var ib = NewGO($"IndBtn_{ski}", typeof(RectTransform), typeof(Image), typeof(Button));
-            ib.transform.SetParent(skGO.transform, false);
-            ib.GetComponent<Image>().color = new Color(0, 0, 0, 0);
-            ib.GetComponent<Button>().onClick.AddListener(() => CycleProf(ski));
-            SetR(ib, AML, AML, P(0, 0.5f), new(24, skillH), new(4, 0));
+            // Невидимая кнопка поверх кружка
+            var ib = GO("IB", typeof(RectTransform), typeof(Image), typeof(Button));
+            ib.transform.SetParent(kg.transform, false);
+            ib.GetComponent<Image>().color = new Color(0,0,0,0);
+            int cap = ki; ib.GetComponent<Button>().onClick.AddListener(() => CycleProf(cap));
+            R(ib, AML, AML, PML, new(26, SKH), new(6, 0));
 
             // Название навыка
-            var skn = cd.skills[ski].name;
-            var nt = MkText(skGO.transform, skn, f, 14, FontStyle.Normal, new Color(0.85f, 0.88f, 0.95f));
-            SetR(nt, AML, AML, P(0, 0.5f), new(w - 80, skillH), new(30, 0));
+            var nt = Txt(kg.transform, cd.skills[ki].name, f, 13, FontStyle.Normal, new Color(0.85f,0.88f,0.95f));
+            R(nt, AML, AML, PML, new(w-80, SKH), new(36, 0));
 
             // Бонус
-            int bonus = cd.GetSkillBonus(cd.skills[ski]);
-            var bt = MkText(skGO.transform, ModStr(bonus), f, 14, FontStyle.Bold, ModClr(bonus));
-            SetR(bt, AML, AML, P(0, 0.5f), new(30, skillH), new(w - 36, 0));
-            _skillBonusTxt[ski] = bt.GetComponent<Text>();
+            int bn = cd.GetSkillBonus(cd.skills[ki]);
+            var bt = Txt(kg.transform, ModS(bn), f, 14, FontStyle.Bold, ModC(bn), TextAnchor.MiddleCenter);
+            R(bt, AML, AML, PML, new(32, SKH), new(w-40, 0));
+            _skBonTxt[ki] = bt.GetComponent<Text>();
         }
     }
 
-    void BuildBottom(Transform parent, Font f, float y)
+    float BuildPassive(float cx, float y, Font f)
     {
-        float w = panelW - pad * 2;
-        float x = pad;
+        float w = CW;
+        float h = 20f;
 
-        // ПАССИВНЫЕ ЧУВСТВА
-        var h1 = MkText(parent, "ПАССИВНЫЕ ЧУВСТВА", f, 14, FontStyle.Bold, new Color(0.6f, 0.65f, 0.75f));
-        SetR(h1, ATL, ATL, P(0, 1), new(w, 22f), new(x, y));
+        // Заголовок
+        var hdr = Txt(_pn.transform, "ПАССИВНЫЕ ЧУВСТВА", f, 14, FontStyle.Bold, new Color(0.55f,0.6f,0.7f));
+        R(hdr, AL, AL, PL, new(w, 22f), new(cx, y));
         y -= 22f;
 
-        string[] pasLabels = { "МУДРОСТЬ (ВОСПРИЯТИЕ)", "МУДРОСТЬ (ПРОНИЦАТЕЛЬНОСТЬ)", "ИНТЕЛЛЕКТ (АНАЛИЗ)" };
+        string[] lbs = { "МУДРОСТЬ (ВОСПРИЯТИЕ)", "МУДРОСТЬ (ПРОНИЦАТЕЛЬНОСТЬ)", "ИНТЕЛЛЕКТ (АНАЛИЗ)" };
         for (int i = 0; i < 3; i++)
         {
-            float ry = y - i * 22f;
-            var go = NewGO($"Pas_{i}", typeof(RectTransform), typeof(Image));
-            go.transform.SetParent(parent, false);
-            go.GetComponent<Image>().color = new Color(0.08f, 0.10f, 0.16f, 0.5f);
-            SetR(go, ATL, ATL, P(0, 1), new(w, 20f), new(x, ry));
+            float ry = y - i*22f;
+            var bg = GO("P", typeof(RectTransform), typeof(Image));
+            bg.transform.SetParent(_pn.transform, false);
+            bg.GetComponent<Image>().color = new Color(0.07f, 0.09f, 0.16f, 0.6f);
+            R(bg, AL, AL, PL, new(w, h), new(cx, ry));
 
-            var lb = MkText(go.transform, pasLabels[i], f, 12, FontStyle.Normal, new Color(0.65f, 0.7f, 0.78f));
-            SetR(lb, AML, AML, P(0, 0.5f), new(w - 40, 20f), new(6, 0));
+            var lb = Txt(bg.transform, lbs[i], f, 11, FontStyle.Normal, new Color(0.6f,0.65f,0.73f));
+            R(lb, AML, AML, PML, new(w-50, h), new(8, 0));
 
-            var vl = MkText(go.transform, "10", f, 13, FontStyle.Bold, Color.white);
-            SetR(vl, AML, AML, P(1, 0.5f), new(30, 20f), new(-6, 0));
+            var vb = GO("V", typeof(RectTransform), typeof(Image));
+            vb.transform.SetParent(bg.transform, false);
+            vb.GetComponent<Image>().color = new Color(0.11f, 0.13f, 0.21f);
+            R(vb, AML, AML, PML, new(34, 16), new(w-42, 0));
+            var vl = Txt(vb.transform, "10", f, 13, FontStyle.Bold, Color.white, TextAnchor.MiddleCenter);
+            R(vl, AC, AC, PC, new(34, 16), Vector2.zero);
 
-            if (i == 0) _pasPerTxt = vl.GetComponent<Text>();
-            if (i == 1) _pasInsTxt = vl.GetComponent<Text>();
-            if (i == 2) _pasInvTxt = vl.GetComponent<Text>();
+            if (i==0) _pasPerTxt = vl.GetComponent<Text>();
+            if (i==1) _pasInsTxt = vl.GetComponent<Text>();
+            if (i==2) _pasInvTxt = vl.GetComponent<Text>();
         }
-        y -= 3 * 22f + pad;
-
-        // ПРОЧИЕ ВЛАДЕНИЯ И ЯЗЫКИ
-        var h2 = MkText(parent, "ПРОЧИЕ ВЛАДЕНИЯ И ЯЗЫКИ", f, 14, FontStyle.Bold, new Color(0.6f, 0.65f, 0.75f));
-        SetR(h2, ATL, ATL, P(0, 1), new(w, 22f), new(x, y));
-        y -= 22f;
-
-        var ifGO = NewGO("OtherInput", typeof(RectTransform), typeof(Image), typeof(InputField));
-        ifGO.transform.SetParent(parent, false);
-        ifGO.GetComponent<Image>().color = new Color(0.08f, 0.10f, 0.16f, 0.6f);
-        SetR(ifGO, ATL, ATL, P(0, 1), new(w, 42f), new(x, y));
-
-        var ifText = NewGO("Text", typeof(RectTransform), typeof(Text));
-        ifText.transform.SetParent(ifGO.transform, false);
-        var txc = ifText.GetComponent<Text>();
-        txc.font = f; txc.fontSize = 13; txc.color = new Color(0.8f, 0.82f, 0.9f);
-        txc.alignment = TextAnchor.UpperLeft; txc.supportRichText = false;
-        SetR(ifText, A(0, 1), A(1, 0), P(0, 1), new(-8, -8), new(4, -4));
-
-        var ifPlaceholder = NewGO("Ph", typeof(RectTransform), typeof(Text));
-        ifPlaceholder.transform.SetParent(ifGO.transform, false);
-        var ph = ifPlaceholder.GetComponent<Text>();
-        ph.text = "Введите владения и языки..."; ph.font = f; ph.fontSize = 13;
-        ph.color = new Color(0.4f, 0.42f, 0.5f); ph.alignment = TextAnchor.UpperLeft; ph.fontStyle = FontStyle.Italic;
-        SetR(ifPlaceholder, A(0, 1), A(1, 0), P(0, 1), new(-8, -8), new(4, -4));
-        ph.raycastTarget = false;
-
-        var input = ifGO.GetComponent<InputField>();
-        input.textComponent = txc;
-        input.placeholder = ph;
-        input.lineType = InputField.LineType.MultiLineNewline;
-        if (!string.IsNullOrEmpty(_cd.otherProficiencies)) input.text = _cd.otherProficiencies;
-        input.onEndEdit.AddListener(v => { if (_cd != null) _cd.otherProficiencies = v; });
-        _otherInput = input;
+        return y - 3*22f; // низ последней строки
     }
 
-    // ═══════════════════════════════════════
-    //  Логика
-    // ═══════════════════════════════════════
-
-    int GetStatScore(int si) => si switch
-    { 0 => _cd.strength, 1 => _cd.dexterity, 2 => _cd.constitution, 3 => _cd.intelligence, 4 => _cd.wisdom, 5 => _cd.charisma, _ => 0 };
-
-    int GetStatMod(int si) => si switch
-    { 0 => _cd.StrMod, 1 => _cd.DexMod, 2 => _cd.ConMod, 3 => _cd.IntMod, 4 => _cd.WisMod, 5 => _cd.ChaMod, _ => 0 };
-
-    int GetSaveVal(int si) => si switch
-    { 0 => _cd.StrSave, 1 => _cd.DexSave, 2 => _cd.ConSave, 3 => _cd.IntSave, 4 => _cd.WisSave, 5 => _cd.ChaSave, _ => 0 };
-
-    void SetStatScore(int si, int v) { switch (si) {
-        case 0: _cd.strength = v; break; case 1: _cd.dexterity = v; break;
-        case 2: _cd.constitution = v; break; case 3: _cd.intelligence = v; break;
-        case 4: _cd.wisdom = v; break; case 5: _cd.charisma = v; break;
-    }}
-
-    bool GetSaveProf(int si) => si switch
-    { 0 => _cd.strSaveProficient, 1 => _cd.dexSaveProficient, 2 => _cd.conSaveProficient, 3 => _cd.intSaveProficient, 4 => _cd.wisSaveProficient, 5 => _cd.chaSaveProficient, _ => false };
-
-    void SetSaveProf(int si, bool v) { switch (si) {
-        case 0: _cd.strSaveProficient = v; break; case 1: _cd.dexSaveProficient = v; break;
-        case 2: _cd.conSaveProficient = v; break; case 3: _cd.intSaveProficient = v; break;
-        case 4: _cd.wisSaveProficient = v; break; case 5: _cd.chaSaveProficient = v; break;
-    } RefreshDisplay(); }
-
-    void ChangeStat(int si, int d)
+    void BuildOtherProf(float cx, float y, float maxH, Font f)
     {
-        int v = Mathf.Clamp(GetStatScore(si) + d, 1, 30);
-        SetStatScore(si, v);
-        RefreshDisplay();
+        float w = CW;
+        float hdrH = 22f;
+        float fieldH = maxH - hdrH - 4f;
+
+        // Заголовок
+        var hdr = Txt(_pn.transform, "ПРОЧИЕ ВЛАДЕНИЯ И ЯЗЫКИ", f, 14, FontStyle.Bold, new Color(0.55f,0.6f,0.7f));
+        R(hdr, AL, AL, PL, new(w, hdrH), new(cx, y));
+        y -= hdrH;
+
+        // Фон поля ввода
+        var bg = GO("OtherProf", typeof(RectTransform), typeof(Image));
+        bg.transform.SetParent(_pn.transform, false);
+        bg.GetComponent<Image>().color = new Color(0.07f, 0.09f, 0.16f, 0.8f);
+        R(bg, AL, AL, PL, new(w, fieldH), new(cx, y));
+
+        // Текст (отображаемый)
+        var textGO = GO("Text", typeof(RectTransform), typeof(Text));
+        textGO.transform.SetParent(bg.transform, false);
+        var textComp = textGO.GetComponent<Text>();
+        textComp.font = f;
+        textComp.fontSize = 12;
+        textComp.color = new Color(0.85f, 0.88f, 0.95f);
+        textComp.alignment = TextAnchor.UpperLeft;
+        textComp.supportRichText = false;
+        R(textGO, new(0,1), new(1,1), new(0,1), new(-8, fieldH-8), new(4,-4));
+
+        // Placeholder
+        var phGO = GO("Placeholder", typeof(RectTransform), typeof(Text));
+        phGO.transform.SetParent(bg.transform, false);
+        var phComp = phGO.GetComponent<Text>();
+        phComp.text = "Владения, инструменты, языки...";
+        phComp.font = f;
+        phComp.fontSize = 12;
+        phComp.fontStyle = FontStyle.Italic;
+        phComp.color = new Color(0.35f, 0.4f, 0.5f);
+        phComp.alignment = TextAnchor.UpperLeft;
+        phComp.raycastTarget = false;
+        R(phGO, new(0,1), new(1,1), new(0,1), new(-8, fieldH-8), new(4,-4));
+
+        // InputField
+        var ifComp = bg.AddComponent<InputField>();
+        ifComp.textComponent = textComp;
+        ifComp.placeholder = phComp;
+        ifComp.lineType = InputField.LineType.MultiLineNewline;
+        ifComp.text = _cd ? _cd.otherProficiencies : "";
+        ifComp.onValueChanged.AddListener(v => { if (_cd) _cd.otherProficiencies = v; });
     }
 
-    void CycleProf(int ski)
-    {
-        if (_cd == null || ski >= _cd.skills.Length) return;
-        var s = _cd.skills[ski];
-        s.ProfLevel = (s.ProfLevel + 1) % 3; // 0→1→2→0
-        RefreshDisplay();
-    }
+    // ══════════════════════════════  Данные  ══════════════════════════════
+
+    int StatScore(int si) => si switch {0=>_cd.strength,1=>_cd.dexterity,2=>_cd.constitution,3=>_cd.intelligence,4=>_cd.wisdom,5=>_cd.charisma,_=>0};
+    int StatMod(int si) => si switch {0=>_cd.StrMod,1=>_cd.DexMod,2=>_cd.ConMod,3=>_cd.IntMod,4=>_cd.WisMod,5=>_cd.ChaMod,_=>0};
+    int SaveVal(int si) => si switch {0=>_cd.StrSave,1=>_cd.DexSave,2=>_cd.ConSave,3=>_cd.IntSave,4=>_cd.WisSave,5=>_cd.ChaSave,_=>0};
+    bool SaveProf(int si) => si switch {0=>_cd.strSaveProficient,1=>_cd.dexSaveProficient,2=>_cd.conSaveProficient,3=>_cd.intSaveProficient,4=>_cd.wisSaveProficient,5=>_cd.chaSaveProficient,_=>false};
+
+    void SetScore(int si, int v) { switch(si) {case 0:_cd.strength=v;break;case 1:_cd.dexterity=v;break;case 2:_cd.constitution=v;break;case 3:_cd.intelligence=v;break;case 4:_cd.wisdom=v;break;case 5:_cd.charisma=v;break;} }
+    void SetSaveProf(int si, bool v) { switch(si) {case 0:_cd.strSaveProficient=v;break;case 1:_cd.dexSaveProficient=v;break;case 2:_cd.conSaveProficient=v;break;case 3:_cd.intSaveProficient=v;break;case 4:_cd.wisSaveProficient=v;break;case 5:_cd.chaSaveProficient=v;break;} RefreshDisplay(); }
+
+    void ChStat(int si, int d) { SetScore(si, Mathf.Clamp(StatScore(si)+d,1,30)); RefreshDisplay(); }
+    void CycleProf(int ki) { if (_cd && ki < _cd.skills.Length) { var s = _cd.skills[ki]; s.ProfLevel = (s.ProfLevel+1)%3; RefreshDisplay(); } }
 
     public void RefreshDisplay()
     {
-        if (_cd == null) { _cd = FindAnyObjectByType<CharacterData>(); if (_cd == null) return; }
+        if (!_cd) { _cd = FindAnyObjectByType<CharacterData>(); if (!_cd) return; }
 
-        // Статы
-        for (int si = 0; si < 6; si++)
+        for (int si=0; si<6; si++)
         {
-            if (_scoreTxt[si] != null) _scoreTxt[si].text = GetStatScore(si).ToString();
-            int mod = GetStatMod(si);
-            if (_checkTxt[si] != null) { _checkTxt[si].text = ModStr(mod); _checkTxt[si].color = ModClr(mod); }
-            int save = GetSaveVal(si);
-            if (_saveTxt[si] != null) { _saveTxt[si].text = ModStr(save); _saveTxt[si].color = ModClr(save); }
-            if (_saveTgl[si] != null) _saveTgl[si].color = GetSaveProf(si) ? new Color(0.35f, 0.7f, 1f) : new Color(0.25f, 0.28f, 0.35f);
+            if (_scoreTxt[si]) _scoreTxt[si].text = StatScore(si).ToString();
+            int m = StatMod(si);
+            if (_checkTxt[si]) { _checkTxt[si].text = ModS(m); _checkTxt[si].color = ModC(m); }
+            int sv = SaveVal(si);
+            if (_saveTxt[si]) { _saveTxt[si].text = ModS(sv); _saveTxt[si].color = ModC(sv); }
+            if (_saveTgl[si]) _saveTgl[si].color = SaveProf(si) ? new Color(0.35f,0.7f,1f) : new Color(0.18f,0.2f,0.28f);
         }
 
-        // Навыки
-        for (int ski = 0; ski < _cd.skills.Length && ski < 18; ski++)
+        for (int ki=0; ki<_cd.skills.Length && ki<18; ki++)
         {
-            int lvl = _cd.skills[ski].ProfLevel;
-            if (_skillProfTxt[ski] != null)
+            int lv = _cd.skills[ki].ProfLevel;
+            if (_skIndTxt[ki])
             {
-                _skillProfTxt[ski].text = lvl == 2 ? "★" : (lvl == 1 ? "●" : "○");
-                _skillProfTxt[ski].color = lvl == 2 ? new Color(0.9f, 0.75f, 0.2f) : (lvl == 1 ? new Color(0.4f, 0.7f, 1f) : new Color(0.4f, 0.4f, 0.5f));
+                _skIndTxt[ki].text = lv==2?"★":(lv==1?"●":"○");
+                _skIndTxt[ki].color = lv==2?new Color(0.9f,0.75f,0.2f):(lv==1?new Color(0.35f,0.65f,1f):new Color(0.3f,0.35f,0.45f));
             }
-            int bonus = _cd.GetSkillBonus(_cd.skills[ski]);
-            if (_skillBonusTxt[ski] != null) { _skillBonusTxt[ski].text = ModStr(bonus); _skillBonusTxt[ski].color = ModClr(bonus); }
+            int bn = _cd.GetSkillBonus(_cd.skills[ki]);
+            if (_skBonTxt[ki]) { _skBonTxt[ki].text = ModS(bn); _skBonTxt[ki].color = ModC(bn); }
         }
 
-        // Бонус мастерства
-        if (_profTxt != null) _profTxt.text = $"Бонус мастерства: +{_cd.proficiencyBonus}";
+        if (_profTxt) _profTxt.text = $"Бонус мастерства: +{_cd.proficiencyBonus}";
+        if (_pasPerTxt) _pasPerTxt.text = _cd.passiveWisdomPerception.ToString();
+        if (_pasInsTxt) _pasInsTxt.text = _cd.passiveWisdomInsight.ToString();
+        if (_pasInvTxt) _pasInvTxt.text = _cd.passiveIntAnalysis.ToString();
 
-        // Пассивные чувства
-        if (_pasPerTxt != null) _pasPerTxt.text = _cd.passiveWisdomPerception.ToString();
-        if (_pasInsTxt != null) _pasInsTxt.text = _cd.passiveWisdomInsight.ToString();
-        if (_pasInvTxt != null) _pasInvTxt.text = _cd.passiveIntAnalysis.ToString();
+        // Статус-бар
+        if (_nameTxt) _nameTxt.text = _cd.characterName;
+        if (_classTxt) _classTxt.text = _cd.className;
+        if (_acTxt) _acTxt.text = _cd.armorClass.ToString();
+        if (_statusProfTxt) _statusProfTxt.text = $"+{_cd.proficiencyBonus}";
+        if (_hpTxt) _hpTxt.text = $"{_cd.currentHP}/{_cd.maxHP}";
+        if (_levelTxt) _levelTxt.text = $"{_cd.level} УРОВЕНЬ";
+        if (_xpInput) { _xpInput.text = $"{_cd.currentXP}/{_cd.maxXP}"; _xpInput.textComponent.text = $"{_cd.currentXP}/{_cd.maxXP}"; }
+        if (_xpFill)
+        {
+            float frac = _cd.maxXP > 0 ? Mathf.Clamp01((float)_cd.currentXP / _cd.maxXP) : 0f;
+            _xpFill.rectTransform.sizeDelta = new Vector2(200f * frac, _xpFill.rectTransform.sizeDelta.y);
+        }
     }
 
-    // ═══════════════════════════════════════
-    //  Хелперы
-    // ═══════════════════════════════════════
+    // ══════════════════════════════  Хелперы  ══════════════════════════════
 
-    static string ModStr(int m) => m >= 0 ? $"+{m}" : $"{m}";
-    static Color ModClr(int m) => m >= 0 ? new Color(0.5f, 0.9f, 0.5f) : new Color(0.9f, 0.4f, 0.4f);
-    static Vector2 A(float x, float y) => new(x, y);
-    static Vector2 P(float x, float y) => new(x, y);
+    static string ModS(int m) => m>=0?$"+{m}":$"{m}";
+    static Color ModC(int m) => m>=0?new Color(0.5f,0.9f,0.5f):new Color(0.9f,0.4f,0.4f);
+    static Vector2 A(float x,float y)=>new(x,y);
+    static Vector2 P(float x,float y)=>new(x,y);
 
-    static readonly Vector2 ATL = A(0, 1), ATR = A(1, 1), AML = A(0, 0.5f), AMR = A(1, 0.5f);
+    static readonly Vector2 AL=A(0,1),AR=A(1,1),AC=A(0.5f,0.5f),AML=A(0,0.5f);
+    static readonly Vector2 PL=P(0,1),PR=P(1,1),PC=P(0.5f,0.5f),PML=P(0,0.5f);
 
-    void SetR(GameObject go, Vector2 aMin, Vector2 aMax, Vector2 pivot, Vector2 size, Vector2 pos)
+    void R(GameObject go, Vector2 am, Vector2 aM, Vector2 pv, Vector2 sz, Vector2 ps)
     {
         var rt = go.GetComponent<RectTransform>();
-        rt.anchorMin = aMin; rt.anchorMax = aMax; rt.pivot = pivot;
-        rt.sizeDelta = size; rt.anchoredPosition = pos;
+        rt.anchorMin=am; rt.anchorMax=aM; rt.pivot=pv; rt.sizeDelta=sz; rt.anchoredPosition=ps;
     }
 
-    void SetRect(GameObject go, Vector2 aMin, Vector2 aMax, Vector2 pivot, Vector2 size, Vector2 pos)
-        => SetR(go, aMin, aMax, pivot, size, pos);
+    void RS(GameObject go, Vector2 am, Vector2 aM, Vector2 pv, Vector2 sz, Vector2 ps) => R(go,am,aM,pv,sz,ps);
 
-    GameObject NewGO(string name, params System.Type[] comps)
+    GameObject GO(string n, params System.Type[] ts) { var g = new GameObject(n, ts); return g; }
+
+    GameObject Txt(Transform p, string t, Font f, float sz, FontStyle st, Color c, TextAnchor a = TextAnchor.MiddleLeft)
     {
-        var go = new GameObject(name, comps);
-        return go;
+        var g = GO("T", typeof(RectTransform), typeof(Text));
+        g.transform.SetParent(p, false);
+        var tx = g.GetComponent<Text>();
+        tx.text=t; tx.font=f; tx.fontSize=(int)sz; tx.fontStyle=st; tx.color=c; tx.alignment=a; tx.raycastTarget=false;
+        return g;
     }
 
-    GameObject MkText(Transform parent, string txt, Font f, float sz, FontStyle st, Color c, TextAnchor align = TextAnchor.MiddleLeft)
+    void Btn(Transform p, string l, Font f, Color bg, float x, float w, float h, UnityEngine.Events.UnityAction cb)
     {
-        var go = NewGO("T", typeof(RectTransform), typeof(Text));
-        go.transform.SetParent(parent, false);
-        var t = go.GetComponent<Text>();
-        t.text = txt; t.font = f; t.fontSize = (int)sz; t.fontStyle = st;
-        t.color = c; t.alignment = align; t.raycastTarget = false;
-        return go;
+        var g = GO("B", typeof(RectTransform), typeof(Image), typeof(Button));
+        g.transform.SetParent(p, false);
+        g.GetComponent<Image>().color = bg;
+        g.GetComponent<Button>().onClick.AddListener(cb);
+        R(g, AML, AML, PML, new(w,h), new(x,0));
+        var lb = Txt(g.transform, l, f, 11, FontStyle.Bold, Color.white, TextAnchor.MiddleCenter);
+        R(lb, AC, AC, PC, new(w,h), Vector2.zero);
     }
 
-    void MkBtn(Transform parent, string label, Font f, Color bg, float x, float w, float h, UnityEngine.Events.UnityAction cb)
+    void BtnY(Transform p, string l, Font f, Color bg, float x, float y, float w, float h, UnityEngine.Events.UnityAction cb)
     {
-        var go = NewGO("B", typeof(RectTransform), typeof(Image), typeof(Button));
-        go.transform.SetParent(parent, false);
-        go.GetComponent<Image>().color = bg;
-        go.GetComponent<Button>().onClick.AddListener(cb);
-        SetR(go, AML, AML, P(0, 0.5f), new(w, h), new(x, 0));
-        var lb = MkText(go.transform, label, f, 11, FontStyle.Bold, Color.white, TextAnchor.MiddleCenter);
-        SetR(lb, A(0.5f, 0.5f), A(0.5f, 0.5f), P(0.5f, 0.5f), new(w, h), Vector2.zero);
+        var g = GO("B", typeof(RectTransform), typeof(Image), typeof(Button));
+        g.transform.SetParent(p, false);
+        g.GetComponent<Image>().color = bg;
+        g.GetComponent<Button>().onClick.AddListener(cb);
+        R(g, AML, AML, PML, new(w,h), new(x,y));
+        var lb = Txt(g.transform, l, f, 11, FontStyle.Bold, Color.white, TextAnchor.MiddleCenter);
+        R(lb, AC, AC, PC, new(w,h), Vector2.zero);
     }
 
-    Image MkTgl(Transform parent, float x, float sz, bool on, UnityEngine.Events.UnityAction<bool> cb)
+    Image TglOutline(Transform p, float x, float sz, bool on, UnityEngine.Events.UnityAction<bool> cb)
     {
-        var go = NewGO("Tgl", typeof(RectTransform), typeof(Image), typeof(Button));
-        go.transform.SetParent(parent, false);
-        var img = go.GetComponent<Image>();
-        bool state = on;
-        img.color = state ? new Color(0.35f, 0.7f, 1f) : new Color(0.25f, 0.28f, 0.35f);
-        go.GetComponent<Button>().onClick.AddListener(() => { state = !state; img.color = state ? new Color(0.35f, 0.7f, 1f) : new Color(0.25f, 0.28f, 0.35f); cb?.Invoke(state); });
-        SetR(go, AML, AML, P(0, 0.5f), new(sz, sz), new(x, 0));
-        var chk = NewGO("C", typeof(RectTransform), typeof(Image));
-        chk.transform.SetParent(go.transform, false);
-        chk.GetComponent<Image>().color = Color.white; chk.GetComponent<Image>().raycastTarget = false;
-        SetR(chk, A(0.5f, 0.5f), A(0.5f, 0.5f), P(0.5f, 0.5f), new(sz * 0.35f, sz * 0.55f), Vector2.zero);
+        var g = GO("Tgl", typeof(RectTransform), typeof(Image), typeof(Button));
+        g.transform.SetParent(p, false);
+        var img = g.GetComponent<Image>();
+        bool st = on;
+        img.color = st ? new Color(0.35f,0.7f,1f) : new Color(0.18f,0.2f,0.28f);
+        g.GetComponent<Button>().onClick.AddListener(()=>{st=!st;img.color=st?new Color(0.35f,0.7f,1f):new Color(0.18f,0.2f,0.28f);cb?.Invoke(st);});
+        R(g, AML, AML, PML, new(sz,sz), new(x,0));
+        // Белая галочка
+        var ck = GO("C", typeof(RectTransform), typeof(Image));
+        ck.transform.SetParent(g.transform, false);
+        ck.GetComponent<Image>().color = Color.white; ck.GetComponent<Image>().raycastTarget = false;
+        R(ck, AC, AC, PC, new(sz*0.3f, sz*0.5f), Vector2.zero);
         return img;
     }
 
-    void EnsureEventSystem()
+    // Кнопка с якорем AL/PL (для статус-бара)
+    void MkBtn(Transform p, string l, Font f, Color bg, float x, float y, float w, float h, UnityEngine.Events.UnityAction cb)
     {
-        if (FindAnyObjectByType<UnityEngine.EventSystems.EventSystem>() == null)
+        var g = GO("B", typeof(RectTransform), typeof(Image), typeof(Button));
+        g.transform.SetParent(p, false);
+        g.GetComponent<Image>().color = bg;
+        g.GetComponent<Button>().onClick.AddListener(cb);
+        R(g, AL, AL, PL, new(w,h), new(x,y));
+        var lb = Txt(g.transform, l, f, 11, FontStyle.Bold, Color.white, TextAnchor.MiddleCenter);
+        R(lb, AC, AC, PC, new(w,h), Vector2.zero);
+    }
+
+    // InputField с якорем AL/PL
+    InputField MkInput(Transform p, string text, Font f, float sz, FontStyle st, Color c,
+        Vector2 sz2, Vector2 aMin, Vector2 aMax, Vector2 pv, Vector2 size, Vector2 pos,
+        UnityEngine.Events.UnityAction<string> cb)
+    {
+        var g = GO("Inp", typeof(RectTransform), typeof(Image), typeof(InputField));
+        g.transform.SetParent(p, false);
+        g.GetComponent<Image>().color = new Color(0.08f,0.1f,0.18f,0.9f);
+        R(g, aMin, aMax, pv, size, pos);
+
+        var tGO = GO("T", typeof(RectTransform), typeof(Text));
+        tGO.transform.SetParent(g.transform, false);
+        var tc = tGO.GetComponent<Text>();
+        tc.text = text; tc.font = f; tc.fontSize = (int)sz; tc.fontStyle = st;
+        tc.color = c; tc.alignment = TextAnchor.MiddleLeft; tc.supportRichText = false;
+        R(tGO, new(0,1), new(1,1), new(0,1), new(-8, size.y-8), new(4,-4));
+
+        var phGO = GO("PH", typeof(RectTransform), typeof(Text));
+        phGO.transform.SetParent(g.transform, false);
+        var phc = phGO.GetComponent<Text>();
+        phc.text = "..."; phc.font = f; phc.fontSize = (int)sz; phc.fontStyle = FontStyle.Italic;
+        phc.color = new Color(0.35f,0.4f,0.5f); phc.alignment = TextAnchor.MiddleLeft; phc.raycastTarget = false;
+        R(phGO, new(0,1), new(1,1), new(0,1), new(-8, size.y-8), new(4,-4));
+
+        var ifc = g.GetComponent<InputField>();
+        ifc.textComponent = tc; ifc.placeholder = phc;
+        ifc.lineType = InputField.LineType.SingleLine;
+        ifc.text = text;
+        ifc.onValueChanged.AddListener(cb);
+        return ifc;
+    }
+
+    void EvSys()
+    {
+        var es = FindAnyObjectByType<UnityEngine.EventSystems.EventSystem>();
+        if (!es)
         {
-            var go = new GameObject("EventSystem");
-            go.AddComponent<UnityEngine.EventSystems.EventSystem>();
-            go.AddComponent<UnityEngine.InputSystem.UI.InputSystemUIInputModule>();
+            var g = new GameObject("EventSystem");
+            g.AddComponent<UnityEngine.EventSystems.EventSystem>();
+            g.AddComponent<UnityEngine.InputSystem.UI.InputSystemUIInputModule>();
+            g.AddComponent<UnityEngine.EventSystems.StandaloneInputModule>();
+        }
+        else
+        {
+            if (!es.GetComponent<UnityEngine.InputSystem.UI.InputSystemUIInputModule>())
+                es.gameObject.AddComponent<UnityEngine.InputSystem.UI.InputSystemUIInputModule>();
+            if (!es.GetComponent<UnityEngine.EventSystems.StandaloneInputModule>())
+                es.gameObject.AddComponent<UnityEngine.EventSystems.StandaloneInputModule>();
         }
     }
 }
