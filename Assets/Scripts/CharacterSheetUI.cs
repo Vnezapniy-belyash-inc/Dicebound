@@ -37,6 +37,7 @@ public class CharacterSheetUI : MonoBehaviour
     Text _nameTxt, _classTxt, _acTxt, _statusProfTxt, _hpTxt, _levelTxt;
     InputField _xpInput;
     Image _xpFill;
+    RectTransform _hpRightMinusRt, _hpRightPlusRt, _hpTextRt;
 
     // Цвета статов (для акцентов)
     static readonly Color[] SC = {
@@ -111,9 +112,6 @@ public class CharacterSheetUI : MonoBehaviour
         // Заголовок
         var t1 = Txt(_pn.transform, "ХАРАКТЕРИСТИКИ", f, 20, FontStyle.Bold, new Color(0.92f,0.88f,0.65f));
         R(t1, AL, AL, PL, new(0,30f), new(PD,cy));
-        var t2 = Txt(_pn.transform, "Бонус мастерства: +2", f, 15, FontStyle.Normal, new Color(0.6f,0.65f,0.78f));
-        R(t2, AR, AR, PR, new(230,30f), new(-PD,cy));
-        _profTxt = t2.GetComponent<Text>();
         cy -= 30f+PD;
 
         // Колонки
@@ -132,126 +130,138 @@ public class CharacterSheetUI : MonoBehaviour
 
     float BuildStatusBar(float y, Font f)
     {
-        float w = PW - PD*2; // ширина внутри панели
-        float r1 = 34f, r2 = 20f, r3 = 24f; // высоты трёх рядов
+        float w = PW - PD*2;
+        float r1 = 34f, r2 = 20f, r3 = 24f;
 
-        // ── Фон статус-бара ──
+        // Фон
         var bg = GO("StatusBar", typeof(RectTransform), typeof(Image));
         bg.transform.SetParent(_pn.transform, false);
         bg.GetComponent<Image>().color = new Color(0.06f, 0.08f, 0.14f, 0.85f);
         R(bg, AL, AL, PL, new(w, SBH), new(PD, y));
 
-        float ry = -4f; // курсор внутри статус-бара
+        float cy = -4f;
 
-        // ═══ Ряд 1: Имя, КБ, Владение, HP ═══
-        // Имя персонажа (InputField, слева)
+        // ═══ РЯД 1: Имя, КБ, Мастерство, HP ═══
         var nameIF = MkInput(bg.transform, _cd.characterName, f, 18, FontStyle.Bold,
-            Color.white, new(0, r1), AL, AL, PL, new(280, r1), new(0, ry),
+            Color.white, new(280,r1), AL, AL, PL, new(280,r1), new(0,cy),
             v => { if (_cd) _cd.characterName = v; });
         _nameTxt = nameIF.textComponent;
 
-        // КБ (щит + число)
         float acX = 310f;
-        var acBg = GO("AC", typeof(RectTransform), typeof(Image));
-        acBg.transform.SetParent(bg.transform, false);
-        acBg.GetComponent<Image>().color = new Color(0.1f, 0.12f, 0.2f);
-        R(acBg, AML, AML, PML, new(44, r1), new(acX, ry));
-        var acT = Txt(acBg.transform, _cd.armorClass.ToString(), f, 20, FontStyle.Bold, Color.white, TextAnchor.MiddleCenter);
-        R(acT, AC, AC, PC, new(44, r1), Vector2.zero);
-        _acTxt = acT.GetComponent<Text>();
-        // ± кнопки КБ
-        MkBtn(bg.transform, "-", f, new Color(0.45f,0.18f,0.18f), acX-20, ry, 16, 16,
+        // Кнопка − КБ
+        MkBtn(bg.transform, "-", f, new Color(0.45f,0.18f,0.18f), acX, cy, 18, r1,
             () => { if(_cd)_cd.armorClass=Mathf.Clamp(_cd.armorClass-1,0,30); RefreshDisplay(); });
-        MkBtn(bg.transform, "+", f, new Color(0.18f,0.4f,0.22f), acX+46, ry, 16, 16,
+        // Число КБ
+        var acT = Txt(bg.transform, _cd.armorClass.ToString(), f, 20, FontStyle.Bold, Color.white, TextAnchor.MiddleCenter);
+        R(acT, AL, AL, PL, new(34, r1), new(acX+20, cy));
+        _acTxt = acT.GetComponent<Text>();
+        // Кнопка + КБ
+        MkBtn(bg.transform, "+", f, new Color(0.18f,0.4f,0.22f), acX+56, cy, 18, r1,
             () => { if(_cd)_cd.armorClass=Mathf.Clamp(_cd.armorClass+1,0,30); RefreshDisplay(); });
 
-        // Бонус владения
-        float prX = 400f;
-        var prT = Txt(bg.transform, $"+{_cd.proficiencyBonus}", f, 22, FontStyle.Bold, new Color(0.85f,0.8f,0.5f), TextAnchor.MiddleCenter);
-        R(prT, AML, AML, PML, new(50, r1), new(prX, ry));
+        float prX = 420f;
+        // Кнопка − Мастерство
+        MkBtn(bg.transform, "-", f, new Color(0.55f,0.2f,0.15f), prX-2, cy, 16, r1,
+            () => { if(_cd)_cd.proficiencyBonus=Mathf.Clamp(_cd.proficiencyBonus-1,2,6); RefreshDisplay(); });
+        // Число
+        var prT = Txt(bg.transform, $"+{_cd.proficiencyBonus}", f, 22, FontStyle.Bold,
+            new Color(0.85f,0.8f,0.5f), TextAnchor.MiddleCenter);
+        R(prT, AL, AL, PL, new(36, r1), new(prX+16, cy));
         _statusProfTxt = prT.GetComponent<Text>();
+        // Кнопка + Мастерство
+        MkBtn(bg.transform, "+", f, new Color(0.18f,0.4f,0.22f), prX+54, cy, 16, r1,
+            () => { if(_cd)_cd.proficiencyBonus=Mathf.Clamp(_cd.proficiencyBonus+1,2,6); RefreshDisplay(); });
 
-        // HP (current/max)
-        float hpX = 500f;
-        var hpT = Txt(bg.transform, $"{_cd.currentHP}/{_cd.maxHP}", f, 20, FontStyle.Bold, new Color(0.95f,0.5f,0.5f), TextAnchor.MiddleCenter);
-        R(hpT, AML, AML, PML, new(100, r1), new(hpX, ry));
-        _hpTxt = hpT.GetComponent<Text>();
-        // ± кнопки HP
-        MkBtn(bg.transform, "-", f, new Color(0.45f,0.18f,0.18f), hpX-20, ry, 16, 16,
+        float hpX = 530f;
+        // Слева: текущее HP [− сверху, + снизу]
+        MkBtn(bg.transform, "-", f, new Color(0.6f,0.22f,0.22f), hpX, cy-17, 18, 17,
             () => { if(_cd)_cd.currentHP=Mathf.Clamp(_cd.currentHP-1,0,_cd.maxHP); RefreshDisplay(); });
-        MkBtn(bg.transform, "+", f, new Color(0.18f,0.4f,0.22f), hpX+102, ry, 16, 16,
+        MkBtn(bg.transform, "+", f, new Color(0.25f,0.55f,0.28f), hpX, cy, 18, 17,
             () => { if(_cd)_cd.currentHP=Mathf.Clamp(_cd.currentHP+1,0,_cd.maxHP); RefreshDisplay(); });
-        // ± кнопки MaxHP
-        MkBtn(bg.transform, "-", f, new Color(0.35f,0.15f,0.15f), hpX+122, ry, 12, 12,
+        // Текст HP (ширина с запасом на 3-значные числа)
+        var hpT = Txt(bg.transform, $"{_cd.currentHP}/{_cd.maxHP}", f, 20, FontStyle.Bold,
+            new Color(0.95f,0.5f,0.5f), TextAnchor.MiddleCenter);
+        R(hpT, AL, AL, PL, new(80, r1), new(hpX+20, cy));
+        _hpTxt = hpT.GetComponent<Text>();
+        _hpTextRt = hpT.GetComponent<RectTransform>();
+        // Справа: макс HP [− сверху, + снизу]
+        var hpRM = MkBtn(bg.transform, "-", f, new Color(0.5f,0.2f,0.2f), hpX+500, cy-17, 18, 17,
             () => { if(_cd)_cd.maxHP=Mathf.Max(1,_cd.maxHP-1); if(_cd.currentHP>_cd.maxHP)_cd.currentHP=_cd.maxHP; RefreshDisplay(); });
-        MkBtn(bg.transform, "+", f, new Color(0.15f,0.35f,0.18f), hpX+136, ry, 12, 12,
+        _hpRightMinusRt = hpRM.GetComponent<RectTransform>();
+        var hpRP = MkBtn(bg.transform, "+", f, new Color(0.2f,0.45f,0.25f), hpX+500, cy, 18, 17,
             () => { if(_cd)_cd.maxHP=_cd.maxHP+1; RefreshDisplay(); });
+        _hpRightPlusRt = hpRP.GetComponent<RectTransform>();
 
-        ry -= r1 + 2f;
+        cy -= r1 + 2f;
 
-        // ═══ Ряд 2: Класс, подписи КБ/ВЛАД/HP ═══
-        // Класс (InputField)
+        // ═══ РЯД 2: Класс, подписи ═══
         var classIF = MkInput(bg.transform, _cd.className, f, 14, FontStyle.Italic,
-            new Color(0.65f,0.7f,0.8f), new(0, r2), AL, AL, PL, new(200, r2), new(0, ry),
+            new Color(0.65f,0.7f,0.8f), new(200,r2), AL, AL, PL, new(200,r2), new(0,cy),
             v => { if (_cd) _cd.className = v; });
         _classTxt = classIF.textComponent;
 
-        // Подписи
-        var acLbl = Txt(bg.transform, "КБ", f, 12, FontStyle.Normal, new Color(0.5f,0.55f,0.65f), TextAnchor.MiddleCenter);
-        R(acLbl, AML, AML, PML, new(44, r2), new(acX, ry));
-        var prLbl = Txt(bg.transform, "ВЛАД", f, 12, FontStyle.Normal, new Color(0.5f,0.55f,0.65f), TextAnchor.MiddleCenter);
-        R(prLbl, AML, AML, PML, new(50, r2), new(prX, ry));
-        var hpLbl = Txt(bg.transform, "♥ ХП", f, 12, FontStyle.Normal, new Color(0.5f,0.55f,0.65f), TextAnchor.MiddleCenter);
-        R(hpLbl, AML, AML, PML, new(100, r2), new(hpX, ry));
+        var acLbl = Txt(bg.transform, "КБ", f, 11, FontStyle.Normal, new Color(0.5f,0.55f,0.65f), TextAnchor.MiddleCenter);
+        R(acLbl, AL, AL, PL, new(54, r2), new(acX+10, cy));
+        var prLbl = Txt(bg.transform, "МАСТ", f, 11, FontStyle.Normal, new Color(0.5f,0.55f,0.65f), TextAnchor.MiddleCenter);
+        R(prLbl, AL, AL, PL, new(50, r2), new(prX, cy));
+        var hpLbl = Txt(bg.transform, "♥ ХП", f, 11, FontStyle.Normal, new Color(0.5f,0.55f,0.65f), TextAnchor.MiddleCenter);
+        R(hpLbl, AL, AL, PL, new(60, r2), new(hpX+18, cy));
 
-        ry -= r2 + 2f;
+        cy -= r2 + 2f;
 
-        // ═══ Ряд 3: Уровень + XP-шкала ═══
-        // Уровень
+        // ═══ РЯД 3: Уровень + XP ═══
         var lvBg = GO("LV", typeof(RectTransform), typeof(Image));
         lvBg.transform.SetParent(bg.transform, false);
         lvBg.GetComponent<Image>().color = new Color(0.25f, 0.2f, 0.5f);
-        R(lvBg, AML, AML, PML, new(110, r3), new(0, ry));
+        R(lvBg, AL, AL, PL, new(110, r3), new(0, cy));
         var lvT = Txt(lvBg.transform, $"{_cd.level} УРОВЕНЬ", f, 13, FontStyle.Bold, Color.white, TextAnchor.MiddleCenter);
         R(lvT, AC, AC, PC, new(110, r3), Vector2.zero);
         _levelTxt = lvT.GetComponent<Text>();
-        // ± кнопки уровня
-        MkBtn(bg.transform, "-", f, new Color(0.4f,0.15f,0.25f), 114, ry, 16, r3,
+        MkBtn(bg.transform, "-", f, new Color(0.4f,0.15f,0.25f), 114, cy, 16, r3,
             () => { if(_cd)_cd.level=Mathf.Clamp(_cd.level-1,1,20); RefreshDisplay(); });
-        MkBtn(bg.transform, "+", f, new Color(0.25f,0.15f,0.4f), 132, ry, 16, r3,
-            () => { if(_cd)_cd.level=Mathf.Clamp(_cd.level+1,1,20); RefreshDisplay(); });
+        MkBtn(bg.transform, "+", f, new Color(0.18f,0.4f,0.22f), 132, cy, 16, r3,
+            () => {
+                if (!_cd) return;
+                _cd.level = Mathf.Clamp(_cd.level+1, 1, 20);
+                if (_cd.currentXP >= _cd.maxXP) _cd.currentXP -= _cd.maxXP;
+                else _cd.currentXP = 0;
+                RefreshDisplay();
+            });
 
         // XP-шкала
-        float xpX = 160f, xpW = 200f, xpH = r3;
+        float xpX = 160f, xpW = 180f;
         var xpBg = GO("XPBg", typeof(RectTransform), typeof(Image));
         xpBg.transform.SetParent(bg.transform, false);
         xpBg.GetComponent<Image>().color = new Color(0.08f, 0.1f, 0.18f);
-        R(xpBg, AML, AML, PML, new(xpW, xpH-6), new(xpX, ry));
+        R(xpBg, AL, AL, PL, new(xpW, r3-6), new(xpX, cy));
 
         float frac = _cd.maxXP > 0 ? Mathf.Clamp01((float)_cd.currentXP / _cd.maxXP) : 0f;
         var xpFill = GO("XPFill", typeof(RectTransform), typeof(Image));
         xpFill.transform.SetParent(xpBg.transform, false);
         xpFill.GetComponent<Image>().color = new Color(0.45f, 0.3f, 0.8f);
-        R(xpFill, AL, AL, PL, new(xpW * frac, xpH-6), Vector2.zero);
+        R(xpFill, AL, AL, PL, new(xpW * frac, r3-6), Vector2.zero);
         _xpFill = xpFill.GetComponent<Image>();
 
-        // XP — InputField для ручного ввода
-        var xpIF = MkInput(bg.transform, $"{_cd.currentXP}/{_cd.maxXP}", f, 12, FontStyle.Normal,
-            new Color(0.7f,0.7f,0.8f), new(80, r3), AL, AL, PL, new(80, r3), new(xpX+xpW+6, ry),
+        // XP текущее — InputField только число
+        var xpIF = MkInput(bg.transform, _cd.currentXP.ToString(), f, 12, FontStyle.Normal,
+            new Color(0.7f,0.7f,0.8f), new(44,r3), AL, AL, PL, new(44, r3), new(xpX+xpW+4, cy),
             v => {
                 if (!_cd) return;
-                int slash = v.IndexOf('/');
-                if (slash > 0 && int.TryParse(v.Substring(0,slash), out int cxp))
-                    _cd.currentXP = Mathf.Clamp(cxp, 0, _cd.maxXP);
-                else if (int.TryParse(v, out int xp))
-                    _cd.currentXP = Mathf.Clamp(xp, 0, _cd.maxXP);
+                if (int.TryParse(v.Trim(), out int xp))
+                    _cd.currentXP = Mathf.Max(0, xp);
                 RefreshDisplay();
             });
         _xpInput = xpIF;
 
+        // XP макс — статика
+        var xpMaxT = Txt(bg.transform, $"/{_cd.maxXP}", f, 12, FontStyle.Normal,
+            new Color(0.5f,0.55f,0.65f), TextAnchor.MiddleLeft);
+        R(xpMaxT, AL, AL, PL, new(50, r3), new(xpX+xpW+48, cy));
+
         // Следующий уровень
-        var nextT = Txt(bg.transform, $"{_cd.level+1}", f, 13, FontStyle.Bold, new Color(0.5f,0.55f,0.7f), TextAnchor.MiddleCenter);
-        R(nextT, AML, AML, PML, new(30, r3), new(xpX+xpW+86, ry));
+        var nextT = Txt(bg.transform, $"{_cd.level+1}", f, 13, FontStyle.Bold,
+            new Color(0.5f,0.55f,0.7f), TextAnchor.MiddleCenter);
+        R(nextT, AL, AL, PL, new(30, r3), new(xpX+xpW+100, cy));
 
         return y - SBH;
     }
@@ -501,14 +511,24 @@ public class CharacterSheetUI : MonoBehaviour
         if (_classTxt) _classTxt.text = _cd.className;
         if (_acTxt) _acTxt.text = _cd.armorClass.ToString();
         if (_statusProfTxt) _statusProfTxt.text = $"+{_cd.proficiencyBonus}";
-        if (_hpTxt) _hpTxt.text = $"{_cd.currentHP}/{_cd.maxHP}";
+        if (_hpTxt) { _hpTxt.text = $"{_cd.currentHP}/{_cd.maxHP}"; RepositionHpButtons(); }
         if (_levelTxt) _levelTxt.text = $"{_cd.level} УРОВЕНЬ";
-        if (_xpInput) { _xpInput.text = $"{_cd.currentXP}/{_cd.maxXP}"; _xpInput.textComponent.text = $"{_cd.currentXP}/{_cd.maxXP}"; }
+        if (_xpInput) { _xpInput.text = _cd.currentXP.ToString(); _xpInput.textComponent.text = _cd.currentXP.ToString(); }
         if (_xpFill)
         {
             float frac = _cd.maxXP > 0 ? Mathf.Clamp01((float)_cd.currentXP / _cd.maxXP) : 0f;
             _xpFill.rectTransform.sizeDelta = new Vector2(200f * frac, _xpFill.rectTransform.sizeDelta.y);
         }
+    }
+
+    void RepositionHpButtons()
+    {
+        if (!_hpTextRt || !_hpRightMinusRt || !_hpRightPlusRt || !_hpTxt) return;
+        float pw = _hpTxt.preferredWidth;
+        float rightX = _hpTextRt.anchoredPosition.x + pw + 30f;
+        float baseY = _hpTextRt.anchoredPosition.y;
+        _hpRightMinusRt.anchoredPosition = new Vector2(rightX, baseY - 17f);
+        _hpRightPlusRt.anchoredPosition = new Vector2(rightX, baseY);
     }
 
     // ══════════════════════════════  Хелперы  ══════════════════════════════
@@ -551,17 +571,6 @@ public class CharacterSheetUI : MonoBehaviour
         R(lb, AC, AC, PC, new(w,h), Vector2.zero);
     }
 
-    void BtnY(Transform p, string l, Font f, Color bg, float x, float y, float w, float h, UnityEngine.Events.UnityAction cb)
-    {
-        var g = GO("B", typeof(RectTransform), typeof(Image), typeof(Button));
-        g.transform.SetParent(p, false);
-        g.GetComponent<Image>().color = bg;
-        g.GetComponent<Button>().onClick.AddListener(cb);
-        R(g, AML, AML, PML, new(w,h), new(x,y));
-        var lb = Txt(g.transform, l, f, 11, FontStyle.Bold, Color.white, TextAnchor.MiddleCenter);
-        R(lb, AC, AC, PC, new(w,h), Vector2.zero);
-    }
-
     Image TglOutline(Transform p, float x, float sz, bool on, UnityEngine.Events.UnityAction<bool> cb)
     {
         var g = GO("Tgl", typeof(RectTransform), typeof(Image), typeof(Button));
@@ -580,7 +589,7 @@ public class CharacterSheetUI : MonoBehaviour
     }
 
     // Кнопка с якорем AL/PL (для статус-бара)
-    void MkBtn(Transform p, string l, Font f, Color bg, float x, float y, float w, float h, UnityEngine.Events.UnityAction cb)
+    GameObject MkBtn(Transform p, string l, Font f, Color bg, float x, float y, float w, float h, UnityEngine.Events.UnityAction cb)
     {
         var g = GO("B", typeof(RectTransform), typeof(Image), typeof(Button));
         g.transform.SetParent(p, false);
@@ -589,9 +598,10 @@ public class CharacterSheetUI : MonoBehaviour
         R(g, AL, AL, PL, new(w,h), new(x,y));
         var lb = Txt(g.transform, l, f, 11, FontStyle.Bold, Color.white, TextAnchor.MiddleCenter);
         R(lb, AC, AC, PC, new(w,h), Vector2.zero);
+        return g;
     }
 
-    // InputField с якорем AL/PL
+    // InputField
     InputField MkInput(Transform p, string text, Font f, float sz, FontStyle st, Color c,
         Vector2 sz2, Vector2 aMin, Vector2 aMax, Vector2 pv, Vector2 size, Vector2 pos,
         UnityEngine.Events.UnityAction<string> cb)
@@ -601,19 +611,25 @@ public class CharacterSheetUI : MonoBehaviour
         g.GetComponent<Image>().color = new Color(0.08f,0.1f,0.18f,0.9f);
         R(g, aMin, aMax, pv, size, pos);
 
+        // Text child — stretch fill
         var tGO = GO("T", typeof(RectTransform), typeof(Text));
         tGO.transform.SetParent(g.transform, false);
         var tc = tGO.GetComponent<Text>();
         tc.text = text; tc.font = f; tc.fontSize = (int)sz; tc.fontStyle = st;
         tc.color = c; tc.alignment = TextAnchor.MiddleLeft; tc.supportRichText = false;
-        R(tGO, new(0,1), new(1,1), new(0,1), new(-8, size.y-8), new(4,-4));
+        var trt = tGO.GetComponent<RectTransform>();
+        trt.anchorMin = Vector2.zero; trt.anchorMax = Vector2.one;
+        trt.offsetMin = new Vector2(4, 2); trt.offsetMax = new Vector2(-4, -2);
 
+        // Placeholder — stretch fill
         var phGO = GO("PH", typeof(RectTransform), typeof(Text));
         phGO.transform.SetParent(g.transform, false);
         var phc = phGO.GetComponent<Text>();
         phc.text = "..."; phc.font = f; phc.fontSize = (int)sz; phc.fontStyle = FontStyle.Italic;
         phc.color = new Color(0.35f,0.4f,0.5f); phc.alignment = TextAnchor.MiddleLeft; phc.raycastTarget = false;
-        R(phGO, new(0,1), new(1,1), new(0,1), new(-8, size.y-8), new(4,-4));
+        var prt = phGO.GetComponent<RectTransform>();
+        prt.anchorMin = Vector2.zero; prt.anchorMax = Vector2.one;
+        prt.offsetMin = new Vector2(4, 2); prt.offsetMax = new Vector2(-4, -2);
 
         var ifc = g.GetComponent<InputField>();
         ifc.textComponent = tc; ifc.placeholder = phc;
