@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.UI;
 
 /// <summary>
 /// Управление камерой — два режима, переключение по Tab:
@@ -47,6 +48,10 @@ public class CameraMovement : MonoBehaviour
 
     private void Update()
     {
+        // Don't move camera when interacting with UI
+        if (IsPointerOverUI() || IsEditingText())
+            return;
+
         Keyboard k = Keyboard.current;
         Mouse m = Mouse.current;
 
@@ -168,5 +173,21 @@ public class CameraMovement : MonoBehaviour
         }
 
         transform.position += move * (speed * Time.deltaTime);
+    }
+
+    // ═══════════════════ UI-aware helpers ═══════════════════
+
+    static bool IsPointerOverUI()
+    {
+        return UnityEngine.EventSystems.EventSystem.current != null &&
+               UnityEngine.EventSystems.EventSystem.current.IsPointerOverGameObject();
+    }
+
+    static bool IsEditingText()
+    {
+        var es = UnityEngine.EventSystems.EventSystem.current;
+        if (es == null) return false;
+        var go = es.currentSelectedGameObject;
+        return go != null && go.GetComponent<InputField>() != null;
     }
 }

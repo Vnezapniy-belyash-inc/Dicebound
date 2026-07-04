@@ -1,6 +1,10 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
+using System.IO;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 /// <summary>
 /// Чарник D&D в стиле референса: блоки статов, навыки с кружками, пассивные чувства.
@@ -43,7 +47,7 @@ public class CharacterSheetUI : MonoBehaviour
 
     // Статус-бар
     Text _nameTxt, _classTxt, _acTxt, _statusProfTxt, _hpTxt, _levelTxt, _xpMaxTxt;
-    InputField _xpInput;
+    InputField _nameIF, _classIF, _xpInput;
     Image _xpFill;
     RectTransform _hpRightMinusRt, _hpRightPlusRt, _hpTextRt;
 
@@ -63,13 +67,20 @@ public class CharacterSheetUI : MonoBehaviour
     {
         _cd = characterData ? characterData : FindAnyObjectByType<CharacterData>();
         BuildUI();
-        if (_pn) _pn.SetActive(false);
+        if (_pn) _pn.SetActive(true);
     }
 
     void Update()
     {
         var k = Keyboard.current;
         if (k == null) return;
+
+        // Don't process hotkeys when typing in a text field
+        if (UnityEngine.EventSystems.EventSystem.current != null &&
+            UnityEngine.EventSystems.EventSystem.current.currentSelectedGameObject != null &&
+            UnityEngine.EventSystems.EventSystem.current.currentSelectedGameObject.GetComponent<InputField>() != null)
+            return;
+
         if (k.cKey.wasPressedThisFrame && _pn)
         {
             _pn.SetActive(!_pn.activeSelf);
@@ -109,7 +120,7 @@ public class CharacterSheetUI : MonoBehaviour
         _pn = GO("Panel", typeof(RectTransform), typeof(Image));
         _pn.transform.SetParent(cgo.transform, false);
         _pn.GetComponent<Image>().color = new Color(0.05f, 0.07f, 0.11f, 0.96f);
-        RS(_pn, AC, AC, PC, new(PW, th), new(60, -10));
+        RS(_pn, PR, PR, PR, new(PW, th), new(-12, -12));
 
         float cy = -PD;
 
@@ -381,7 +392,7 @@ public class CharacterSheetUI : MonoBehaviour
         textComp.color = new Color(0.85f, 0.88f, 0.95f);
         textComp.alignment = TextAnchor.UpperLeft;
         textComp.supportRichText = false;
-        R(textGO, new(0,1), new(1,1), new(0,1), new(-8, h-8), new(4, -4));
+        R(textGO, new(0,1), new(1,1), new(0,1), new(-30, 10000), new(4, -4));
 
         var phGO = GO("PH", typeof(RectTransform), typeof(Text));
         phGO.transform.SetParent(g.transform, false);
@@ -392,7 +403,7 @@ public class CharacterSheetUI : MonoBehaviour
         phComp.color = new Color(0.3f, 0.35f, 0.45f);
         phComp.alignment = TextAnchor.UpperLeft;
         phComp.raycastTarget = false;
-        R(phGO, new(0,1), new(1,1), new(0,1), new(-8, h-8), new(4, -4));
+        R(phGO, new(0,1), new(1,1), new(0,1), new(-30, 10000), new(4, -4));
 
         var ifComp = g.GetComponent<InputField>();
         ifComp.textComponent = textComp;
@@ -402,6 +413,39 @@ public class CharacterSheetUI : MonoBehaviour
         ifComp.onValueChanged.AddListener(onChanged);
         // Принудительно верхний левый угол после всей инициализации
         textComp.alignment = TextAnchor.UpperLeft;
+
+        // ── Scrollbar (visual only) ──
+        float sbWidth = 14f;
+        var sbGO = GO("Scrollbar", typeof(RectTransform), typeof(Image), typeof(Scrollbar));
+        sbGO.transform.SetParent(g.transform, false);
+        R(sbGO, new(1,0), new(1,1), new(1,0), new(sbWidth, 0), new(0, 0));
+
+        var sbImg = sbGO.GetComponent<Image>();
+        sbImg.color = new Color(0.15f, 0.25f, 0.45f, 0.85f);
+
+        var sb = sbGO.GetComponent<Scrollbar>();
+        sb.direction = Scrollbar.Direction.BottomToTop;
+
+        var saGO = GO("SlidingArea", typeof(RectTransform));
+        saGO.transform.SetParent(sbGO.transform, false);
+        R(saGO, new(0,0), new(1,1), new(0,0), new(-6, -6), new(3, 3));
+
+        var hGO = GO("Handle", typeof(RectTransform), typeof(Image));
+        hGO.transform.SetParent(saGO.transform, false);
+        hGO.GetComponent<Image>().color = new Color(0.3f, 0.55f, 0.85f, 0.95f);
+        R(hGO, new(0,0), new(1,1), new(0,0), Vector2.zero, Vector2.zero);
+
+        sb.handleRect = hGO.GetComponent<RectTransform>();
+
+        // ── Clip text + caret/selection to field bounds ──
+        var maskImg = g.GetComponent<Image>();
+        maskImg.color = new Color(1, 1, 1, 1); // full alpha for mask, hidden by showMaskGraphic
+        var mask = g.AddComponent<Mask>();
+        mask.showMaskGraphic = false;
+
+        // ── Scroll helper ──
+        var sc = g.AddComponent<InputFieldScrollHelper>();
+        sc.Init(ifComp, textComp, sb, h);
 
         return ifComp;
     }
@@ -423,6 +467,7 @@ public class CharacterSheetUI : MonoBehaviour
         var nameIF = MkInput(bg.transform, _cd.characterName, f, 18, FontStyle.Bold,
             Color.white, new(280,r1), AL, AL, PL, new(280,r1), new(0,cy),
             v => { if (_cd) _cd.characterName = v; });
+        _nameIF = nameIF;
         _nameTxt = nameIF.textComponent;
 
         float acX = 310f;
@@ -476,6 +521,7 @@ public class CharacterSheetUI : MonoBehaviour
         var classIF = MkInput(bg.transform, _cd.className, f, 14, FontStyle.Italic,
             new Color(0.65f,0.7f,0.8f), new(200,r2), AL, AL, PL, new(200,r2), new(0,cy),
             v => { if (_cd) _cd.className = v; });
+        _classIF = classIF;
         _classTxt = classIF.textComponent;
 
         var acLbl = Txt(bg.transform, "КБ", f, 11, FontStyle.Normal, new Color(0.5f,0.55f,0.65f), TextAnchor.MiddleCenter);
@@ -534,6 +580,12 @@ public class CharacterSheetUI : MonoBehaviour
             new Color(0.5f,0.55f,0.65f), TextAnchor.MiddleLeft);
         R(xpMaxT, AL, AL, PL, new(60, r3), new(xpX+xpW+48, cy));
         _xpMaxTxt = xpMaxT.GetComponent<Text>();
+
+        // Кнопки импорта/экспорта JSON (правый нижний угол шапки)
+        MkBtn(bg.transform, "↓", f, new Color(0.1f, 0.13f, 0.22f), 640, cy, 28, r3,
+            () => ImportCharacter());
+        MkBtn(bg.transform, "↑", f, new Color(0.1f, 0.13f, 0.22f), 672, cy, 28, r3,
+            () => ExportCharacter());
 
         return y - SBH;
     }
@@ -779,8 +831,8 @@ public class CharacterSheetUI : MonoBehaviour
         if (_pasInvTxt) _pasInvTxt.text = _cd.passiveIntAnalysis.ToString();
 
         // Статус-бар
-        if (_nameTxt) _nameTxt.text = _cd.characterName;
-        if (_classTxt) _classTxt.text = _cd.className;
+        if (_nameIF) _nameIF.text = _cd.characterName;
+        if (_classIF) _classIF.text = _cd.className;
         if (_acTxt) _acTxt.text = _cd.armorClass.ToString();
         if (_statusProfTxt) _statusProfTxt.text = $"+{_cd.proficiencyBonus}";
         if (_hpTxt) { _hpTxt.text = $"{_cd.currentHP}/{_cd.maxHP}"; RepositionHpButtons(); }
@@ -792,6 +844,20 @@ public class CharacterSheetUI : MonoBehaviour
             _xpFill.rectTransform.sizeDelta = new Vector2(180f * frac, _xpFill.rectTransform.sizeDelta.y);
         }
         if (_xpMaxTxt) _xpMaxTxt.text = $"/{_cd.maxXP}";
+
+        // Text fields
+        if (_attacksInput) _attacksInput.text = _cd.attacksAndSpells;
+        if (_abilitiesInput) _abilitiesInput.text = _cd.featuresAndTraits;
+        if (_extraInput) _extraInput.text = _cd.extraAbilities;
+        if (_traitsInput) _traitsInput.text = _cd.traits;
+        if (_equipInput) _equipInput.text = _cd.equipment;
+        if (_treasureInput) _treasureInput.text = _cd.treasure;
+        if (_note1Input) _note1Input.text = _cd.note1;
+        if (_note2Input) _note2Input.text = _cd.note2;
+        if (_note3Input) _note3Input.text = _cd.note3;
+        if (_note4Input) _note4Input.text = _cd.note4;
+        if (_note5Input) _note5Input.text = _cd.note5;
+        if (_note6Input) _note6Input.text = _cd.note6;
     }
 
     void RepositionHpButtons()
@@ -802,6 +868,51 @@ public class CharacterSheetUI : MonoBehaviour
         float baseY = _hpTextRt.anchoredPosition.y;
         _hpRightMinusRt.anchoredPosition = new Vector2(rightX, baseY - 17f);
         _hpRightPlusRt.anchoredPosition = new Vector2(rightX, baseY);
+    }
+
+    void ImportCharacter()
+    {
+#if UNITY_EDITOR
+        try
+        {
+            string path = UnityEditor.EditorUtility.OpenFilePanel(
+                "Загрузить персонажа LSS", "", "json");
+            if (string.IsNullOrEmpty(path)) return;
+
+            string json = File.ReadAllText(path);
+            LssJsonConverter.ImportFromLss(json, _cd);
+            RefreshDisplay();
+            Debug.Log("[LSS] Персонаж загружен из " + path);
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"[LSS UI] Ошибка импорта: {e.Message}");
+        }
+#else
+        Debug.LogWarning("[LSS] Импорт доступен только в Unity Editor");
+#endif
+    }
+
+    void ExportCharacter()
+    {
+#if UNITY_EDITOR
+        try
+        {
+            string path = UnityEditor.EditorUtility.SaveFilePanel(
+                "Выгрузить персонажа LSS", "", "character.json", "json");
+            if (string.IsNullOrEmpty(path)) return;
+
+            string json = LssJsonConverter.ExportToLss(_cd);
+            File.WriteAllText(path, json);
+            Debug.Log("[LSS] Персонаж выгружен в " + path);
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"[LSS] Ошибка экспорта: {e.Message}");
+        }
+#else
+        Debug.LogWarning("[LSS] Экспорт доступен только в Unity Editor");
+#endif
     }
 
     // ══════════════════════════════  Хелперы  ══════════════════════════════
