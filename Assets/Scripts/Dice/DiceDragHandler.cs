@@ -4,15 +4,14 @@ using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
 
 /// <summary>
-/// Перетаскивание дайсов мышкой:
+/// Перетаскивание дайсов мышкой. Работает с IDice (и локальные Dice, и сетевые NetworkDice).
 ///   ЛКМ по дайсу          — выбрать (сбрасывает предыдущее выделение)
 ///   Ctrl+ЛКМ по дайсу     — добавить/убрать из выделения
 ///   ЛКМ по пустоте        — снять выделение
-///   Зажать ЛКМ на пустоте  — выделение прямоугольной областью (как в Windows)
+///   Зажать ЛКМ на пустоте  — выделение прямоугольной областью
 ///   Ctrl + область        — добавить к выделению
 ///   Тащить ЛКМ             — двигать все выделенные дайсы
 ///   Отпустить ЛКМ          — бросить все выделенные с инерцией
-/// Выделенные дайсы подсвечиваются голубой обводкой.
 /// </summary>
 public class DiceDragHandler : MonoBehaviour
 {
@@ -36,10 +35,10 @@ public class DiceDragHandler : MonoBehaviour
     [Range(0f, 20f)]
     public float throwSpin = 5f;
 
-    [Tooltip("Максимальная скорость броска (предотвращает пролёт сквозь стены)")]
+    [Tooltip("Максимальная скорость броска")]
     public float maxThrowSpeed = 30f;
 
-    private readonly List<Dice> _selected = new();
+    private readonly List<IDice> _selected = new();
     private bool _isDragging;
     private Vector3 _dragOffset;
     private Vector3 _prevMouseWorldPos;
@@ -47,13 +46,12 @@ public class DiceDragHandler : MonoBehaviour
     private Camera _cam;
 
     // Выделение областью
-    private bool _areaSelectPending;    // ЛКМ нажат на пустоте, ждём движения
-    private bool _isAreaSelecting;      // активно рисуем прямоугольник
-    private bool _areaCtrl;             // был ли Ctrl при старте области
-    private Vector2 _areaStart;         // экранные координаты начала
-    private Vector2 _areaEnd;           // экранные координаты текущего
+    private bool _areaSelectPending;
+    private bool _isAreaSelecting;
+    private bool _areaCtrl;
+    private Vector2 _areaStart;
+    private Vector2 _areaEnd;
 
-    // Кеш для OnGUI
     private static Texture2D _whiteTex;
     private static GUIStyle _boxStyle;
 
@@ -90,7 +88,7 @@ public class DiceDragHandler : MonoBehaviour
             else if (_isDragging)
                 ReleaseAll();
             else if (_areaSelectPending)
-                ClearSelection(); // просто клик по пустоте
+                ClearSelection();
         }
     }
 
@@ -98,7 +96,6 @@ public class DiceDragHandler : MonoBehaviour
 
     void HandlePress(Mouse m, bool ctrl)
     {
-        // Не обрабатываем если курсор над UI
         if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
             return;
 
@@ -106,7 +103,11 @@ public class DiceDragHandler : MonoBehaviour
 
         if (Physics.Raycast(ray, out RaycastHit hit))
         {
-            Dice dice = hit.collider.GetComponentInParent<Dice>();
+            // Ищем IDice — сначала Dice, потом NetworkDice
+            IDice dice = hit.collider.GetComponentInParent<Dice>();
+            if (dice == null)
+                dice = hit.collider.GetComponentInParent<NetworkDice>();
+
             if (dice != null)
             {
                 if (ctrl)
@@ -145,9 +146,11 @@ public class DiceDragHandler : MonoBehaviour
 
         Rect screenRect = GetAreaScreenRect();
         if (screenRect.width < 2f && screenRect.height < 2f)
-            return; // слишком маленькая область
+            return;
 
-        var diceToSelect = new List<Dice>();
+        var diceToSelect = new List<IDice>();
+
+        // Локальные дайсы
         if (DiceManager.Instance != null)
         {
             foreach (var d in DiceManager.Instance.ActiveDice)
@@ -157,6 +160,14 @@ public class DiceDragHandler : MonoBehaviour
                 if (sp.z > 0 && screenRect.Contains(new Vector2(sp.x, sp.y)))
                     diceToSelect.Add(d);
             }
+        }
+
+        // Сетевые дайсы
+        foreach (var nd in FindObjectsByType<NetworkDice>(FindObjectsSortMode.None))
+        {
+            Vector3 sp = _cam.WorldToScreenPoint(nd.transform.position);
+            if (sp.z > 0 && screenRect.Contains(new Vector2(sp.x, sp.y)))
+                diceToSelect.Add(nd);
         }
 
         if (!_areaCtrl)
@@ -183,17 +194,14 @@ public class DiceDragHandler : MonoBehaviour
         if (_boxStyle == null) _boxStyle = new GUIStyle(GUI.skin.box);
 
         Rect screenRect = GetAreaScreenRect();
-        // GUI использует Y-вниз (top-left origin), экранные координаты — Y-вверх
         float guiY = Screen.height - screenRect.yMax;
         Rect guiRect = new Rect(screenRect.x, guiY, screenRect.width, screenRect.height);
 
         if (guiRect.width < 1f || guiRect.height < 1f) return;
 
-        // Полупрозрачная заливка
         GUI.color = new Color(0.2f, 0.6f, 1f, 0.15f);
         GUI.DrawTexture(guiRect, _whiteTex);
 
-        // Рамка
         GUI.color = new Color(0.2f, 0.6f, 1f, 0.7f);
         GUI.Box(guiRect, "", _boxStyle);
 
@@ -202,48 +210,42 @@ public class DiceDragHandler : MonoBehaviour
 
     // ═══ Выделение ═══
 
-    void SelectSingle(Dice dice, Ray ray)
+    void SelectSingle(IDice dice, Ray ray)
     {
         ClearSelection();
         AddToSelection(dice);
         StartDragging(ray);
     }
 
-    void ToggleSelection(Dice dice, Ray ray)
+    void ToggleSelection(IDice dice, Ray ray)
     {
         if (_selected.Contains(dice))
-        {
             RemoveFromSelection(dice);
-        }
         else
-        {
             AddToSelection(dice);
-        }
     }
 
-    void AddToSelection(Dice dice)
+    void AddToSelection(IDice dice)
     {
         if (dice == null || _selected.Contains(dice)) return;
         _selected.Add(dice);
         dice.IsRolling = false;
-        Rigidbody rb = dice.GetComponent<Rigidbody>();
-        if (rb != null)
+        if (dice.Rigidbody != null)
         {
-            rb.linearVelocity = Vector3.zero;
-            rb.angularVelocity = Vector3.zero;
-            rb.isKinematic = true;
+            dice.Rigidbody.linearVelocity = Vector3.zero;
+            dice.Rigidbody.angularVelocity = Vector3.zero;
+            dice.Rigidbody.isKinematic = true;
         }
-        DiceHighlight hl = dice.GetComponent<DiceHighlight>();
+        var hl = dice.gameObject.GetComponent<DiceHighlight>();
         if (hl != null) hl.SetHighlighted(true);
     }
 
-    void RemoveFromSelection(Dice dice)
+    void RemoveFromSelection(IDice dice)
     {
         if (dice == null) return;
         _selected.Remove(dice);
-        Rigidbody rb = dice.GetComponent<Rigidbody>();
-        if (rb != null) rb.isKinematic = false;
-        DiceHighlight hl = dice.GetComponent<DiceHighlight>();
+        if (dice.Rigidbody != null) dice.Rigidbody.isKinematic = false;
+        var hl = dice.gameObject.GetComponent<DiceHighlight>();
         if (hl != null) hl.SetHighlighted(false);
     }
 
@@ -252,11 +254,10 @@ public class DiceDragHandler : MonoBehaviour
         _areaSelectPending = false;
         foreach (var d in _selected)
         {
-            if (d != null)
+            if (d != null && d.Rigidbody != null)
             {
-                Rigidbody rb = d.GetComponent<Rigidbody>();
-                if (rb != null) rb.isKinematic = false;
-                DiceHighlight hl = d.GetComponent<DiceHighlight>();
+                d.Rigidbody.isKinematic = false;
+                var hl = d.gameObject.GetComponent<DiceHighlight>();
                 if (hl != null) hl.SetHighlighted(false);
             }
         }
@@ -271,7 +272,6 @@ public class DiceDragHandler : MonoBehaviour
         _velocity = Vector3.zero;
         _isDragging = true;
 
-        // Поднимаем дайсы на высоту перетаскивания (до расчёта смещения!)
         foreach (var d in _selected)
         {
             if (d != null)
@@ -282,7 +282,6 @@ public class DiceDragHandler : MonoBehaviour
             }
         }
 
-        // Единая плоскость на dragHeight — совпадает с DragAll, нет скачка
         Plane p = new Plane(Vector3.up, new Vector3(0, dragHeight, 0));
         if (p.Raycast(ray, out float dist))
         {
@@ -309,7 +308,6 @@ public class DiceDragHandler : MonoBehaviour
         Vector3 center = GetSelectionCenter();
         Vector3 delta = target - center;
 
-        // Двигаем все выделенные дайсы
         foreach (var d in _selected)
         {
             if (d != null)
@@ -320,7 +318,6 @@ public class DiceDragHandler : MonoBehaviour
             }
         }
 
-        // Стряхивание в кучу: при быстрых движениях мыши стягиваем дайсы к курсору
         Vector2 mouseDelta = m.delta.ReadValue();
         float shakeSpeed = mouseDelta.magnitude;
         if (_selected.Count > 1 && shakeSpeed > shakeThreshold)
@@ -335,12 +332,9 @@ public class DiceDragHandler : MonoBehaviour
                     d.transform.position = pos;
                 }
             }
-
-            // Не даём дайсам войти друг в друга
             SeparateDice();
         }
 
-        // Инерция
         if (Time.deltaTime > 0.0001f)
             _velocity = (currentMouseWorld - _prevMouseWorldPos) / Time.deltaTime;
 
@@ -354,28 +348,28 @@ public class DiceDragHandler : MonoBehaviour
         Vector3 throwVelocity = _velocity * throwMultiplier;
         throwVelocity.y += 2f;
 
-        // Ограничение скорости (предотвращает пролёт сквозь стены)
         if (throwVelocity.magnitude > maxThrowSpeed)
             throwVelocity = throwVelocity.normalized * maxThrowSpeed;
+
+        int manualCount = 0;
 
         foreach (var d in _selected)
         {
             if (d == null) continue;
-            Rigidbody rb = d.GetComponent<Rigidbody>();
-            if (rb != null)
+            if (d.Rigidbody != null)
             {
-                d.StartRolling();
-                rb.isKinematic = false;
-                rb.linearVelocity = throwVelocity;
-                rb.angularVelocity = Random.insideUnitSphere * throwSpin;
+                d.StartRoll();
+                d.Rigidbody.isKinematic = false;
+                d.Rigidbody.linearVelocity = throwVelocity;
+                d.Rigidbody.angularVelocity = Random.insideUnitSphere * throwSpin;
+                manualCount++;
             }
         }
 
         _isDragging = false;
 
-        // Уведомляем UI о ручном броске
         var diceUI = FindAnyObjectByType<DiceUI>();
-        if (diceUI != null) diceUI.StartManualRoll(_selected.Count);
+        if (diceUI != null) diceUI.StartManualRoll(manualCount);
     }
 
     Vector3 GetSelectionCenter()
@@ -396,7 +390,7 @@ public class DiceDragHandler : MonoBehaviour
 
     void SeparateDice()
     {
-        const float minDist = 1.05f; // 2 × circumradius + зазор
+        const float minDist = 1.05f;
         for (int i = 0; i < _selected.Count; i++)
         {
             if (_selected[i] == null) continue;

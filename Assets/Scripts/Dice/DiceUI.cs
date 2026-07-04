@@ -19,6 +19,8 @@ public class DiceUI : MonoBehaviour
     public float gap = 4f;
     public float padding = 8f;
 
+    public static DiceUI Instance { get; private set; }
+
     [Header("Спавн")]
     public float spawnSpread = 0.8f;
 
@@ -34,6 +36,12 @@ public class DiceUI : MonoBehaviour
     private Text _logText;
     private readonly List<string> _logEntries = new(); // строки лога
     private GridManager _gridManager;
+
+    void Awake()
+    {
+        if (Instance != null) { Destroy(gameObject); return; }
+        Instance = this;
+    }
 
     void Start()
     {
@@ -487,6 +495,19 @@ public class DiceUI : MonoBehaviour
 
     void SpawnDie(DieType type)
     {
+        // Сетевой режим — кубики через NetworkDiceManager
+        if (GameNetworkManager.Instance != null && GameNetworkManager.Instance.IsConnected)
+        {
+            Vector3 pos = new Vector3(
+                Random.Range(-spawnSpread, spawnSpread),
+                0,
+                Random.Range(-spawnSpread, spawnSpread)
+            );
+            NetworkDiceManager.Instance?.RequestSpawnDie(type, pos);
+            return;
+        }
+
+        // Локальный режим — старый DiceManager
         if (DiceManager.Instance == null) return;
         float x = Random.Range(-spawnSpread, spawnSpread);
         float z = Random.Range(-spawnSpread, spawnSpread);
@@ -527,6 +548,35 @@ public class DiceUI : MonoBehaviour
         _lastResults.Clear();
         _trackingRoll = true;
         _rollingCount = diceCount;
+    }
+
+    /// <summary>
+    /// Показывает результат удалённого броска (приходит по сети от NetworkDice).
+    /// </summary>
+    public void ShowResult(string dieTypeName, int result, ulong throwerId)
+    {
+        DieType type = ParseDieType(dieTypeName);
+        _lastResults.Add(new DieResult { type = type, value = result });
+        UpdateResultText();
+        string logLine = $"[P{throwerId}] {DieTypeName(type)}={result}";
+        _logEntries.Add(logLine);
+        UpdateLogText();
+        Debug.Log($"[Dice] Remote: Player {throwerId} rolled {dieTypeName}: {result}");
+    }
+
+    static DieType ParseDieType(string name)
+    {
+        return name switch
+        {
+            "d4" => DieType.d4,
+            "d6" => DieType.d6,
+            "d8" => DieType.d8,
+            "d10" => DieType.d10,
+            "d100" => DieType.d100,
+            "d12" => DieType.d12,
+            "d20" => DieType.d20,
+            _ => DieType.d20,
+        };
     }
 
     void UpdateLogText()

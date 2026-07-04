@@ -7,8 +7,11 @@ using UnityEngine;
 [RequireComponent(typeof(Rigidbody))]
 [RequireComponent(typeof(MeshFilter))]
 [RequireComponent(typeof(MeshRenderer))]
-public class Dice : MonoBehaviour
+public class Dice : MonoBehaviour, IDice
 {
+    // IDice
+    public Rigidbody Rigidbody => _rb;
+    void IDice.StartRoll() => StartRolling();
     [Header("Физика")]
     [Tooltip("Сила броска")]
     public float rollForce = 8f;
