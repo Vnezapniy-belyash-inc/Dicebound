@@ -18,6 +18,7 @@ public class CharacterSheetUI : MonoBehaviour
     float GAP = 6f;   // отступ между блоками
     float PD = 14f;   // общий паддинг
     float SBH = 90f;  // высота статус-бара
+    float TABH = 28f; // высота вкладок
 
     Canvas _cv;
     GameObject _pn;
@@ -33,8 +34,15 @@ public class CharacterSheetUI : MonoBehaviour
     // Низ
     Text _profTxt, _pasPerTxt, _pasInsTxt, _pasInvTxt;
 
+    // Страницы
+    int _currentPage = 0;
+    GameObject _page0, _page1, _page2, _page3, _page4;
+    InputField _attacksInput, _abilitiesInput, _extraInput, _traitsInput;
+    InputField _equipInput, _treasureInput;
+    InputField _note1Input, _note2Input, _note3Input, _note4Input, _note5Input, _note6Input;
+
     // Статус-бар
-    Text _nameTxt, _classTxt, _acTxt, _statusProfTxt, _hpTxt, _levelTxt;
+    Text _nameTxt, _classTxt, _acTxt, _statusProfTxt, _hpTxt, _levelTxt, _xpMaxTxt;
     InputField _xpInput;
     Image _xpFill;
     RectTransform _hpRightMinusRt, _hpRightPlusRt, _hpTextRt;
@@ -90,17 +98,17 @@ public class CharacterSheetUI : MonoBehaviour
         sc.referenceResolution = new Vector2(1920, 1080);
         sc.matchWidthOrHeight = 0.5f;
 
-        // Высота (правая колонка: DEX + WIS + пассивные + владения)
+        // Высота
         float OTHER_H = 100f;
         float lh = BlockH(0) + BlockH(2) + BlockH(3) + BlockH(5) + 3*GAP;
         float rh = BlockH(1) + BlockH(4) + GAP + GAP + 88f + GAP + OTHER_H;
         float blocks = Mathf.Max(lh, rh);
-        float th = SBH + PD + 30f + PD + blocks + PD;
+        float th = SBH + PD + TABH + PD + blocks + PD;
 
         // Панель
         _pn = GO("Panel", typeof(RectTransform), typeof(Image));
         _pn.transform.SetParent(cgo.transform, false);
-        _pn.GetComponent<Image>().color = new Color(0.05f, 0.07f, 0.11f, 0.96f); // тёмно-синий
+        _pn.GetComponent<Image>().color = new Color(0.05f, 0.07f, 0.11f, 0.96f);
         RS(_pn, AC, AC, PC, new(PW, th), new(60, -10));
 
         float cy = -PD;
@@ -109,23 +117,293 @@ public class CharacterSheetUI : MonoBehaviour
         cy = BuildStatusBar(cy, f);
         cy -= PD;
 
-        // Заголовок
-        var t1 = Txt(_pn.transform, "ХАРАКТЕРИСТИКИ", f, 20, FontStyle.Bold, new Color(0.92f,0.88f,0.65f));
-        R(t1, AL, AL, PL, new(0,30f), new(PD,cy));
-        cy -= 30f+PD;
+        // ── Вкладки ──
+        cy = BuildTabs(cy, f);
+        cy -= PD;
+
+        // ── Страница 0: Статы ──
+        _page0 = BuildPage0(cy, f);
+
+        // ── Страница 1: Атаки ──
+        _page1 = BuildPage1(cy, blocks, f);
+
+        // ── Страница 2: Способности ──
+        _page2 = BuildPage2(cy, blocks, f);
+
+        // ── Страница 3: Снаряжение ──
+        _page3 = BuildPage3(cy, blocks, f);
+
+        // ── Страница 4: Заметки ──
+        _page4 = BuildPage4(cy, blocks, f);
+
+        // Показать активную
+        _page0.SetActive(_currentPage == 0);
+        _page1.SetActive(_currentPage == 1);
+        _page2.SetActive(_currentPage == 2);
+        _page3.SetActive(_currentPage == 3);
+        _page4.SetActive(_currentPage == 4);
+    }
+
+    float BuildTabs(float y, Font f)
+    {
+        float w = PW - PD*2;
+        int n = 5;
+        float tw = (w - (n-1)*2f) / n;
+        string[] names = { "ХАР-КИ", "АТАКИ", "СПОСОБ.", "СНАРЯЖ.", "ЗАМЕТКИ" };
+
+        // Фон вкладок
+        var bg = GO("TabBar", typeof(RectTransform), typeof(Image));
+        bg.transform.SetParent(_pn.transform, false);
+        bg.GetComponent<Image>().color = new Color(0.07f, 0.09f, 0.16f, 0.7f);
+        R(bg, AL, AL, PL, new(w, TABH), new(PD, y));
+
+        for (int i = 0; i < n; i++)
+        {
+            float tx = 2 + i * (tw + 2);
+            var btn = GO($"Tab{i}", typeof(RectTransform), typeof(Image), typeof(Button));
+            btn.transform.SetParent(bg.transform, false);
+            btn.GetComponent<Image>().color = _currentPage == i
+                ? new Color(0.12f, 0.15f, 0.25f) : new Color(0.07f, 0.09f, 0.16f);
+            int page = i;
+            btn.GetComponent<Button>().onClick.AddListener(() => SwitchPage(page));
+            R(btn, AL, AL, PL, new(tw, TABH), new(tx, 0));
+            var t = Txt(btn.transform, names[i], f, 12, FontStyle.Bold,
+                _currentPage == i ? new Color(0.92f,0.88f,0.65f) : new Color(0.5f,0.55f,0.65f), TextAnchor.MiddleCenter);
+            R(t, AC, AC, PC, new(tw, TABH), Vector2.zero);
+        }
+
+        return y - TABH;
+    }
+
+    void SwitchPage(int page)
+    {
+        _currentPage = page;
+        if (_page0) _page0.SetActive(page == 0);
+        if (_page1) _page1.SetActive(page == 1);
+        if (_page2) _page2.SetActive(page == 2);
+        if (_page3) _page3.SetActive(page == 3);
+        if (_page4) _page4.SetActive(page == 4);
+    }
+
+    GameObject BuildPage0(float cy, Font f)
+    {
+        var page = GO("Page0", typeof(RectTransform));
+        page.transform.SetParent(_pn.transform, false);
+        R(page, new(0,1), new(1,1), new(0,1), Vector2.zero, Vector2.zero);
 
         // Колонки
         float syl = cy;
-        syl = Col(syl, PD, new[]{0,2,3,5}, f);
+        syl = Col(syl, PD, new[]{0,2,3,5}, f, page.transform);
 
-        // Правая колонка: ЛОВКОСТЬ, МУДРОСТЬ, ПАССИВНЫЕ ЧУВСТВА
+        // Правая колонка
         float syr = cy;
         float rx = PD+CW+PD;
-        syr = Col(syr, rx, new[]{1}, f);
-        syr = Col(syr, rx, new[]{4}, f);
-        syr = BuildPassive(rx, syr, f);
+        syr = Col(syr, rx, new[]{1}, f, page.transform);
+        syr = Col(syr, rx, new[]{4}, f, page.transform);
+        syr = BuildPassive(rx, syr, f, page.transform);
         syr -= GAP;
-        BuildOtherProf(rx, syr, OTHER_H, f);
+        BuildOtherProf(rx, syr, 100f, f, page.transform);
+
+        return page;
+    }
+
+    GameObject BuildPage1(float cy, float pageH, Font f)
+    {
+        var page = GO("Page1", typeof(RectTransform));
+        page.transform.SetParent(_pn.transform, false);
+        R(page, new(0,1), new(1,1), new(0,1), Vector2.zero, Vector2.zero);
+
+        float cw = (PW - PD*2 - 8f) / 2f;
+        float contentH = pageH - 30f; // место под заголовки
+
+        // ── Атаки и заклинания ──
+        var hdrA = Txt(page.transform, "АТАКИ И ЗАКЛИНАНИЯ", f, 14, FontStyle.Bold, new Color(0.65f,0.6f,0.5f));
+        R(hdrA, AL, AL, PL, new(cw, 22f), new(PD, cy));
+
+        var bgA = GO("AttacksBg", typeof(RectTransform), typeof(Image));
+        bgA.transform.SetParent(page.transform, false);
+        bgA.GetComponent<Image>().color = new Color(0.07f, 0.09f, 0.16f, 0.8f);
+        R(bgA, AL, AL, PL, new(cw, contentH), new(PD, cy - 24f));
+
+        _attacksInput = BuildMultilineInput(bgA.transform, _cd.attacksAndSpells, f, cw, contentH,
+            v => { if (_cd) _cd.attacksAndSpells = v; });
+
+        // ── Умения и способности ──
+        float rx = PD + cw + 8f;
+        var hdrT = Txt(page.transform, "УМЕНИЯ И СПОСОБНОСТИ", f, 14, FontStyle.Bold, new Color(0.65f,0.6f,0.5f));
+        R(hdrT, AL, AL, PL, new(cw, 22f), new(rx, cy));
+
+        var bgT = GO("TraitsBg", typeof(RectTransform), typeof(Image));
+        bgT.transform.SetParent(page.transform, false);
+        bgT.GetComponent<Image>().color = new Color(0.07f, 0.09f, 0.16f, 0.8f);
+        R(bgT, AL, AL, PL, new(cw, contentH), new(rx, cy - 24f));
+
+        _abilitiesInput = BuildMultilineInput(bgT.transform, _cd.featuresAndTraits, f, cw, contentH,
+            v => { if (_cd) _cd.featuresAndTraits = v; });
+
+        return page;
+    }
+
+    GameObject BuildPage2(float cy, float pageH, Font f)
+    {
+        var page = GO("Page2", typeof(RectTransform));
+        page.transform.SetParent(_pn.transform, false);
+        R(page, new(0,1), new(1,1), new(0,1), Vector2.zero, Vector2.zero);
+
+        float cw = (PW - PD*2 - 8f) / 2f;
+        float contentH = pageH - 30f;
+
+        // ── Доп. способности и умения ──
+        var hdrA = Txt(page.transform, "ДОП. СПОСОБНОСТИ И УМЕНИЯ", f, 14, FontStyle.Bold, new Color(0.65f,0.6f,0.5f));
+        R(hdrA, AL, AL, PL, new(cw, 22f), new(PD, cy));
+
+        var bgA = GO("ExtraBg", typeof(RectTransform), typeof(Image));
+        bgA.transform.SetParent(page.transform, false);
+        bgA.GetComponent<Image>().color = new Color(0.07f, 0.09f, 0.16f, 0.8f);
+        R(bgA, AL, AL, PL, new(cw, contentH), new(PD, cy - 24f));
+
+        _extraInput = BuildMultilineInput(bgA.transform, _cd.extraAbilities, f, cw, contentH,
+            v => { if (_cd) _cd.extraAbilities = v; });
+
+        // ── Черты ──
+        float rx = PD + cw + 8f;
+        var hdrT = Txt(page.transform, "ЧЕРТЫ", f, 14, FontStyle.Bold, new Color(0.65f,0.6f,0.5f));
+        R(hdrT, AL, AL, PL, new(cw, 22f), new(rx, cy));
+
+        var bgT = GO("Traits2Bg", typeof(RectTransform), typeof(Image));
+        bgT.transform.SetParent(page.transform, false);
+        bgT.GetComponent<Image>().color = new Color(0.07f, 0.09f, 0.16f, 0.8f);
+        R(bgT, AL, AL, PL, new(cw, contentH), new(rx, cy - 24f));
+
+        _traitsInput = BuildMultilineInput(bgT.transform, _cd.traits, f, cw, contentH,
+            v => { if (_cd) _cd.traits = v; });
+
+        return page;
+    }
+
+    GameObject BuildPage3(float cy, float pageH, Font f)
+    {
+        var page = GO("Page3", typeof(RectTransform));
+        page.transform.SetParent(_pn.transform, false);
+        R(page, new(0,1), new(1,1), new(0,1), Vector2.zero, Vector2.zero);
+
+        float cw = (PW - PD*2 - 8f) / 2f;
+        float contentH = pageH - 30f;
+
+        // ── Снаряжение ──
+        var hdrA = Txt(page.transform, "СНАРЯЖЕНИЕ", f, 14, FontStyle.Bold, new Color(0.65f,0.6f,0.5f));
+        R(hdrA, AL, AL, PL, new(cw, 22f), new(PD, cy));
+
+        var bgA = GO("EquipBg", typeof(RectTransform), typeof(Image));
+        bgA.transform.SetParent(page.transform, false);
+        bgA.GetComponent<Image>().color = new Color(0.07f, 0.09f, 0.16f, 0.8f);
+        R(bgA, AL, AL, PL, new(cw, contentH), new(PD, cy - 24f));
+
+        _equipInput = BuildMultilineInput(bgA.transform, _cd.equipment, f, cw, contentH,
+            v => { if (_cd) _cd.equipment = v; });
+
+        // ── Сокровища ──
+        float rx = PD + cw + 8f;
+        var hdrT = Txt(page.transform, "СОКРОВИЩА", f, 14, FontStyle.Bold, new Color(0.65f,0.6f,0.5f));
+        R(hdrT, AL, AL, PL, new(cw, 22f), new(rx, cy));
+
+        var bgT = GO("TreasureBg", typeof(RectTransform), typeof(Image));
+        bgT.transform.SetParent(page.transform, false);
+        bgT.GetComponent<Image>().color = new Color(0.07f, 0.09f, 0.16f, 0.8f);
+        R(bgT, AL, AL, PL, new(cw, contentH), new(rx, cy - 24f));
+
+        _treasureInput = BuildMultilineInput(bgT.transform, _cd.treasure, f, cw, contentH,
+            v => { if (_cd) _cd.treasure = v; });
+
+        return page;
+    }
+
+    GameObject BuildPage4(float cy, float pageH, Font f)
+    {
+        var page = GO("Page4", typeof(RectTransform));
+        page.transform.SetParent(_pn.transform, false);
+        R(page, new(0,1), new(1,1), new(0,1), Vector2.zero, Vector2.zero);
+
+        float cw = (PW - PD*2 - 8f) / 2f;
+        float rowH = (pageH - 30f - 2*4f) / 3f; // 3 строки с зазором 4px
+
+        string[] noteData = { _cd.note1, _cd.note2, _cd.note3, _cd.note4, _cd.note5, _cd.note6 };
+        UnityEngine.Events.UnityAction<string>[] noteCallbacks = {
+            v => { if (_cd) _cd.note1 = v; },
+            v => { if (_cd) _cd.note2 = v; },
+            v => { if (_cd) _cd.note3 = v; },
+            v => { if (_cd) _cd.note4 = v; },
+            v => { if (_cd) _cd.note5 = v; },
+            v => { if (_cd) _cd.note6 = v; },
+        };
+
+        for (int i = 0; i < 6; i++)
+        {
+            int col = i % 2;
+            int row = i / 2;
+            float x = col == 0 ? PD : PD + cw + 8f;
+            float y = cy - row * (rowH + 4f);
+
+            var hdr = Txt(page.transform, $"ЗАМЕТКИ {i+1}", f, 13, FontStyle.Bold, new Color(0.55f,0.55f,0.6f));
+            R(hdr, AL, AL, PL, new(cw, 18f), new(x, y));
+
+            var bgN = GO($"NoteBg{i}", typeof(RectTransform), typeof(Image));
+            bgN.transform.SetParent(page.transform, false);
+            bgN.GetComponent<Image>().color = new Color(0.07f, 0.09f, 0.16f, 0.8f);
+            R(bgN, AL, AL, PL, new(cw, rowH - 20f), new(x, y - 20f));
+
+            var inp = BuildMultilineInput(bgN.transform, noteData[i], f, cw, rowH - 20f, noteCallbacks[i]);
+            switch (i) {
+                case 0: _note1Input = inp; break;
+                case 1: _note2Input = inp; break;
+                case 2: _note3Input = inp; break;
+                case 3: _note4Input = inp; break;
+                case 4: _note5Input = inp; break;
+                case 5: _note6Input = inp; break;
+            }
+        }
+
+        return page;
+    }
+
+    InputField BuildMultilineInput(Transform parent, string text, Font f, float w, float h,
+        UnityEngine.Events.UnityAction<string> onChanged)
+    {
+        var g = GO("MLInput", typeof(RectTransform), typeof(Image), typeof(InputField));
+        g.transform.SetParent(parent, false);
+        g.GetComponent<Image>().color = new Color(0,0,0,0);
+        R(g, new(0,1), new(1,1), new(0,1), new(0, h), new(0, 0)); // прозрачный — фон уже есть у родителя
+
+        var textGO = GO("Text", typeof(RectTransform), typeof(Text));
+        textGO.transform.SetParent(g.transform, false);
+        var textComp = textGO.GetComponent<Text>();
+        textComp.font = f; textComp.fontSize = 13;
+        textComp.color = new Color(0.85f, 0.88f, 0.95f);
+        textComp.alignment = TextAnchor.UpperLeft;
+        textComp.supportRichText = false;
+        R(textGO, new(0,1), new(1,1), new(0,1), new(-8, h-8), new(4, -4));
+
+        var phGO = GO("PH", typeof(RectTransform), typeof(Text));
+        phGO.transform.SetParent(g.transform, false);
+        var phComp = phGO.GetComponent<Text>();
+        phComp.text = "Введите текст...";
+        phComp.font = f; phComp.fontSize = 13;
+        phComp.fontStyle = FontStyle.Italic;
+        phComp.color = new Color(0.3f, 0.35f, 0.45f);
+        phComp.alignment = TextAnchor.UpperLeft;
+        phComp.raycastTarget = false;
+        R(phGO, new(0,1), new(1,1), new(0,1), new(-8, h-8), new(4, -4));
+
+        var ifComp = g.GetComponent<InputField>();
+        ifComp.textComponent = textComp;
+        ifComp.placeholder = phComp;
+        ifComp.lineType = InputField.LineType.MultiLineNewline;
+        ifComp.text = text;
+        ifComp.onValueChanged.AddListener(onChanged);
+        // Принудительно верхний левый угол после всей инициализации
+        textComp.alignment = TextAnchor.UpperLeft;
+
+        return ifComp;
     }
 
     float BuildStatusBar(float y, Font f)
@@ -218,13 +496,11 @@ public class CharacterSheetUI : MonoBehaviour
         R(lvT, AC, AC, PC, new(110, r3), Vector2.zero);
         _levelTxt = lvT.GetComponent<Text>();
         MkBtn(bg.transform, "-", f, new Color(0.4f,0.15f,0.25f), 114, cy, 16, r3,
-            () => { if(_cd)_cd.level=Mathf.Clamp(_cd.level-1,1,20); RefreshDisplay(); });
+            () => { if(_cd && _cd.level>1) _cd.level--; RefreshDisplay(); });
         MkBtn(bg.transform, "+", f, new Color(0.18f,0.4f,0.22f), 132, cy, 16, r3,
             () => {
-                if (!_cd) return;
-                _cd.level = Mathf.Clamp(_cd.level+1, 1, 20);
-                if (_cd.currentXP >= _cd.maxXP) _cd.currentXP -= _cd.maxXP;
-                else _cd.currentXP = 0;
+                if (!_cd || _cd.level >= 20 || _cd.currentXP < _cd.maxXP) return;
+                _cd.level++;
                 RefreshDisplay();
             });
 
@@ -235,7 +511,7 @@ public class CharacterSheetUI : MonoBehaviour
         xpBg.GetComponent<Image>().color = new Color(0.08f, 0.1f, 0.18f);
         R(xpBg, AL, AL, PL, new(xpW, r3-6), new(xpX, cy));
 
-        float frac = _cd.maxXP > 0 ? Mathf.Clamp01((float)_cd.currentXP / _cd.maxXP) : 0f;
+        float frac = _cd.xpProgress;
         var xpFill = GO("XPFill", typeof(RectTransform), typeof(Image));
         xpFill.transform.SetParent(xpBg.transform, false);
         xpFill.GetComponent<Image>().color = new Color(0.45f, 0.3f, 0.8f);
@@ -256,32 +532,28 @@ public class CharacterSheetUI : MonoBehaviour
         // XP макс — статика
         var xpMaxT = Txt(bg.transform, $"/{_cd.maxXP}", f, 12, FontStyle.Normal,
             new Color(0.5f,0.55f,0.65f), TextAnchor.MiddleLeft);
-        R(xpMaxT, AL, AL, PL, new(50, r3), new(xpX+xpW+48, cy));
-
-        // Следующий уровень
-        var nextT = Txt(bg.transform, $"{_cd.level+1}", f, 13, FontStyle.Bold,
-            new Color(0.5f,0.55f,0.7f), TextAnchor.MiddleCenter);
-        R(nextT, AL, AL, PL, new(30, r3), new(xpX+xpW+100, cy));
+        R(xpMaxT, AL, AL, PL, new(60, r3), new(xpX+xpW+48, cy));
+        _xpMaxTxt = xpMaxT.GetComponent<Text>();
 
         return y - SBH;
     }
 
-    float Col(float cy, float cx, int[] stats, Font f)
+    float Col(float cy, float cx, int[] stats, Font f, Transform parent)
     {
-        foreach (int si in stats) { BuildBlock(cx, cy, si, f); cy -= BlockH(si)+GAP; }
+        foreach (int si in stats) { BuildBlock(cx, cy, si, f, parent); cy -= BlockH(si)+GAP; }
         return cy;
     }
 
     float BlockH(int si) => HDR + SUB + SS[si].Length * SKH;
 
-    void BuildBlock(float cx, float y, int si, Font f)
+    void BuildBlock(float cx, float y, int si, Font f, Transform parent)
     {
         float w = CW;
         var cd = _cd;
 
         // ── Заголовок ──
         var hg = GO("H", typeof(RectTransform), typeof(Image));
-        hg.transform.SetParent(_pn.transform, false);
+        hg.transform.SetParent(parent, false);
         hg.GetComponent<Image>().color = new Color(0.07f, 0.09f, 0.16f, 0.9f);
         R(hg, AL, AL, PL, new(w, HDR), new(cx, y));
 
@@ -306,7 +578,7 @@ public class CharacterSheetUI : MonoBehaviour
         // ── Подстрока ──
         float sy = y - HDR;
         var sg = GO("S", typeof(RectTransform), typeof(Image));
-        sg.transform.SetParent(_pn.transform, false);
+        sg.transform.SetParent(parent, false);
         sg.GetComponent<Image>().color = new Color(0.06f, 0.08f, 0.14f, 0.7f);
         R(sg, AL, AL, PL, new(w, SUB), new(cx, sy));
 
@@ -345,7 +617,7 @@ public class CharacterSheetUI : MonoBehaviour
             float ry = sy - SUB - i*SKH;
 
             var kg = GO("K", typeof(RectTransform), typeof(Image));
-            kg.transform.SetParent(_pn.transform, false);
+            kg.transform.SetParent(parent, false);
             kg.GetComponent<Image>().color = new Color(0.06f, 0.09f, 0.18f, 0.7f); // тёмно-синий
             R(kg, AL, AL, PL, new(w, SKH), new(cx, ry));
 
@@ -376,13 +648,13 @@ public class CharacterSheetUI : MonoBehaviour
         }
     }
 
-    float BuildPassive(float cx, float y, Font f)
+    float BuildPassive(float cx, float y, Font f, Transform parent)
     {
         float w = CW;
         float h = 20f;
 
         // Заголовок
-        var hdr = Txt(_pn.transform, "ПАССИВНЫЕ ЧУВСТВА", f, 14, FontStyle.Bold, new Color(0.55f,0.6f,0.7f));
+        var hdr = Txt(parent, "ПАССИВНЫЕ ЧУВСТВА", f, 14, FontStyle.Bold, new Color(0.55f,0.6f,0.7f));
         R(hdr, AL, AL, PL, new(w, 22f), new(cx, y));
         y -= 22f;
 
@@ -391,7 +663,7 @@ public class CharacterSheetUI : MonoBehaviour
         {
             float ry = y - i*22f;
             var bg = GO("P", typeof(RectTransform), typeof(Image));
-            bg.transform.SetParent(_pn.transform, false);
+            bg.transform.SetParent(parent, false);
             bg.GetComponent<Image>().color = new Color(0.07f, 0.09f, 0.16f, 0.6f);
             R(bg, AL, AL, PL, new(w, h), new(cx, ry));
 
@@ -412,20 +684,20 @@ public class CharacterSheetUI : MonoBehaviour
         return y - 3*22f; // низ последней строки
     }
 
-    void BuildOtherProf(float cx, float y, float maxH, Font f)
+    void BuildOtherProf(float cx, float y, float maxH, Font f, Transform parent)
     {
         float w = CW;
         float hdrH = 22f;
         float fieldH = maxH - hdrH - 4f;
 
         // Заголовок
-        var hdr = Txt(_pn.transform, "ПРОЧИЕ ВЛАДЕНИЯ И ЯЗЫКИ", f, 14, FontStyle.Bold, new Color(0.55f,0.6f,0.7f));
+        var hdr = Txt(parent, "ПРОЧИЕ ВЛАДЕНИЯ И ЯЗЫКИ", f, 14, FontStyle.Bold, new Color(0.55f,0.6f,0.7f));
         R(hdr, AL, AL, PL, new(w, hdrH), new(cx, y));
         y -= hdrH;
 
         // Фон поля ввода
         var bg = GO("OtherProf", typeof(RectTransform), typeof(Image));
-        bg.transform.SetParent(_pn.transform, false);
+        bg.transform.SetParent(parent, false);
         bg.GetComponent<Image>().color = new Color(0.07f, 0.09f, 0.16f, 0.8f);
         R(bg, AL, AL, PL, new(w, fieldH), new(cx, y));
 
@@ -516,9 +788,10 @@ public class CharacterSheetUI : MonoBehaviour
         if (_xpInput) { _xpInput.text = _cd.currentXP.ToString(); _xpInput.textComponent.text = _cd.currentXP.ToString(); }
         if (_xpFill)
         {
-            float frac = _cd.maxXP > 0 ? Mathf.Clamp01((float)_cd.currentXP / _cd.maxXP) : 0f;
-            _xpFill.rectTransform.sizeDelta = new Vector2(200f * frac, _xpFill.rectTransform.sizeDelta.y);
+            float frac = _cd.xpProgress;
+            _xpFill.rectTransform.sizeDelta = new Vector2(180f * frac, _xpFill.rectTransform.sizeDelta.y);
         }
+        if (_xpMaxTxt) _xpMaxTxt.text = $"/{_cd.maxXP}";
     }
 
     void RepositionHpButtons()
@@ -647,14 +920,11 @@ public class CharacterSheetUI : MonoBehaviour
             var g = new GameObject("EventSystem");
             g.AddComponent<UnityEngine.EventSystems.EventSystem>();
             g.AddComponent<UnityEngine.InputSystem.UI.InputSystemUIInputModule>();
-            g.AddComponent<UnityEngine.EventSystems.StandaloneInputModule>();
         }
         else
         {
             if (!es.GetComponent<UnityEngine.InputSystem.UI.InputSystemUIInputModule>())
                 es.gameObject.AddComponent<UnityEngine.InputSystem.UI.InputSystemUIInputModule>();
-            if (!es.GetComponent<UnityEngine.EventSystems.StandaloneInputModule>())
-                es.gameObject.AddComponent<UnityEngine.EventSystems.StandaloneInputModule>();
         }
     }
 }

@@ -12,7 +12,19 @@ public class CharacterData : MonoBehaviour
     [Header("Уровень и опыт")]
     [Range(1, 20)] public int level = 1;
     public int currentXP = 0;
-    public int maxXP = 300;
+
+    static readonly int[] XpThresholds = {
+        0, 300, 900, 2700, 6500, 14000, 23000, 34000, 48000, 64000,
+        85000, 100000, 120000, 140000, 165000, 195000, 225000, 265000, 305000, 355000
+    };
+
+    public int maxXP => level < 20 ? XpThresholds[level] : 0;
+
+    /// XP needed to reach current level (0 for level 1)
+    public int xpForCurrentLevel => level > 1 ? XpThresholds[level - 1] : 0;
+
+    /// Progress 0..1 within current level
+    public float xpProgress => maxXP > 0 ? Mathf.Clamp01((float)(currentXP - xpForCurrentLevel) / (maxXP - xpForCurrentLevel)) : 0f;
 
     [Header("Боевые показатели")]
     [Range(0, 30)] public int armorClass = 12;
@@ -74,6 +86,38 @@ public class CharacterData : MonoBehaviour
     [Header("Прочие владения и языки")]
     [TextArea(2, 5)]
     public string otherProficiencies = "";
+
+    [Header("Атаки и способности")]
+    [TextArea(3, 10)]
+    public string attacksAndSpells = "";
+    [TextArea(3, 10)]
+    public string featuresAndTraits = "";
+
+    [Header("Доп. способности и черты")]
+    [TextArea(3, 10)]
+    public string extraAbilities = "";
+    [TextArea(3, 10)]
+    public string traits = "";
+
+    [Header("Снаряжение")]
+    [TextArea(3, 10)]
+    public string equipment = "";
+    [TextArea(3, 10)]
+    public string treasure = "";
+
+    [Header("Заметки")]
+    [TextArea(2, 5)]
+    public string note1 = "";
+    [TextArea(2, 5)]
+    public string note2 = "";
+    [TextArea(2, 5)]
+    public string note3 = "";
+    [TextArea(2, 5)]
+    public string note4 = "";
+    [TextArea(2, 5)]
+    public string note5 = "";
+    [TextArea(2, 5)]
+    public string note6 = "";
 
     bool IsSkillProfOrExp(string name)
     {
