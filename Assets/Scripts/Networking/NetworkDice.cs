@@ -3,10 +3,9 @@ using Unity.Netcode;
 using UnityEngine;
 
 /// <summary>
-/// Сетевой кубик. Физика только на владельце (client-authoritative).
-/// NetworkTransform синхронизирует позицию/вращение остальным.
-/// DieType синхронизируется через NetworkVariable — Init вызывается на всех клиентах.
-/// Результат: владелец определяет → ServerRpc → ClientRpc всем.
+/// Сетевой кубик. Физика на владельце, позиция через NetworkTransform.
+/// Тип: InitClientRpc для текущих клиентов + NetworkVariable для late-join.
+/// Результат: владелец → ServerRpc → ClientRpc всем.
 /// </summary>
 [RequireComponent(typeof(Rigidbody))]
 [RequireComponent(typeof(NetworkObject))]
@@ -17,14 +16,12 @@ public class NetworkDice : NetworkBehaviour, IDice
 {
     // IDice
     public Rigidbody Rigidbody => _rb;
+    public DieType DieType { get; private set; }
+    public int Result { get; private set; } = -1;
+    public bool IsRolling { get; set; }
+    public bool HasResult { get; private set; }
 
-    public void StartRoll()
-    {
-        IsRolling = true;
-        HasResult = false;
-        Result = -1;
-        _settleTimer = 0f;
-    }
+    public event Action<NetworkDice> OnResultReady;
 
     [Header("Физика")]
     public float rollForce = 8f;
@@ -37,27 +34,30 @@ public class NetworkDice : NetworkBehaviour, IDice
     public int fontSize = 48;
     public Color textColor = Color.black;
 
-    // Синхронизируемый тип кубика
-    private readonly NetworkVariable<int> _networkDieType = new(
+    // Late-join: сервер шлёт тип новым клиентам автоматически
+    private readonly NetworkVariable<int> _netDieType = new(
         (int)DieType.d20, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-
-    public DieType DieType => (DieType)_networkDieType.Value;
-    public int Result { get; private set; } = -1;
-    public bool IsRolling { get; set; }
-    public bool HasResult { get; private set; }
-
-    public event Action<NetworkDice> OnResultReady;
 
     private Rigidbody _rb;
     private DieFaceData[] _faces;
     private float _settleTimer;
     private bool _didInit;
 
-    /// <summary>Инициализация — вызывается ТОЛЬКО на сервере, тип синхронизируется на всех.</summary>
+    public void StartRoll()
+    {
+        IsRolling = true;
+        HasResult = false;
+        Result = -1;
+        _settleTimer = 0f;
+    }
+
+    /// <summary>Вызывается на сервере при спавне.</summary>
     public void Init(DieType type)
     {
         if (!IsServer) return;
-        _networkDieType.Value = (int)type;
+        _netDieType.Value = (int)type;       // для late-join
+        InitializeMesh(type);                 // локально на сервере
+        InitClientRpc((int)type);            // всем подключённым клиентам
     }
 
     public override void OnNetworkSpawn()
@@ -65,20 +65,30 @@ public class NetworkDice : NetworkBehaviour, IDice
         _rb = GetComponent<Rigidbody>();
         _rb.isKinematic = !IsOwner;
 
-        // Инициализируем меш/материал из синхронизированного типа
-        InitializeFromType((DieType)_networkDieType.Value);
+        // Late-join: NetworkVariable уже содержит правильное значение
+        int typeInt = _netDieType.Value;
+        if (typeInt != (int)DieType.d20)
+            InitializeMesh((DieType)typeInt);
 
-        // Подписываемся на изменение типа (если изменится после спавна)
-        _networkDieType.OnValueChanged += (oldVal, newVal) =>
+        // На случай если тип изменится после спавна
+        _netDieType.OnValueChanged += (oldVal, newVal) =>
         {
             if (!_didInit)
-                InitializeFromType((DieType)newVal);
+                InitializeMesh((DieType)newVal);
         };
     }
 
-    private void InitializeFromType(DieType type)
+    [Rpc(SendTo.NotServer)]
+    private void InitClientRpc(int typeInt)
+    {
+        if (!_didInit)
+            InitializeMesh((DieType)typeInt);
+    }
+
+    private void InitializeMesh(DieType type)
     {
         if (_didInit) return;
+        DieType = type;
 
         var (mesh, faces) = DieMeshGenerator.Generate(type);
         _faces = faces;
@@ -136,7 +146,18 @@ public class NetworkDice : NetworkBehaviour, IDice
         }
     }
 
-    /// <summary>Бросок — вызывается ТОЛЬКО на владельце.</summary>
+    public void RequestOwnership()
+    {
+        if (IsOwner) return;
+        RequestOwnershipServerRpc();
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void RequestOwnershipServerRpc(RpcParams rpcParams = default)
+    {
+        GetComponent<NetworkObject>().ChangeOwnership(rpcParams.Receive.SenderClientId);
+    }
+
     public void Roll()
     {
         if (!IsOwner || !_didInit) return;
@@ -154,19 +175,6 @@ public class NetworkDice : NetworkBehaviour, IDice
 
         Vector3 torque = UnityEngine.Random.insideUnitSphere * maxTorque;
         _rb.AddTorque(torque, ForceMode.Impulse);
-    }
-
-    /// <summary>Запросить владение кубиком (вызывается любым клиентом при клике).</summary>
-    public void RequestOwnership()
-    {
-        if (IsOwner) return;
-        RequestOwnershipServerRpc();
-    }
-
-    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    private void RequestOwnershipServerRpc(RpcParams rpcParams = default)
-    {
-        GetComponent<NetworkObject>().ChangeOwnership(rpcParams.Receive.SenderClientId);
     }
 
     private void Update()
@@ -220,21 +228,21 @@ public class NetworkDice : NetworkBehaviour, IDice
         HasResult = true;
         IsRolling = false;
 
-        ReportResultServerRpc(Result);
+        ReportResultServerRpc(Result, LobbyUI.LocalNickname);
         OnResultReady?.Invoke(this);
     }
 
     [Rpc(SendTo.Server)]
-    private void ReportResultServerRpc(int result)
+    private void ReportResultServerRpc(int result, string ownerNickname)
     {
-        BroadcastResultClientRpc(DieType.ToString(), result, OwnerClientId);
+        BroadcastResultClientRpc(DieType.ToString(), result, OwnerClientId, ownerNickname);
     }
 
     [Rpc(SendTo.NotServer)]
-    private void BroadcastResultClientRpc(string dieType, int result, ulong throwerId)
+    private void BroadcastResultClientRpc(string dieType, int result, ulong throwerId, string ownerNickname)
     {
-        Debug.Log($"[Dice] Player {throwerId} rolled {dieType}: {result}");
-        DiceUI.Instance?.ShowResult(dieType, result, throwerId);
+        Debug.Log($"[Dice] Player {throwerId} ({ownerNickname}) rolled {dieType}: {result}");
+        DiceUI.Instance?.ShowResult(dieType, result, throwerId, ownerNickname);
     }
 
     private static string FormatFaceValue(DieType type, int value)

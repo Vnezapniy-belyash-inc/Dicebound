@@ -66,7 +66,7 @@ public class NetworkDiceManager : MonoBehaviour
             _handlerRegistered = true;
         }
 
-        Debug.Log("[DiceManager] Server started — spawn handler registered");
+        Debug.Log("[DiceManager] Spawn handler registered");
     }
 
     private void OnDestroy()
@@ -102,7 +102,6 @@ public class NetworkDiceManager : MonoBehaviour
             NetworkManager.Singleton.CustomMessagingManager.SendNamedMessage(
                 MSG_SPAWN_DICE, NetworkManager.ServerClientId, writer);
             writer.Dispose();
-            Debug.Log($"[DiceManager] Client: sent spawn request for {type}");
         }
     }
 
@@ -126,7 +125,7 @@ public class NetworkDiceManager : MonoBehaviour
             _pendingSpawns.Enqueue(pending);
         }
 
-        Debug.Log($"[DiceManager] Server: queued spawn {pending.type} for player {senderId}");
+        Debug.Log($"[DiceManager] Queued spawn {pending.type} for player {senderId}");
     }
 
     /// <summary>Main thread: фактический спавн через InstantiateAndSpawn.</summary>
@@ -142,14 +141,15 @@ public class NetworkDiceManager : MonoBehaviour
             return;
         }
 
-        // Инициализируем тип ДО спавна — NetworkVariable синхронизируется при спавне
-        var dice = netObj.GetComponent<NetworkDice>();
-        if (dice != null) dice.Init(type);
-
-        // Спавним объект (виден всем), затем назначаем владельца
+        // Спавним объект (виден всем)
         netObj.Spawn();
+
+        // Назначаем владельца
         if (ownerId != NetworkManager.Singleton.LocalClientId)
             netObj.ChangeOwnership(ownerId);
-        Debug.Log($"[DiceManager] Spawned {type} for owner {ownerId}, isSpawned={netObj.IsSpawned}, netId={netObj.NetworkObjectId}");
+
+        // Инициализируем тип ПОСЛЕ спавна — ClientRpc требует спавненный объект
+        var dice = netObj.GetComponent<NetworkDice>();
+        if (dice != null) dice.Init(type);
     }
 }

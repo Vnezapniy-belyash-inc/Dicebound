@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.IO;
+using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
@@ -25,6 +26,8 @@ public class DiceUI : MonoBehaviour
     public float spawnSpread = 0.8f;
 
     private Text _resultText;
+    private InputField _scaleInput;
+    public InputField ScaleInput => _scaleInput;
     private readonly List<DieResult> _lastResults = new();
     private bool _trackingRoll;
     private int _rollingCount;
@@ -138,87 +141,103 @@ public class DiceUI : MonoBehaviour
         scaler.matchWidthOrHeight = 0.5f;
         canvasGO.AddComponent<GraphicRaycaster>();
 
-        // Панель
+        // ═══ Дебаг-панель (E): только Tex и Scale ═══
         GameObject panelGO = new GameObject("Panel");
         panelGO.transform.SetParent(canvasGO.transform, false);
         _debugPanelGO = panelGO;
         Image bg = panelGO.AddComponent<Image>();
         bg.color = new Color(0.08f, 0.08f, 0.1f, 0.85f);
 
+        float panelW = 220f;
+        float panelH = 50f;
         RectTransform prt = panelGO.GetComponent<RectTransform>();
         prt.anchorMin = new Vector2(0.5f, 1f);
         prt.anchorMax = new Vector2(0.5f, 1f);
         prt.pivot = new Vector2(0.5f, 1f);
+        prt.sizeDelta = new Vector2(panelW, panelH);
+        prt.anchoredPosition = new Vector2(0f, -5f);
 
-        // Считаем размеры
-        int dieCols = 7; // d4..d100
-        float topMargin = 5f;
-        float totalW = padding * 2 + dieCols * buttonWidth + (dieCols - 1) * gap;
-        float rowH = buttonHeight + gap;
-        float toggleH = 24f; // высота ряда с чекбоксом
-        float resultH = 55f;
-        float totalH = topMargin + padding * 3 + rowH * 2 + toggleH + resultH;
+        // Кнопка Tex
+        float texW = 50f;
+        MakeButton(panelGO.transform, "Tex", 8f, -8f, texW, buttonHeight, uiFont, OpenTexturePicker);
 
-        prt.sizeDelta = new Vector2(totalW, totalH);
-        prt.anchoredPosition = new Vector2(0f, -topMargin);
+        // Поле Scale
+        float scaleX = 8f + texW + gap;
+        GameObject scaleGO = new GameObject("ScaleLabel");
+        scaleGO.transform.SetParent(panelGO.transform, false);
+        Text scaleLabel = scaleGO.AddComponent<Text>();
+        scaleLabel.font = uiFont;
+        scaleLabel.fontSize = 14;
+        scaleLabel.color = new Color(0.7f, 0.75f, 0.85f);
+        scaleLabel.text = "Scale:";
+        scaleLabel.alignment = TextAnchor.MiddleLeft;
+        RectTransform slrt = scaleGO.GetComponent<RectTransform>();
+        slrt.anchorMin = new Vector2(0, 1);
+        slrt.anchorMax = new Vector2(0, 1);
+        slrt.pivot = new Vector2(0, 1);
+        slrt.anchoredPosition = new Vector2(scaleX, -10f);
+        slrt.sizeDelta = new Vector2(42f, 20f);
 
-        // Кнопки дайсов (верхний ряд)
-        var dieTypes = new[] { DieType.d4, DieType.d6, DieType.d8, DieType.d10, DieType.d12, DieType.d20, DieType.d100 };
-        string[] labels = { "d4", "d6", "d8", "d10", "d12", "d20", "d100" };
-        for (int i = 0; i < dieTypes.Length; i++)
-        {
-            float x = padding + i * (buttonWidth + gap);
-            float y = -topMargin;
-            var dt = dieTypes[i];
-            MakeButton(panelGO.transform, labels[i], x, y, buttonWidth, buttonHeight, uiFont, () => SpawnDie(dt));
-        }
+        float inputX = scaleX + 46f;
+        GameObject inputGO = new GameObject("ScaleInput", typeof(RectTransform), typeof(Image), typeof(InputField));
+        inputGO.transform.SetParent(panelGO.transform, false);
+        InputField scaleIF = inputGO.GetComponent<InputField>();
+        // Создаём текстовый компонент для InputField
+        GameObject textGO = new GameObject("Text", typeof(RectTransform), typeof(Text));
+        textGO.transform.SetParent(inputGO.transform, false);
+        Text inputText = textGO.GetComponent<Text>();
+        inputText.font = uiFont;
+        inputText.fontSize = 14;
+        inputText.color = Color.white;
+        inputText.alignment = TextAnchor.MiddleLeft;
+        inputText.supportRichText = false;
+        RectTransform textRt = textGO.GetComponent<RectTransform>();
+        textRt.anchorMin = Vector2.zero;
+        textRt.anchorMax = Vector2.one;
+        textRt.sizeDelta = new Vector2(-8, 0);
+        textRt.anchoredPosition = new Vector2(4, 0);
+        scaleIF.textComponent = inputText;
+        scaleIF.text = "1.0";
+        RectTransform irect = inputGO.GetComponent<RectTransform>();
+        irect.anchorMin = new Vector2(0, 1);
+        irect.anchorMax = new Vector2(0, 1);
+        irect.pivot = new Vector2(0, 1);
+        irect.anchoredPosition = new Vector2(inputX, -10f);
+        irect.sizeDelta = new Vector2(50f, 24f);
+        inputGO.GetComponent<Image>().color = new Color(0.15f, 0.18f, 0.25f);
 
-        // Roll + Clear + Tex + ↺ ↻ (нижний ряд)
-        float row2y = -padding - rowH;
-        float bx = padding;
-        MakeButton(panelGO.transform, "Roll", bx, row2y, buttonWidth, buttonHeight, uiFont, RollAll);
-        bx += buttonWidth + gap;
-        MakeButton(panelGO.transform, "Clear", bx, row2y, buttonWidth, buttonHeight, uiFont, ClearAll);
-        bx += buttonWidth + gap;
-        MakeButton(panelGO.transform, "Tex", bx, row2y, buttonWidth, buttonHeight, uiFont, OpenTexturePicker);
-        bx += buttonWidth + gap;
-        MakeButton(panelGO.transform, "↺", bx, row2y, buttonWidth * 0.6f, buttonHeight, uiFont, () => RotateBoard(false));
-        bx += buttonWidth * 0.6f + gap;
-        MakeButton(panelGO.transform, "↻", bx, row2y, buttonWidth * 0.6f, buttonHeight, uiFont, () => RotateBoard(true));
-
-        // Чекбокс авторазмера (3-й ряд)
-        float row3y = -padding * 2 - rowH * 2;
-        MakeToggle(panelGO.transform, "Fit to tex", padding, row3y, uiFont,
-            _gridManager != null && _gridManager.autoResizeToTexture,
-            v => { if (_gridManager != null) _gridManager.autoResizeToTexture = v; }
-        );
-
-        // Текст результатов
-        GameObject textGO = new GameObject("ResultText");
-        textGO.transform.SetParent(panelGO.transform, false);
-        _resultText = textGO.AddComponent<Text>();
-        _resultText.font = uiFont;
-        _resultText.fontSize = 16;
-        _resultText.color = new Color(0.9f, 0.9f, 0.95f);
-        _resultText.alignment = TextAnchor.UpperLeft;
-        _resultText.horizontalOverflow = HorizontalWrapMode.Wrap;
-
-        RectTransform trt = _resultText.GetComponent<RectTransform>();
-        trt.anchorMin = new Vector2(0, 1);
-        trt.anchorMax = new Vector2(1, 1);
-        trt.pivot = new Vector2(0, 1);
-        trt.anchoredPosition = new Vector2(padding, row3y - toggleH - padding);
-        trt.sizeDelta = new Vector2(-padding * 2, resultH);
-
-        UpdateResultText();
+        // Placeholder
+        GameObject phGO = new GameObject("Placeholder", typeof(RectTransform), typeof(Text));
+        phGO.transform.SetParent(inputGO.transform, false);
+        Text ph = phGO.GetComponent<Text>();
+        ph.text = "1.0";
+        ph.font = uiFont;
+        ph.fontSize = 14;
+        ph.color = new Color(0.4f, 0.4f, 0.5f);
+        ph.alignment = TextAnchor.MiddleLeft;
+        RectTransform phrt = phGO.GetComponent<RectTransform>();
+        phrt.anchorMin = Vector2.zero;
+        phrt.anchorMax = Vector2.one;
+        phrt.sizeDelta = Vector2.zero;
+        scaleIF.placeholder = ph;
+        _scaleInput = scaleIF;
         BuildLeftSidebar();
         BuildBottomPanel();
         BuildLogPanel();
 
-        // Дебаг-панель скрыта по умолчанию
+        // Все панели скрыты при старте — покажутся после входа в лобби
         if (_debugPanelGO != null) _debugPanelGO.SetActive(false);
+        if (_sidebarGO != null) _sidebarGO.SetActive(false);
+        if (_bottomPanelGO != null) _bottomPanelGO.SetActive(false);
+        if (_logPanelGO != null) _logPanelGO.SetActive(false);
+    }
 
-        Debug.Log("DiceUI: panel built successfully");
+    /// <summary>Показывает игровые панели (вызывается после host/join).</summary>
+    public void ShowGamePanels()
+    {
+        if (_sidebarGO != null) _sidebarGO.SetActive(true);
+        if (_bottomPanelGO != null) _bottomPanelGO.SetActive(true);
+        if (_logPanelGO != null) _logPanelGO.SetActive(true);
     }
 
     /// <summary>
@@ -520,7 +539,7 @@ public class DiceUI : MonoBehaviour
         int active = DiceManager.Instance.ActiveDice.Count;
         if (active == 0)
         {
-            _resultText.text = "Нет кубиков";
+            if (_resultText != null) _resultText.text = "Нет кубиков";
             return;
         }
         _lastResults.Clear();
@@ -553,15 +572,19 @@ public class DiceUI : MonoBehaviour
     /// <summary>
     /// Показывает результат удалённого броска (приходит по сети от NetworkDice).
     /// </summary>
-    public void ShowResult(string dieTypeName, int result, ulong throwerId)
+    public void ShowResult(string dieTypeName, int result, ulong throwerId, string ownerNickname = null)
     {
         DieType type = ParseDieType(dieTypeName);
         _lastResults.Add(new DieResult { type = type, value = result });
         UpdateResultText();
-        string logLine = $"[P{throwerId}] {DieTypeName(type)}={result}";
+
+        string who = !string.IsNullOrEmpty(ownerNickname)
+            ? ownerNickname
+            : $"P{throwerId}";
+        string logLine = $"[{who}] {DieTypeName(type)}={result}";
         _logEntries.Add(logLine);
         UpdateLogText();
-        Debug.Log($"[Dice] Remote: Player {throwerId} rolled {dieTypeName}: {result}");
+        Debug.Log($"[Dice] Remote: {who} rolled {dieTypeName}: {result}");
     }
 
     static DieType ParseDieType(string name)
@@ -591,12 +614,20 @@ public class DiceUI : MonoBehaviour
 
     void OpenTexturePicker()
     {
+        // Если есть MapController — делегируем ему
+        if (MapController.Instance != null)
+        {
+            MapController.Instance.LoadImage();
+            return;
+        }
+
+        // Fallback: старая логика (для оффлайн-режима)
 #if UNITY_EDITOR
         string path = EditorUtility.OpenFilePanel("Выберите изображение", "", "png,jpg,jpeg,bmp,tga");
         if (string.IsNullOrEmpty(path)) return;
         ApplyTexture(path);
 #else
-        Debug.LogWarning("Texture picker работает только в Editor. В билде используйте свою реализацию.");
+        Debug.LogWarning("Texture picker работает только в Editor.");
 #endif
     }
 

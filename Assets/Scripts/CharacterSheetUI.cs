@@ -67,7 +67,7 @@ public class CharacterSheetUI : MonoBehaviour
     {
         _cd = characterData ? characterData : FindAnyObjectByType<CharacterData>();
         BuildUI();
-        if (_pn) _pn.SetActive(true);
+        if (_pn) _pn.SetActive(false);
     }
 
     void Update()
