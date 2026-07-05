@@ -163,7 +163,7 @@ public class DiceDragHandler : MonoBehaviour
         }
 
         // Сетевые дайсы
-        foreach (var nd in FindObjectsByType<NetworkDice>(FindObjectsSortMode.None))
+        foreach (var nd in FindObjectsByType<NetworkDice>())
         {
             Vector3 sp = _cam.WorldToScreenPoint(nd.transform.position);
             if (sp.z > 0 && screenRect.Contains(new Vector2(sp.x, sp.y)))
@@ -228,12 +228,21 @@ public class DiceDragHandler : MonoBehaviour
     void AddToSelection(IDice dice)
     {
         if (dice == null || _selected.Contains(dice)) return;
+
+        // Если это сетевой кубик и мы не владелец — запрашиваем владение
+        var netDice = dice as NetworkDice;
+        if (netDice != null && !netDice.IsOwner)
+            netDice.RequestOwnership();
+
         _selected.Add(dice);
         dice.IsRolling = false;
         if (dice.Rigidbody != null)
         {
-            dice.Rigidbody.linearVelocity = Vector3.zero;
-            dice.Rigidbody.angularVelocity = Vector3.zero;
+            if (!dice.Rigidbody.isKinematic)
+            {
+                dice.Rigidbody.linearVelocity = Vector3.zero;
+                dice.Rigidbody.angularVelocity = Vector3.zero;
+            }
             dice.Rigidbody.isKinematic = true;
         }
         var hl = dice.gameObject.GetComponent<DiceHighlight>();

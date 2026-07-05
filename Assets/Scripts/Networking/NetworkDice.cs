@@ -5,6 +5,7 @@ using UnityEngine;
 /// <summary>
 /// Сетевой кубик. Физика только на владельце (client-authoritative).
 /// NetworkTransform синхронизирует позицию/вращение остальным.
+/// DieType синхронизируется через NetworkVariable — Init вызывается на всех клиентах.
 /// Результат: владелец определяет → ServerRpc → ClientRpc всем.
 /// </summary>
 [RequireComponent(typeof(Rigidbody))]
@@ -17,7 +18,6 @@ public class NetworkDice : NetworkBehaviour, IDice
     // IDice
     public Rigidbody Rigidbody => _rb;
 
-    /// <summary>Сброс состояния перед броском (без физики).</summary>
     public void StartRoll()
     {
         IsRolling = true;
@@ -37,7 +37,11 @@ public class NetworkDice : NetworkBehaviour, IDice
     public int fontSize = 48;
     public Color textColor = Color.black;
 
-    public DieType DieType { get; private set; }
+    // Синхронизируемый тип кубика
+    private readonly NetworkVariable<int> _networkDieType = new(
+        (int)DieType.d20, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
+    public DieType DieType => (DieType)_networkDieType.Value;
     public int Result { get; private set; } = -1;
     public bool IsRolling { get; set; }
     public bool HasResult { get; private set; }
@@ -49,10 +53,33 @@ public class NetworkDice : NetworkBehaviour, IDice
     private float _settleTimer;
     private bool _didInit;
 
-    /// <summary>Инициализация — вызывается на владельце после спавна.</summary>
+    /// <summary>Инициализация — вызывается ТОЛЬКО на сервере, тип синхронизируется на всех.</summary>
     public void Init(DieType type)
     {
-        DieType = type;
+        if (!IsServer) return;
+        _networkDieType.Value = (int)type;
+    }
+
+    public override void OnNetworkSpawn()
+    {
+        _rb = GetComponent<Rigidbody>();
+        _rb.isKinematic = !IsOwner;
+
+        // Инициализируем меш/материал из синхронизированного типа
+        InitializeFromType((DieType)_networkDieType.Value);
+
+        // Подписываемся на изменение типа (если изменится после спавна)
+        _networkDieType.OnValueChanged += (oldVal, newVal) =>
+        {
+            if (!_didInit)
+                InitializeFromType((DieType)newVal);
+        };
+    }
+
+    private void InitializeFromType(DieType type)
+    {
+        if (_didInit) return;
+
         var (mesh, faces) = DieMeshGenerator.Generate(type);
         _faces = faces;
         GetComponent<MeshFilter>().mesh = mesh;
@@ -71,13 +98,13 @@ public class NetworkDice : NetworkBehaviour, IDice
         mc.sharedMesh = mesh;
         mc.convex = true;
 
-        _rb = GetComponent<Rigidbody>();
         _rb.useGravity = true;
         _rb.mass = 0.3f;
         _rb.angularDamping = 0.3f;
         _rb.linearDamping = 0.2f;
 
         CreateFaceLabels();
+        gameObject.AddComponent<DiceHighlight>();
         _didInit = true;
     }
 
@@ -98,14 +125,15 @@ public class NetworkDice : NetworkBehaviour, IDice
             tm.anchor = TextAnchor.MiddleCenter;
             tm.alignment = TextAlignment.Center;
             tm.characterSize = 0.04f;
-        }
-    }
 
-    public override void OnNetworkSpawn()
-    {
-        // Только владелец включает физику, остальные — куклы
-        if (_rb != null)
-            _rb.isKinematic = !IsOwner;
+            MeshRenderer mr = labelObj.GetComponent<MeshRenderer>();
+            if (mr != null)
+            {
+                Shader shader = Shader.Find("MeshokSGovnom/FontFaceUnlit");
+                if (shader != null)
+                    mr.material.shader = shader;
+            }
+        }
     }
 
     /// <summary>Бросок — вызывается ТОЛЬКО на владельце.</summary>
@@ -128,9 +156,21 @@ public class NetworkDice : NetworkBehaviour, IDice
         _rb.AddTorque(torque, ForceMode.Impulse);
     }
 
+    /// <summary>Запросить владение кубиком (вызывается любым клиентом при клике).</summary>
+    public void RequestOwnership()
+    {
+        if (IsOwner) return;
+        RequestOwnershipServerRpc();
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void RequestOwnershipServerRpc(RpcParams rpcParams = default)
+    {
+        GetComponent<NetworkObject>().ChangeOwnership(rpcParams.Receive.SenderClientId);
+    }
+
     private void Update()
     {
-        // ТОЛЬКО владелец определяет остановку и результат
         if (!IsOwner || !_didInit || !IsRolling || HasResult) return;
 
         bool isSettled = _rb.linearVelocity.magnitude < stopThreshold
@@ -184,15 +224,13 @@ public class NetworkDice : NetworkBehaviour, IDice
         OnResultReady?.Invoke(this);
     }
 
-    /// <summary>Владелец → сервер: кубик остановился, результат N.</summary>
-    [ServerRpc]
+    [Rpc(SendTo.Server)]
     private void ReportResultServerRpc(int result)
     {
         BroadcastResultClientRpc(DieType.ToString(), result, OwnerClientId);
     }
 
-    /// <summary>Сервер → всем клиентам: результат кубика.</summary>
-    [ClientRpc]
+    [Rpc(SendTo.NotServer)]
     private void BroadcastResultClientRpc(string dieType, int result, ulong throwerId)
     {
         Debug.Log($"[Dice] Player {throwerId} rolled {dieType}: {result}");

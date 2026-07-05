@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 
@@ -18,6 +19,17 @@ public class NetworkDiceManager : MonoBehaviour
 
     public static NetworkDiceManager Instance { get; private set; }
 
+    private bool _handlerRegistered;
+
+    // Очередь спавнов из сетевого потока → main thread
+    private struct PendingSpawn
+    {
+        public DieType type;
+        public Vector3 pos;
+        public ulong ownerId;
+    }
+    private readonly Queue<PendingSpawn> _pendingSpawns = new();
+
     private void Awake()
     {
         if (Instance != null) { Destroy(gameObject); return; }
@@ -26,24 +38,49 @@ public class NetworkDiceManager : MonoBehaviour
 
     private void Start()
     {
-        if (NetworkManager.Singleton != null && NetworkManager.Singleton.CustomMessagingManager != null)
+        if (NetworkManager.Singleton != null)
+        {
+            NetworkManager.Singleton.OnServerStarted += OnServerStarted;
+        }
+    }
+
+    private void Update()
+    {
+        // Обрабатываем спавны из очереди (пришли из сетевого потока)
+        lock (_pendingSpawns)
+        {
+            while (_pendingSpawns.Count > 0)
+            {
+                var s = _pendingSpawns.Dequeue();
+                DoSpawn(s.type, s.pos, s.ownerId);
+            }
+        }
+    }
+
+    private void OnServerStarted()
+    {
+        if (!_handlerRegistered && NetworkManager.Singleton.CustomMessagingManager != null)
         {
             NetworkManager.Singleton.CustomMessagingManager.RegisterNamedMessageHandler(
                 MSG_SPAWN_DICE, OnSpawnDiceRequest);
+            _handlerRegistered = true;
         }
+
+        Debug.Log("[DiceManager] Server started — spawn handler registered");
     }
 
     private void OnDestroy()
     {
         if (NetworkManager.Singleton != null)
         {
-            NetworkManager.Singleton.CustomMessagingManager.UnregisterNamedMessageHandler(MSG_SPAWN_DICE);
+            NetworkManager.Singleton.OnServerStarted -= OnServerStarted;
+            if (_handlerRegistered)
+                NetworkManager.Singleton.CustomMessagingManager.UnregisterNamedMessageHandler(MSG_SPAWN_DICE);
         }
     }
 
     /// <summary>
-    /// Спавнит кубик на столе. Без авто-броска, без авто-удаления.
-    /// Кубик виден всем, владелец может бросить его позже.
+    /// Спавнит кубик на столе. Вызывать ТОЛЬКО из main thread (UI).
     /// </summary>
     public void RequestSpawnDie(DieType type, Vector3 spawnPos)
     {
@@ -51,46 +88,68 @@ public class NetworkDiceManager : MonoBehaviour
 
         if (NetworkManager.Singleton.IsServer)
         {
-            SpawnDieForClient(type, spawnPos, NetworkManager.Singleton.LocalClientId);
+            DoSpawn(type, spawnPos, NetworkManager.Singleton.LocalClientId);
         }
         else
         {
-            using var writer = new FastBufferWriter(
-                sizeof(int) + sizeof(float) * 3, Unity.Collections.Allocator.Temp);
-            writer.WriteValue((int)type);
-            writer.WriteValue(spawnPos.x);
-            writer.WriteValue(spawnPos.y);
-            writer.WriteValue(spawnPos.z);
+            int totalSize = sizeof(int) + sizeof(float) * 3;
+            var writer = new FastBufferWriter(totalSize, Unity.Collections.Allocator.Temp);
+            writer.WriteValueSafe((int)type);
+            writer.WriteValueSafe(spawnPos.x);
+            writer.WriteValueSafe(spawnPos.y);
+            writer.WriteValueSafe(spawnPos.z);
 
             NetworkManager.Singleton.CustomMessagingManager.SendNamedMessage(
                 MSG_SPAWN_DICE, NetworkManager.ServerClientId, writer);
+            writer.Dispose();
+            Debug.Log($"[DiceManager] Client: sent spawn request for {type}");
         }
     }
 
+    /// <summary>Сетевой поток: кладём запрос в очередь на main thread.</summary>
     private void OnSpawnDiceRequest(ulong senderId, FastBufferReader reader)
     {
-        reader.ReadValue(out int typeInt);
-        reader.ReadValue(out float posX);
-        reader.ReadValue(out float posY);
-        reader.ReadValue(out float posZ);
+        reader.ReadValueSafe(out int typeInt);
+        reader.ReadValueSafe(out float posX);
+        reader.ReadValueSafe(out float posY);
+        reader.ReadValueSafe(out float posZ);
 
-        DieType type = (DieType)typeInt;
-        Vector3 spawnPos = new Vector3(posX, posY, posZ);
+        var pending = new PendingSpawn
+        {
+            type = (DieType)typeInt,
+            pos = new Vector3(posX, posY, posZ),
+            ownerId = senderId
+        };
 
-        Debug.Log($"[DiceManager] Server: Player {senderId} spawns {type}");
-        SpawnDieForClient(type, spawnPos, senderId);
+        lock (_pendingSpawns)
+        {
+            _pendingSpawns.Enqueue(pending);
+        }
+
+        Debug.Log($"[DiceManager] Server: queued spawn {pending.type} for player {senderId}");
     }
 
-    private void SpawnDieForClient(DieType type, Vector3 spawnPos, ulong ownerId)
+    /// <summary>Main thread: фактический спавн через InstantiateAndSpawn.</summary>
+    private void DoSpawn(DieType type, Vector3 spawnPos, ulong ownerId)
     {
         Vector3 pos = spawnPos + Random.insideUnitSphere * 0.3f;
         pos.y = spawnHeight;
 
-        NetworkObject netObj = Instantiate(dicePrefab, pos, Random.rotation);
-        netObj.SpawnWithOwnership(ownerId);
+        NetworkObject netObj = Instantiate(dicePrefab.gameObject, pos, Random.rotation).GetComponent<NetworkObject>();
+        if (netObj == null)
+        {
+            Debug.LogError("[DiceManager] Instantiate returned null!");
+            return;
+        }
 
+        // Инициализируем тип ДО спавна — NetworkVariable синхронизируется при спавне
         var dice = netObj.GetComponent<NetworkDice>();
-        dice.Init(type);
-        // Кубик лежит на столе. Владелец бросит через dice.Roll() позже.
+        if (dice != null) dice.Init(type);
+
+        // Спавним объект (виден всем), затем назначаем владельца
+        netObj.Spawn();
+        if (ownerId != NetworkManager.Singleton.LocalClientId)
+            netObj.ChangeOwnership(ownerId);
+        Debug.Log($"[DiceManager] Spawned {type} for owner {ownerId}, isSpawned={netObj.IsSpawned}, netId={netObj.NetworkObjectId}");
     }
 }
