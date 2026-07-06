@@ -514,10 +514,15 @@ public class DiceUI : MonoBehaviour
 
     void SpawnDie(DieType type)
     {
+        // Центр карты (или 0,0,0 если карты нет)
+        Vector3 mapCenter = MapController.Instance != null
+            ? MapController.Instance.transform.position
+            : Vector3.zero;
+
         // Сетевой режим — кубики через NetworkDiceManager
         if (GameNetworkManager.Instance != null && GameNetworkManager.Instance.IsConnected)
         {
-            Vector3 pos = new Vector3(
+            Vector3 pos = mapCenter + new Vector3(
                 Random.Range(-spawnSpread, spawnSpread),
                 0,
                 Random.Range(-spawnSpread, spawnSpread)
@@ -528,8 +533,8 @@ public class DiceUI : MonoBehaviour
 
         // Локальный режим — старый DiceManager
         if (DiceManager.Instance == null) return;
-        float x = Random.Range(-spawnSpread, spawnSpread);
-        float z = Random.Range(-spawnSpread, spawnSpread);
+        float x = mapCenter.x + Random.Range(-spawnSpread, spawnSpread);
+        float z = mapCenter.z + Random.Range(-spawnSpread, spawnSpread);
         DiceManager.Instance.SpawnDieAt(type, x, z);
     }
 
@@ -633,33 +638,33 @@ public class DiceUI : MonoBehaviour
 
     void ApplyTexture(string filePath)
     {
-        if (_gridManager == null)
+        // Маршрутизируем через MapController
+        if (MapController.Instance != null)
         {
-            _gridManager = FindAnyObjectByType<GridManager>();
-            if (_gridManager == null)
-            {
-                Debug.LogWarning("DiceUI: GridManager not found in scene");
-                return;
-            }
+            byte[] data = File.ReadAllBytes(filePath);
+            MapController.Instance.ApplyImage(data);
+            return;
         }
 
-        byte[] data = File.ReadAllBytes(filePath);
+        // Fallback: напрямую в GridManager (для оффлайн-режима)
+        if (_gridManager == null) return;
+        byte[] data2 = File.ReadAllBytes(filePath);
         Texture2D tex = new Texture2D(2, 2);
-        if (!tex.LoadImage(data))
+        if (!tex.LoadImage(data2))
         {
             Debug.LogError($"DiceUI: failed to load image: {filePath}");
             Destroy(tex);
             return;
         }
-
-        _gridManager.SetBoardTexture(tex);
+        // GridManager больше не имеет SetBoardTexture — карта на MapPlane
+        Debug.LogWarning("DiceUI: GridManager.SetBoardTexture removed — use MapController");
+        Destroy(tex);
     }
 
     void RotateBoard(bool clockwise)
     {
-        if (_gridManager == null)
-            _gridManager = FindAnyObjectByType<GridManager>();
-        _gridManager?.RotateBoardTexture(clockwise);
+        // Поворот теперь через MapController (R)
+        // Ничего не делаем — карта управляется через MapController
     }
 
     // ══════════════════════════════════════════════

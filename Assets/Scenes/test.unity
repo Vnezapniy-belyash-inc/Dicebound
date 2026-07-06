@@ -645,6 +645,52 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::MapSync
   ShowTopMostFoldoutHeaderGroup: 1
   mapController: {fileID: 655935335}
+--- !u!114 &655935339
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 655935334}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e96cb6065543e43c4a752faaa1468eb1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Unity.Netcode.Runtime::Unity.Netcode.Components.NetworkTransform
+  ShowTopMostFoldoutHeaderGroup: 1
+  NetworkTransformExpanded: 0
+  AutoOwnerAuthorityTickOffset: 1
+  PositionInterpolationType: 0
+  RotationInterpolationType: 0
+  ScaleInterpolationType: 0
+  PositionLerpSmoothing: 1
+  PositionMaxInterpolationTime: 0.1
+  RotationLerpSmoothing: 1
+  RotationMaxInterpolationTime: 0.1
+  ScaleLerpSmoothing: 1
+  ScaleMaxInterpolationTime: 0.1
+  AuthorityMode: 1
+  TickSyncChildren: 0
+  UseUnreliableDeltas: 0
+  SyncPositionX: 1
+  SyncPositionY: 1
+  SyncPositionZ: 1
+  SyncRotAngleX: 1
+  SyncRotAngleY: 1
+  SyncRotAngleZ: 1
+  SyncScaleX: 1
+  SyncScaleY: 1
+  SyncScaleZ: 1
+  PositionThreshold: 0.001
+  RotAngleThreshold: 0.01
+  ScaleThreshold: 0.01
+  UseQuaternionSynchronization: 0
+  UseQuaternionCompression: 0
+  UseHalfFloatPrecision: 0
+  InLocalSpace: 0
+  SwitchTransformSpaceWhenParented: 0
+  Interpolate: 1
+  SlerpPosition: 0
 --- !u!1 &664453337
 GameObject:
   m_ObjectHideFlags: 0
@@ -2394,7 +2440,7 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 2, y: 1, z: 2}
+  m_LocalScale: {x: 10, y: 1, z: 10}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
@@ -2411,8 +2457,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 9f8a3b2c1d4e5f6a7b8c9d0e1f2a3b4c, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::GridManager
-  gridWidth: 20
-  gridHeight: 20
+  gridWidth: 100
+  gridHeight: 100
   cellSize: 1
   gridColor: {r: 0.25, g: 0.28, b: 0.35, a: 0.6}
   lineWidth: 0.04
@@ -2423,8 +2469,6 @@ MonoBehaviour:
   wallHeight: 83
   wallThickness: 3
   wallPhysics: {fileID: 0}
-  autoResizeToTexture: 1
-  pixelsPerUnit: 100
 --- !u!1001 &7579666870554050087
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -2434,12 +2478,20 @@ PrefabInstance:
     m_TransformParent: {fileID: 0}
     m_Modifications:
     - target: {fileID: 932311833984017837, guid: c2803df1e620f1b478d7fd1578bc0ad7, type: 3}
+      propertyPath: m_LocalScale.x
+      value: 2
+      objectReference: {fileID: 0}
+    - target: {fileID: 932311833984017837, guid: c2803df1e620f1b478d7fd1578bc0ad7, type: 3}
+      propertyPath: m_LocalScale.z
+      value: 2
+      objectReference: {fileID: 0}
+    - target: {fileID: 932311833984017837, guid: c2803df1e620f1b478d7fd1578bc0ad7, type: 3}
       propertyPath: m_LocalPosition.x
       value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 932311833984017837, guid: c2803df1e620f1b478d7fd1578bc0ad7, type: 3}
       propertyPath: m_LocalPosition.y
-      value: 0.01
+      value: 0.004
       objectReference: {fileID: 0}
     - target: {fileID: 932311833984017837, guid: c2803df1e620f1b478d7fd1578bc0ad7, type: 3}
       propertyPath: m_LocalPosition.z
@@ -2447,7 +2499,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 1187574801487315539, guid: c2803df1e620f1b478d7fd1578bc0ad7, type: 3}
       propertyPath: m_LocalPosition.x
-      value: -10.87956
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 1187574801487315539, guid: c2803df1e620f1b478d7fd1578bc0ad7, type: 3}
       propertyPath: m_LocalPosition.y
@@ -2455,7 +2507,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 1187574801487315539, guid: c2803df1e620f1b478d7fd1578bc0ad7, type: 3}
       propertyPath: m_LocalPosition.z
-      value: -3.9055
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 1187574801487315539, guid: c2803df1e620f1b478d7fd1578bc0ad7, type: 3}
       propertyPath: m_LocalRotation.w
@@ -2500,6 +2552,9 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 7888778144297494517, guid: c2803df1e620f1b478d7fd1578bc0ad7, type: 3}
       insertIndex: -1
       addedObject: {fileID: 655935338}
+    - targetCorrespondingSourceObject: {fileID: 7888778144297494517, guid: c2803df1e620f1b478d7fd1578bc0ad7, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 655935339}
   m_SourcePrefab: {fileID: 100100000, guid: c2803df1e620f1b478d7fd1578bc0ad7, type: 3}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:

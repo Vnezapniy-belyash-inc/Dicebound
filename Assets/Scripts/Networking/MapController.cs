@@ -28,6 +28,7 @@ public class MapController : NetworkBehaviour
 
     private Material _mapMaterial;
     private Texture2D _currentTexture;
+    private Vector3 _baseScale = new Vector3(2f, 1, 2f); // переопределится при загрузке
     private bool _isDragging;
     private Vector3 _dragStartPlanePos;
     private Vector3 _dragStartMouseWorld;
@@ -59,6 +60,22 @@ public class MapController : NetworkBehaviour
 
         FindScaleInput();
         InvokeRepeating(nameof(FindScaleInput), 0.5f, 0.5f);
+
+        // Авто-спавн при старте сервера
+        if (NetworkManager.Singleton != null)
+        {
+            NetworkManager.Singleton.OnServerStarted += OnServerStarted;
+        }
+    }
+
+    private void OnServerStarted()
+    {
+        var netObj = GetComponent<NetworkObject>();
+        if (netObj != null && !netObj.IsSpawned)
+        {
+            netObj.Spawn();
+            Debug.Log("[Map] MapManager spawned on server");
+        }
     }
 
     private void FindScaleInput()
@@ -149,6 +166,9 @@ public class MapController : NetworkBehaviour
         _mapMaterial.color = Color.white;
         _mapMaterial.SetFloat("_Surface", 0f);
 
+        // Скрываем GameBoard (теперь карта на MapPlane)
+        HideGameBoard();
+
         FitPlaneToTexture();
         ApplyScale(_netScale.Value);
         RebuildGrid();
@@ -183,7 +203,9 @@ public class MapController : NetworkBehaviour
     private void ApplyScale(float scale)
     {
         if (mapPlane == null) return;
-        mapPlane.transform.localScale = new Vector3(scale, 1, scale);
+        // Сохраняем пропорции: умножаем baseScale на scale
+        mapPlane.transform.localScale = new Vector3(
+            _baseScale.x * scale, _baseScale.y, _baseScale.z * scale);
         RebuildGrid();
     }
 
@@ -198,7 +220,7 @@ public class MapController : NetworkBehaviour
         if (m.middleButton.wasPressedThisFrame)
         {
             _isDragging = true;
-            _dragStartPlanePos = mapPlane.transform.position;
+            _dragStartPlanePos = transform.position;
             _dragStartMouseWorld = GetMouseWorldPos(m);
         }
 
@@ -209,7 +231,7 @@ public class MapController : NetworkBehaviour
         {
             Vector3 currentMouse = GetMouseWorldPos(m);
             Vector3 delta = currentMouse - _dragStartMouseWorld;
-            mapPlane.transform.position = _dragStartPlanePos + new Vector3(delta.x, 0, delta.z);
+            transform.position = _dragStartPlanePos + new Vector3(delta.x, 0, delta.z);
             RebuildGrid();
         }
     }
@@ -223,7 +245,7 @@ public class MapController : NetworkBehaviour
 
         if (k.rKey.wasPressedThisFrame && !k.shiftKey.isPressed && !k.ctrlKey.isPressed)
         {
-            mapPlane.transform.Rotate(Vector3.up, 90f);
+            transform.Rotate(Vector3.up, 90f);
             RebuildGrid();
         }
     }
@@ -233,14 +255,26 @@ public class MapController : NetworkBehaviour
     public void ResetMap()
     {
         if (!IsOwner || mapPlane == null) return;
-        mapPlane.transform.position = Vector3.zero;
-        mapPlane.transform.rotation = Quaternion.identity;
-        mapPlane.transform.localScale = Vector3.one;
+        _baseScale = mapPlane.transform.localScale; // сохраняем текущий
+        transform.position = Vector3.zero;
+        transform.rotation = Quaternion.identity;
+        mapPlane.transform.localScale = _baseScale;
         _netScale.Value = defaultScale;
         ApplyScale(defaultScale);
     }
 
     // ═══ Утилиты ═══
+
+    private void HideGameBoard()
+    {
+        var gb = GameObject.Find("GameBoard");
+        if (gb != null)
+        {
+            var mr = gb.GetComponent<MeshRenderer>();
+            if (mr != null)
+                mr.enabled = false;
+        }
+    }
 
     private Vector3 GetMouseWorldPos(Mouse m)
     {
@@ -255,10 +289,12 @@ public class MapController : NetworkBehaviour
     {
         if (_currentTexture == null || mapPlane == null) return;
         float aspect = (float)_currentTexture.width / _currentTexture.height;
+        // Берём текущий scale MapPlane как базовый размер
+        float baseSize = Mathf.Max(mapPlane.transform.localScale.x, mapPlane.transform.localScale.z);
         if (aspect >= 1)
-            mapPlane.transform.localScale = new Vector3(10f, 1, 10f / aspect);
+            _baseScale = new Vector3(baseSize, 1, baseSize / aspect);
         else
-            mapPlane.transform.localScale = new Vector3(10f * aspect, 1, 10f);
+            _baseScale = new Vector3(baseSize * aspect, 1, baseSize);
     }
 
     public Bounds GetMapBounds()
@@ -266,20 +302,17 @@ public class MapController : NetworkBehaviour
         if (mapPlane == null)
             return new Bounds(Vector3.zero, Vector3.one * 10);
 
-        float s = _netScale.Value;
-        Vector3 size = mapPlane.transform.localScale;
-        float w = 10f * size.x * s;
-        float h = 10f * size.z * s;
-        return new Bounds(mapPlane.transform.position, new Vector3(w, 0.1f, h));
+        // localScale уже учитывает _baseScale × scale, не умножаем повторно
+        float w = 10f * mapPlane.transform.localScale.x;
+        float h = 10f * mapPlane.transform.localScale.z;
+        return new Bounds(transform.position, new Vector3(w, 0.1f, h));
     }
 
     private void RebuildGrid()
     {
         var gm = FindAnyObjectByType<GridManager>();
         if (gm != null)
-        {
-            // TODO: Task 3 — gm.SetBounds(GetMapBounds());
-        }
+            gm.SetBounds(GetMapBounds());
     }
 
     public byte[] GetCurrentPngData()
@@ -292,5 +325,7 @@ public class MapController : NetworkBehaviour
     {
         if (_scaleInputField != null)
             _scaleInputField.onEndEdit.RemoveListener(OnScaleInputChanged);
+        if (NetworkManager.Singleton != null)
+            NetworkManager.Singleton.OnServerStarted -= OnServerStarted;
     }
 }

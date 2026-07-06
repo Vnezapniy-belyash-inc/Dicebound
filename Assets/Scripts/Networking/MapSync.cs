@@ -1,12 +1,18 @@
+using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 
 /// <summary>
-/// Синхронизация карты: сервер отправляет PNG через ClientRpc.
+/// Синхронизация карты: чанковая передача через CustomMessagingManager.
+/// Формат: [int chunkIndex][int dataSize][byte... data]
 /// Late-join через OnClientConnectedCallback.
 /// </summary>
 public class MapSync : NetworkBehaviour
 {
+    private const string MSG_MAP_META = "MapMeta";
+    private const string MSG_MAP_CHUNK = "MapChunk";
+    private const string MSG_MAP_REQUEST = "MapRequest";
+
     [Header("References")]
     public MapController mapController;
 
@@ -14,6 +20,11 @@ public class MapSync : NetworkBehaviour
 
     private byte[] _cachedPng;
     private bool _handlerRegistered;
+
+    // Клиент: сборка чанков
+    private readonly Dictionary<int, byte[]> _incomingChunks = new();
+    private int _incomingTotalChunks;
+    private int _incomingChunkCount;
 
     private void Awake()
     {
@@ -23,24 +34,39 @@ public class MapSync : NetworkBehaviour
 
     private void Start()
     {
-        // Сервер: кэшируем PNG и слушаем подключения
-        NetworkManager.Singleton.OnClientConnectedCallback += OnLateJoin;
+        if (NetworkManager.Singleton != null)
+            NetworkManager.Singleton.OnClientConnectedCallback += OnLateJoin;
     }
 
     public override void OnNetworkSpawn()
     {
+        var cmm = NetworkManager.Singleton.CustomMessagingManager;
         if (IsServer)
         {
-            NetworkManager.Singleton.CustomMessagingManager.RegisterNamedMessageHandler(
-                "MapRequest", OnMapRequest);
+            cmm.RegisterNamedMessageHandler(MSG_MAP_REQUEST, OnMapRequest);
             _handlerRegistered = true;
+        }
+        else
+        {
+            cmm.RegisterNamedMessageHandler(MSG_MAP_META, OnMapMetaReceived);
+            cmm.RegisterNamedMessageHandler(MSG_MAP_CHUNK, OnMapChunkReceived);
+            RequestMapFromServer();
         }
     }
 
     public override void OnDestroy()
     {
-        if (_handlerRegistered && NetworkManager.Singleton?.CustomMessagingManager != null)
-            NetworkManager.Singleton.CustomMessagingManager.UnregisterNamedMessageHandler("MapRequest");
+        var cmm = NetworkManager.Singleton?.CustomMessagingManager;
+        if (cmm != null)
+        {
+            if (_handlerRegistered)
+                cmm.UnregisterNamedMessageHandler(MSG_MAP_REQUEST);
+            else
+            {
+                cmm.UnregisterNamedMessageHandler(MSG_MAP_META);
+                cmm.UnregisterNamedMessageHandler(MSG_MAP_CHUNK);
+            }
+        }
         if (NetworkManager.Singleton != null)
             NetworkManager.Singleton.OnClientConnectedCallback -= OnLateJoin;
         base.OnDestroy();
@@ -52,43 +78,140 @@ public class MapSync : NetworkBehaviour
     {
         if (!IsServer || pngData == null) return;
         _cachedPng = pngData;
-        Debug.Log($"[MapSync] Sending map: {pngData.Length} bytes");
-        SendMapClientRpc(pngData);
+
+        const int CHUNK_SIZE = 1000; // влезает в ~1KB лимит
+        int totalChunks = Mathf.CeilToInt((float)pngData.Length / CHUNK_SIZE);
+
+        Debug.Log($"[MapSync] Sending map: {pngData.Length} bytes in {totalChunks} chunks");
+
+        // Шлём мету всем клиентам
+        foreach (var kv in NetworkManager.Singleton.ConnectedClients)
+        {
+            ulong cid = kv.Key;
+            if (cid == NetworkManager.ServerClientId) continue;
+
+            SendMeta(cid, totalChunks);
+
+            for (int i = 0; i < totalChunks; i++)
+            {
+                int off = i * CHUNK_SIZE;
+                int size = Mathf.Min(CHUNK_SIZE, pngData.Length - off);
+                SendChunk(cid, i, pngData, off, size);
+            }
+        }
     }
 
-    [Rpc(SendTo.NotServer)]
-    private void SendMapClientRpc(byte[] pngData)
+    private void SendMeta(ulong clientId, int totalChunks)
     {
-        Debug.Log($"[MapSync] Received map: {pngData.Length} bytes");
-        mapController?.ApplyImageLocal(pngData);
+        var writer = new FastBufferWriter(sizeof(int), Unity.Collections.Allocator.Temp);
+        writer.WriteValueSafe(totalChunks);
+        NetworkManager.Singleton.CustomMessagingManager.SendNamedMessage(
+            MSG_MAP_META, clientId, writer);
+        writer.Dispose();
+    }
+
+    private void SendChunk(ulong clientId, int index, byte[] data, int offset, int size)
+    {
+        int msgSize = sizeof(int) + sizeof(int) + size;
+        var writer = new FastBufferWriter(msgSize, Unity.Collections.Allocator.Temp);
+        writer.WriteValueSafe(index);
+        writer.WriteValueSafe(size);
+        for (int i = 0; i < size; i++)
+            writer.WriteValueSafe(data[offset + i]);
+
+        NetworkManager.Singleton.CustomMessagingManager.SendNamedMessage(
+            MSG_MAP_CHUNK, clientId, writer);
+        writer.Dispose();
+    }
+
+    // ═══ Client receives ═══
+
+    private void OnMapMetaReceived(ulong senderId, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out int totalChunks);
+        Debug.Log($"[MapSync] Client: receiving map in {totalChunks} chunks");
+        _incomingTotalChunks = totalChunks;
+        _incomingChunkCount = 0;
+        _incomingChunks.Clear();
+    }
+
+    private void OnMapChunkReceived(ulong senderId, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out int index);
+        reader.ReadValueSafe(out int size);
+        byte[] chunk = new byte[size];
+        for (int i = 0; i < size; i++)
+            reader.ReadValueSafe(out chunk[i]);
+
+        _incomingChunks[index] = chunk;
+        _incomingChunkCount++;
+
+        if (_incomingChunkCount >= _incomingTotalChunks)
+            Reassemble();
+    }
+
+    private void Reassemble()
+    {
+        int totalSize = 0;
+        for (int i = 0; i < _incomingTotalChunks; i++)
+        {
+            if (!_incomingChunks.ContainsKey(i))
+            {
+                Debug.LogWarning($"[MapSync] Missing chunk {i}");
+                return;
+            }
+            totalSize += _incomingChunks[i].Length;
+        }
+
+        byte[] full = new byte[totalSize];
+        int off = 0;
+        for (int i = 0; i < _incomingTotalChunks; i++)
+        {
+            byte[] chunk = _incomingChunks[i];
+            System.Array.Copy(chunk, 0, full, off, chunk.Length);
+            off += chunk.Length;
+        }
+
+        Debug.Log($"[MapSync] Client: map reassembled ({totalSize} bytes)");
+        mapController?.ApplyImageLocal(full);
+        _incomingChunks.Clear();
     }
 
     // ═══ Late-join ═══
 
     private void OnLateJoin(ulong clientId)
     {
+        if (!IsServer) return;
         if (clientId == NetworkManager.ServerClientId) return;
         if (_cachedPng == null) return;
+
         Debug.Log($"[MapSync] Late-join: sending map to client {clientId}");
-        // Шлём всем — новый клиент получит, остальные проигнорируют
-        SendMapClientRpc(_cachedPng);
+        const int sz = 1000;
+        int total = Mathf.CeilToInt((float)_cachedPng.Length / sz);
+        SendMeta(clientId, total);
+        for (int i = 0; i < total; i++)
+        {
+            int off = i * sz;
+            int size = Mathf.Min(sz, _cachedPng.Length - off);
+            SendChunk(clientId, i, _cachedPng, off, size);
+        }
     }
 
-    private void OnMapRequest(ulong sender, FastBufferReader r)
+    private void OnMapRequest(ulong senderId, FastBufferReader reader)
     {
-        Debug.Log($"[MapSync] Client {sender} requested map");
-        OnLateJoin(sender);
+        if (!IsServer) return;
+        Debug.Log($"[MapSync] Client {senderId} requested map");
+        OnLateJoin(senderId);
     }
 
-    // ═══ Client requests map ═══
-
-    /// <summary>Клиент вызывает после подключения чтобы запросить карту.</summary>
     public static void RequestMapFromServer()
     {
-        if (NetworkManager.Singleton == null || NetworkManager.Singleton.CustomMessagingManager == null) return;
-        var w = new FastBufferWriter(1, Unity.Collections.Allocator.Temp);
+        if (NetworkManager.Singleton?.CustomMessagingManager == null) return;
+        var w = new FastBufferWriter(sizeof(byte), Unity.Collections.Allocator.Temp);
+        w.TryBeginWrite(sizeof(byte));
         w.WriteValueSafe((byte)0);
-        NetworkManager.Singleton.CustomMessagingManager.SendNamedMessage("MapRequest", NetworkManager.ServerClientId, w);
+        NetworkManager.Singleton.CustomMessagingManager.SendNamedMessage(
+            MSG_MAP_REQUEST, NetworkManager.ServerClientId, w);
         w.Dispose();
     }
 }
