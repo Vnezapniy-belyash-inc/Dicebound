@@ -1857,6 +1857,8 @@ GameObject:
   - component: {fileID: 1552964288}
   - component: {fileID: 1552964290}
   - component: {fileID: 1552964291}
+  - component: {fileID: 1552964292}
+  - component: {fileID: 1552964293}
   m_Layer: 0
   m_Name: DiceManager
   m_TagString: Untagged
@@ -1928,6 +1930,32 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::NetworkDiceManager
   dicePrefab: {fileID: 5250101222945433880, guid: 97d984ff08dc94b4a84e4e35856f28c7, type: 3}
   spawnHeight: 2
+--- !u!114 &1552964292
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1552964287}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 564c79a0127eca14cbcbce39ee60297a, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::TokenManager
+  tokenPrefab: {fileID: 6633216556577208872, guid: 296868d5e6430c7468bfc7ae0c1ad0e2, type: 3}
+  spawnHeight: 0.1
+--- !u!114 &1552964293
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1552964287}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8b6101515b5ac0841b64874ad0d3061f, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::TokenContextMenu
 --- !u!1 &1738148432
 GameObject:
   m_ObjectHideFlags: 0
@@ -2460,10 +2488,10 @@ MonoBehaviour:
   gridWidth: 100
   gridHeight: 100
   cellSize: 1
-  gridColor: {r: 0.25, g: 0.28, b: 0.35, a: 0.6}
+  gridColor: {r: 0, g: 0.9150943, b: 0.1211853, a: 1}
   lineWidth: 0.04
   yOffset: 0.005
-  centerLineColor: {r: 0.4, g: 0.5, b: 0.7, a: 0.7}
+  centerLineColor: {r: 1, g: 0, b: 0.009994984, a: 1}
   centerLineWidth: 0.06
   createWalls: 1
   wallHeight: 83

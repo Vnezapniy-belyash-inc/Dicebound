@@ -75,6 +75,8 @@ public class DiceDragHandler : MonoBehaviour
         {
             if (_isDragging)
                 DragAll(m);
+            else if (_draggedToken != null)
+                DragToken(m);
             else if (_areaSelectPending)
                 CheckAreaStart(m);
             else if (_isAreaSelecting)
@@ -87,6 +89,8 @@ public class DiceDragHandler : MonoBehaviour
                 FinishAreaSelect();
             else if (_isDragging)
                 ReleaseAll();
+            else if (_draggedToken != null)
+                ReleaseToken();
             else if (_areaSelectPending)
                 ClearSelection();
         }
@@ -116,6 +120,14 @@ public class DiceDragHandler : MonoBehaviour
                     StartDragging(ray);
                 else
                     SelectSingle(dice, ray);
+                return;
+            }
+
+            // Ищем TokenController
+            TokenController token = hit.collider.GetComponentInParent<TokenController>();
+            if (token != null)
+            {
+                StartDraggingToken(token, ray);
                 return;
             }
         }
@@ -417,6 +429,50 @@ public class DiceDragHandler : MonoBehaviour
                     _selected[j].transform.position += push;
                 }
             }
+        }
+    }
+
+    // ═══ Перетаскивание токенов ═══
+
+    private TokenController _draggedToken;
+    private Vector3 _tokenDragOffset;
+    private Vector3 _tokenStartPos;
+
+    void StartDraggingToken(TokenController token, Ray ray)
+    {
+        ClearSelection();
+        token.RequestOwnership();
+        _draggedToken = token;
+        _tokenStartPos = token.transform.position;
+
+        Plane p = new Plane(Vector3.up, new Vector3(0, token.transform.position.y, 0));
+        if (p.Raycast(ray, out float dist))
+        {
+            Vector3 hitPoint = ray.GetPoint(dist);
+            _tokenDragOffset = token.transform.position - hitPoint;
+        }
+    }
+
+    void DragToken(Mouse m)
+    {
+        if (_draggedToken == null) return;
+        Plane plane = new Plane(Vector3.up, new Vector3(0, _draggedToken.transform.position.y, 0));
+        Ray ray = _cam.ScreenPointToRay(m.position.ReadValue());
+        if (plane.Raycast(ray, out float dist))
+        {
+            Vector3 pos = ray.GetPoint(dist) + _tokenDragOffset;
+            pos.y = _tokenStartPos.y;
+            _draggedToken.transform.position = pos;
+            _draggedToken.SnapToGrid();
+        }
+    }
+
+    void ReleaseToken()
+    {
+        if (_draggedToken != null)
+        {
+            _draggedToken.SnapToGrid();
+            _draggedToken = null;
         }
     }
 }

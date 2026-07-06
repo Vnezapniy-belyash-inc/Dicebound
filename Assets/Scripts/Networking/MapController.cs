@@ -110,9 +110,13 @@ public class MapController : NetworkBehaviour
 
     private void Update()
     {
-        if (!IsOwner) return;
-        HandleDrag();
-        HandleRotate();
+        if (IsOwner)
+        {
+            HandleDrag();
+            HandleRotate();
+        }
+        // Сетка обновляется у всех (позиция синхронится через NetworkTransform)
+        RebuildGrid();
     }
 
     // ═══ Загрузка изображения ═══

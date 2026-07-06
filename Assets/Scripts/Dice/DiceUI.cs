@@ -290,8 +290,17 @@ public class DiceUI : MonoBehaviour
         for (int i = 0; i < iconCount; i++)
         {
             float y = -topMargin - i * (iconSize + iconGap);
-            MakeIcon(sidebarGO.transform, "?", new Color(0.2f, 0.25f, 0.35f, 0.9f),
-                iconX, y, iconSize, uiFont, () => { /* TODO: функционал */ }, anchorY: 1f);
+            if (i == 0)
+            {
+                // Первая иконка — создать токен
+                MakeIcon(sidebarGO.transform, "⬤", new Color(0.5f, 0.6f, 0.9f, 0.9f),
+                    iconX, y, iconSize, uiFont, () => TokenManager.Instance?.RequestSpawnToken(), anchorY: 1f);
+            }
+            else
+            {
+                MakeIcon(sidebarGO.transform, "?", new Color(0.2f, 0.25f, 0.35f, 0.9f),
+                    iconX, y, iconSize, uiFont, () => { /* TODO: функционал */ }, anchorY: 1f);
+            }
         }
     }
 

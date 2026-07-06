@@ -13,11 +13,9 @@ public class GridManager : MonoBehaviour
     public float cellSize = 1f;
 
     [Header("Визуал")]
-    public Color gridColor = new Color(0.25f, 0.28f, 0.35f, 0.6f);
+    public Color gridColor = new Color(0.15f, 0.15f, 0.15f, 0.5f); // 50% прозрачности
     [Range(0.01f, 0.2f)] public float lineWidth = 0.04f;
     public float yOffset = 0.005f;
-    public Color centerLineColor = new Color(0.4f, 0.5f, 0.7f, 0.7f);
-    [Range(0.02f, 0.3f)] public float centerLineWidth = 0.06f;
 
     [Header("Стены")]
     public bool createWalls = true;
@@ -38,6 +36,8 @@ public class GridManager : MonoBehaviour
 
     void Start()
     {
+        // Форсируем тёмно-серый цвет (переопределяет сохранённый в сцене)
+        gridColor = new Color(0.15f, 0.15f, 0.15f, 0.5f);
         GenerateFullGrid();
     }
 
@@ -55,7 +55,6 @@ public class GridManager : MonoBehaviour
 
     void GenerateFullGrid()
     {
-        // Форсируем высоту сетки над картой (MapPlane на y≈0.004)
         if (yOffset < 0.005f) yOffset = 0.005f;
         if (_gridLinesParent != null)
         {
@@ -67,23 +66,17 @@ public class GridManager : MonoBehaviour
         _gridLinesParent.transform.SetParent(transform);
         _gridLinesParent.transform.localPosition = new Vector3(0, yOffset, 0);
 
-        Material mat = CreateGridMaterial();
         float halfW = gridWidth * cellSize / 2f;
         float halfH = gridHeight * cellSize / 2f;
-        int centerX = gridWidth / 2;
-        int centerZ = gridHeight / 2;
 
         // Горизонтальные линии (вдоль X)
         for (int z = 0; z <= gridHeight; z++)
         {
             float zPos = -halfH + z * cellSize;
-            bool isCenter = (z == centerZ);
             var go = CreateGridLine(
                 new Vector3(-halfW, 0, zPos),
                 new Vector3(halfW, 0, zPos),
-                isCenter ? centerLineColor : gridColor,
-                isCenter ? centerLineWidth : lineWidth,
-                mat, $"H_{z}");
+                gridColor, lineWidth, $"H_{z}");
             go.SetActive(false);
             _hLines.Add(go);
         }
@@ -92,13 +85,10 @@ public class GridManager : MonoBehaviour
         for (int x = 0; x <= gridWidth; x++)
         {
             float xPos = -halfW + x * cellSize;
-            bool isCenter = (x == centerX);
             var go = CreateGridLine(
                 new Vector3(xPos, 0, -halfH),
                 new Vector3(xPos, 0, halfH),
-                isCenter ? centerLineColor : gridColor,
-                isCenter ? centerLineWidth : lineWidth,
-                mat, $"V_{x}");
+                gridColor, lineWidth, $"V_{x}");
             go.SetActive(false);
             _vLines.Add(go);
         }
@@ -107,12 +97,16 @@ public class GridManager : MonoBehaviour
         Debug.Log($"[Grid] Generated {_hLines.Count}H × {_vLines.Count}V lines for {gridWidth}×{gridHeight} grid");
     }
 
-    GameObject CreateGridLine(Vector3 start, Vector3 end, Color color, float width, Material mat, string name)
+    GameObject CreateGridLine(Vector3 start, Vector3 end, Color color, float width, string name)
     {
         GameObject go = new GameObject(name);
         go.transform.SetParent(_gridLinesParent.transform, worldPositionStays: false);
 
         LineRenderer lr = go.AddComponent<LineRenderer>();
+        Material mat = new Material(Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color"));
+        mat.SetFloat("_Surface", 1f); // Transparent
+        mat.color = color;
+        mat.renderQueue = 3000;
         lr.material = mat;
         lr.startColor = color;
         lr.endColor = color;
@@ -125,15 +119,6 @@ public class GridManager : MonoBehaviour
         lr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         lr.receiveShadows = false;
         return go;
-    }
-
-    Material CreateGridMaterial()
-    {
-        Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
-        if (shader == null) shader = Shader.Find("Unlit/Color");
-        Material mat = new Material(shader);
-        mat.color = Color.white;
-        return mat;
     }
 
     // ═══ Показ только клеток в границах карты ═══
@@ -182,7 +167,6 @@ public class GridManager : MonoBehaviour
         if (Time.time - _lastLogTime > 1f)
         {
             _lastLogTime = Time.time;
-            Debug.Log($"[Grid] Bounds: {mapMinX:F1}..{mapMaxX:F1}, {mapMinZ:F1}..{mapMaxZ:F1}");
         }
     }
 
@@ -231,8 +215,8 @@ public class GridManager : MonoBehaviour
     {
         float halfW = gridWidth * cellSize / 2f;
         float halfH = gridHeight * cellSize / 2f;
-        float x = Mathf.Round(position.x / cellSize) * cellSize;
-        float z = Mathf.Round(position.z / cellSize) * cellSize;
+        float x = Mathf.Round(position.x / cellSize - 0.5f) * cellSize + cellSize / 2f;
+        float z = Mathf.Round(position.z / cellSize - 0.5f) * cellSize + cellSize / 2f;
         x = Mathf.Clamp(x, -halfW + cellSize / 2f, halfW - cellSize / 2f);
         z = Mathf.Clamp(z, -halfH + cellSize / 2f, halfH - cellSize / 2f);
         return new Vector3(x, position.y, z);
