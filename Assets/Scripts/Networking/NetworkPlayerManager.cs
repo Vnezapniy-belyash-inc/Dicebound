@@ -26,7 +26,9 @@ public class NetworkPlayerManager : MonoBehaviour
 
     private void OnClientConnected(ulong clientId)
     {
-        Debug.Log($"[Multiplayer] Client {clientId} connected. Total: {NetworkManager.Singleton.ConnectedClients.Count}");
+        // Назначаем цвет новому игроку
+        var color = PlayerColors.AssignColor(clientId);
+        Debug.Log($"[Multiplayer] Client {clientId} connected. Color: {color}. Total: {NetworkManager.Singleton.ConnectedClients.Count}");
     }
 
     private void OnClientDisconnected(ulong clientId)

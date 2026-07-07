@@ -26,28 +26,37 @@ public class TokenController : NetworkBehaviour
     private void Awake()
     {
         _bodyMaterial = GetComponent<MeshRenderer>()?.material;
-        if (_bodyMaterial != null)
-            _bodyMaterial.color = defaultColor;
+        // Цвет задаётся в Editor через Material
 
         if (portraitQuad != null)
         {
             var mr = portraitQuad.GetComponent<MeshRenderer>();
             if (mr != null)
             {
-                // Создаём прозрачный материал
-                _portraitMaterial = new Material(Shader.Find("Universal Render Pipeline/Unlit"));
-                _portraitMaterial.SetFloat("_Surface", 1f); // Transparent
-                _portraitMaterial.SetFloat("_Blend", 0f);   // Alpha
-                _portraitMaterial.color = new Color(1, 1, 1, 0f);
-                _portraitMaterial.renderQueue = 3000; // Transparent queue
-                mr.material = _portraitMaterial;
+                _portraitMaterial = mr.material;
+                _portraitMaterial.color = Color.white;
             }
         }
     }
 
     public override void OnNetworkSpawn()
     {
-        // Владелец — создатель токена
+        if (IsServer)
+        {
+            Color c = PlayerColors.GetColor(OwnerClientId);
+            // Локально на хосте
+            if (_portraitMaterial != null && _portraitTexture == null)
+                _portraitMaterial.color = c;
+            // Всем клиентам (и хосту тоже)
+            SetColorClientRpc(new Vector3(c.r, c.g, c.b));
+        }
+    }
+
+    [Rpc(SendTo.Everyone)]
+    private void SetColorClientRpc(Vector3 rgb)
+    {
+        if (_portraitMaterial != null && _portraitTexture == null)
+            _portraitMaterial.color = new Color(rgb.x, rgb.y, rgb.z, 1f);
     }
 
     /// <summary>Клиент запрашивает владение чтобы двигать токен.</summary>
@@ -75,12 +84,13 @@ public class TokenController : NetworkBehaviour
     /// <summary>Клиент получает картинку от создателя.</summary>
     public void ApplyImageLocal(byte[] pngData)
     {
-        if (pngData == null) return;
+        if (pngData == null || pngData.Length == 0) return;
 
         Texture2D tex = new Texture2D(2, 2);
         if (!tex.LoadImage(pngData))
         {
             Destroy(tex);
+            Debug.LogError("[Token] Failed to load image");
             return;
         }
 
@@ -88,47 +98,15 @@ public class TokenController : NetworkBehaviour
             Destroy(_portraitTexture);
         _portraitTexture = tex;
 
-        // Конвертируем в RGBA32 (JPEG не имеет альфа-канала)
-        Texture2D rgba = new Texture2D(tex.width, tex.height, TextureFormat.RGBA32, false);
-        rgba.SetPixels(tex.GetPixels());
-        rgba.Apply();
-        Destroy(tex);
-        tex = rgba;
-        _portraitTexture = tex;
-
-        // Обрезаем до круга
-        MakeCircular(tex);
-
         if (_portraitMaterial != null)
         {
             _portraitMaterial.mainTexture = tex;
             _portraitMaterial.color = Color.white;
+            Debug.Log($"[Token] Image applied: {tex.width}x{tex.height}");
         }
     }
 
-    /// <summary>Делает текстуру круглой через альфа-канал.</summary>
-    private void MakeCircular(Texture2D tex)
-    {
-        int w = tex.width, h = tex.height;
-        float cx = w / 2f, cy = h / 2f;
-        float radius = Mathf.Min(cx, cy);
-        Color[] pixels = tex.GetPixels();
-        for (int y = 0; y < h; y++)
-        {
-            for (int x = 0; x < w; x++)
-            {
-                float dx = x - cx, dy = y - cy;
-                if (dx * dx + dy * dy > radius * radius)
-                    pixels[y * w + x].a = 0f;
-                else
-                    pixels[y * w + x].a = 1f;
-            }
-        }
-        tex.SetPixels(pixels);
-        tex.Apply();
-    }
-
-    [Rpc(SendTo.NotServer)]
+    [Rpc(SendTo.Everyone)]
     private void BroadcastImageClientRpc(byte[] pngData)
     {
         ApplyImageLocal(pngData);

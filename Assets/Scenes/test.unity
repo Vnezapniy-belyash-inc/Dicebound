@@ -2491,8 +2491,6 @@ MonoBehaviour:
   gridColor: {r: 0, g: 0.9150943, b: 0.1211853, a: 1}
   lineWidth: 0.04
   yOffset: 0.005
-  centerLineColor: {r: 1, g: 0, b: 0.009994984, a: 1}
-  centerLineWidth: 0.06
   createWalls: 1
   wallHeight: 83
   wallThickness: 3

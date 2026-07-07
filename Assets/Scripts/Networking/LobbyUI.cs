@@ -88,7 +88,6 @@ public class LobbyUI : MonoBehaviour
             lobbyPanel.SetActive(false);
             statusText.text = "Connected!";
             ShowGameUI();
-            MapSync.RequestMapFromServer(); // Запрашиваем карту у сервера
             Debug.Log("[Lobby] Client connected.");
         }
         catch (System.Exception ex)
