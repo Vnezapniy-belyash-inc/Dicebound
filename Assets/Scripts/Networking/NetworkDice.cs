@@ -38,6 +38,10 @@ public class NetworkDice : NetworkBehaviour, IDice
     private readonly NetworkVariable<int> _netDieType = new(
         (int)DieType.d20, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
+    // Late-join: цвет синхронизируется автоматически
+    private readonly NetworkVariable<Vector3> _netDiceColor = new(
+        new Vector3(0.5f, 0.5f, 0.5f), NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
     private Rigidbody _rb;
     private DieFaceData[] _faces;
     private float _settleTimer;
@@ -55,15 +59,37 @@ public class NetworkDice : NetworkBehaviour, IDice
     public void Init(DieType type)
     {
         if (!IsServer) return;
-        _netDieType.Value = (int)type;       // для late-join
-        InitializeMesh(type);                 // локально на сервере
-        InitClientRpc((int)type);            // всем подключённым клиентам
+        _netDieType.Value = (int)type;
+        InitializeMesh(type);
+        InitClientRpc((int)type);
+
+        // Красим ПОСЛЕ создания материала
+        Color c = PlayerColors.GetColor(OwnerClientId);
+        _netDiceColor.Value = new Vector3(c.r, c.g, c.b);
+        ApplyDiceColor(new Vector3(c.r, c.g, c.b));
     }
 
     public override void OnNetworkSpawn()
     {
         _rb = GetComponent<Rigidbody>();
         _rb.isKinematic = !IsOwner;
+
+        // Late-join: синхронизируем цвет
+        if (IsServer)
+        {
+            Color c = PlayerColors.GetColor(OwnerClientId);
+            Debug.Log($"[DiceColor] OnSpawn server: owner={OwnerClientId}, color={c}, _netDiceColor before={_netDiceColor.Value}");
+            _netDiceColor.Value = new Vector3(c.r, c.g, c.b);
+            Debug.Log($"[DiceColor] OnSpawn server: _netDiceColor after={_netDiceColor.Value}");
+        }
+        else
+        {
+            Debug.Log($"[DiceColor] OnSpawn client: owner={OwnerClientId}, _netDiceColor={_netDiceColor.Value}");
+        }
+
+        // Применяем цвет из NetworkVariable (работает для late-join)
+        ApplyDiceColor(_netDiceColor.Value);
+        _netDiceColor.OnValueChanged += (old, val) => ApplyDiceColor(val);
 
         // Late-join: NetworkVariable уже содержит правильное значение
         int typeInt = _netDieType.Value;
@@ -76,6 +102,16 @@ public class NetworkDice : NetworkBehaviour, IDice
             if (!_didInit)
                 InitializeMesh((DieType)newVal);
         };
+    }
+
+    private void ApplyDiceColor(Vector3 rgb)
+    {
+        var renderer = GetComponent<MeshRenderer>();
+        if (renderer != null)
+        {
+            renderer.material.SetColor("_BaseColor", new Color(rgb.x, rgb.y, rgb.z));
+            Debug.Log($"[DiceColor] Applied {(Vector3)rgb} to {gameObject.name}, IsOwner={IsOwner}");
+        }
     }
 
     [Rpc(SendTo.NotServer)]
@@ -99,9 +135,15 @@ public class NetworkDice : NetworkBehaviour, IDice
         if (urpLit != null)
         {
             Material mat = new Material(urpLit);
-            mat.color = new Color(0.85f, 0.15f, 0.12f);
+            mat.SetColor("_BaseColor", new Color(0.5f, 0.5f, 0.5f)); // серый
             mat.SetFloat("_Smoothness", 0f);
+            mat.EnableKeyword("_EMISSION");
             renderer.material = mat;
+
+            // Восстанавливаем цвет из NetworkVariable (если уже установлен)
+            Vector3 savedColor = _netDiceColor.Value;
+            if (savedColor != new Vector3(0.5f, 0.5f, 0.5f))
+                mat.SetColor("_BaseColor", new Color(savedColor.x, savedColor.y, savedColor.z));
         }
 
         MeshCollider mc = GetComponent<MeshCollider>();
@@ -238,7 +280,7 @@ public class NetworkDice : NetworkBehaviour, IDice
         BroadcastResultClientRpc(DieType.ToString(), result, OwnerClientId, ownerNickname);
     }
 
-    [Rpc(SendTo.NotServer)]
+    [Rpc(SendTo.Everyone)]
     private void BroadcastResultClientRpc(string dieType, int result, ulong throwerId, string ownerNickname)
     {
         Debug.Log($"[Dice] Player {throwerId} ({ownerNickname}) rolled {dieType}: {result}");

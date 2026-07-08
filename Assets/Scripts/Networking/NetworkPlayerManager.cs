@@ -13,16 +13,16 @@ public class NetworkPlayerManager : MonoBehaviour
     {
         if (Instance != null) { Destroy(gameObject); return; }
         Instance = this;
-    }
 
-    private void Start()
-    {
+        // Подписываемся в Awake (раньше Start)
         if (NetworkManager.Singleton != null)
         {
             NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
             NetworkManager.Singleton.OnClientDisconnectCallback += OnClientDisconnected;
         }
     }
+
+    private void Start() { }
 
     private void OnClientConnected(ulong clientId)
     {

@@ -63,10 +63,19 @@ public class NetworkDiceManager : MonoBehaviour
         {
             NetworkManager.Singleton.CustomMessagingManager.RegisterNamedMessageHandler(
                 MSG_SPAWN_DICE, OnSpawnDiceRequest);
+            NetworkManager.Singleton.CustomMessagingManager.RegisterNamedMessageHandler(
+                "DespawnDice", OnDespawnDiceRequest);
             _handlerRegistered = true;
         }
 
         Debug.Log("[DiceManager] Spawn handler registered");
+    }
+
+    private void OnDespawnDiceRequest(ulong senderId, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out ulong netId);
+        if (NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(netId, out var netObj))
+            netObj.Despawn();
     }
 
     private void OnDestroy()
@@ -75,7 +84,10 @@ public class NetworkDiceManager : MonoBehaviour
         {
             NetworkManager.Singleton.OnServerStarted -= OnServerStarted;
             if (_handlerRegistered)
+            {
                 NetworkManager.Singleton.CustomMessagingManager.UnregisterNamedMessageHandler(MSG_SPAWN_DICE);
+                NetworkManager.Singleton.CustomMessagingManager.UnregisterNamedMessageHandler("DespawnDice");
+            }
         }
     }
 

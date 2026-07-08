@@ -1,8 +1,8 @@
 using UnityEngine;
 
 /// <summary>
-/// Подсветка дайса — меняет цвет материала на голубой.
-/// Максимально просто и надёжно.
+/// Подсветка дайса — emission вместо смены цвета.
+/// Цвет кубика не трогаем.
 /// </summary>
 [RequireComponent(typeof(MeshRenderer))]
 public class DiceHighlight : MonoBehaviour
@@ -10,26 +10,24 @@ public class DiceHighlight : MonoBehaviour
     [Tooltip("Цвет подсветки")]
     public Color highlightColor = new Color(0.2f, 0.6f, 1f);
 
-    private Color _originalColor;
     private Material _material;
+    private static readonly int EmissionColor = Shader.PropertyToID("_EmissionColor");
     private bool _highlighted;
 
     void Awake()
     {
         _material = GetComponent<MeshRenderer>().material;
-        _originalColor = _material.GetColor("_BaseColor");
+        _material.EnableKeyword("_EMISSION");
     }
 
     public void SetHighlighted(bool highlighted)
     {
         if (_highlighted == highlighted) return;
         _highlighted = highlighted;
-        _material.SetColor("_BaseColor", highlighted ? highlightColor : _originalColor);
-    }
 
-    void OnDestroy()
-    {
-        if (_material != null)
-            _material.SetColor("_BaseColor", _originalColor);
+        var mr = GetComponent<MeshRenderer>();
+        if (mr == null) return;
+        mr.material.EnableKeyword("_EMISSION");
+        mr.material.SetColor(EmissionColor, highlighted ? highlightColor * 0.5f : Color.black);
     }
 }

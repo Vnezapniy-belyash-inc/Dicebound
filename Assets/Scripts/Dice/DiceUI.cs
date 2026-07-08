@@ -565,14 +565,38 @@ public class DiceUI : MonoBehaviour
 
     void ClearAll()
     {
-        if (DiceManager.Instance == null) return;
-        DiceManager.Instance.ClearAll();
+        // Удаляем сетевые кубики
+        var netDice = FindObjectsByType<NetworkDice>(FindObjectsInactive.Exclude);
+        foreach (var nd in netDice)
+        {
+            if (nd.IsOwner && nd.TryGetComponent<NetworkObject>(out var no) && no.IsSpawned)
+            {
+                if (NetworkManager.Singleton.IsServer)
+                    no.Despawn();
+                else
+                    SendDespawnRequest(no.NetworkObjectId);
+            }
+        }
+
+        // Удаляем локальные кубики
+        if (DiceManager.Instance != null)
+            DiceManager.Instance.ClearAll();
+
         _lastResults.Clear();
         _trackingRoll = false;
         _rollingCount = 0;
-        _logEntries.Clear();
+        // Логи НЕ чистим!
         UpdateResultText();
         UpdateLogText();
+    }
+
+    private static void SendDespawnRequest(ulong netId)
+    {
+        var writer = new FastBufferWriter(sizeof(ulong), Unity.Collections.Allocator.Temp);
+        writer.WriteValueSafe(netId);
+        NetworkManager.Singleton.CustomMessagingManager.SendNamedMessage(
+            "DespawnDice", NetworkManager.ServerClientId, writer);
+        writer.Dispose();
     }
 
     /// <summary>Начинает отслеживание ручного броска (drag-and-drop).</summary>
@@ -596,7 +620,7 @@ public class DiceUI : MonoBehaviour
             ? ownerNickname
             : $"P{throwerId}";
         string logLine = $"[{who}] {DieTypeName(type)}={result}";
-        _logEntries.Add(logLine);
+        _logEntries.Insert(0, logLine);
         UpdateLogText();
         Debug.Log($"[Dice] Remote: {who} rolled {dieTypeName}: {result}");
     }
@@ -737,7 +761,7 @@ public class DiceUI : MonoBehaviour
         if (_rollingCount == 0 && _lastResults.Count > 0)
         {
             string logLine = $"[{_lastResults.Count}] {string.Join(" + ", _lastResults.ConvertAll(r => $"{DieTypeName(r.type)}={r.value}"))} = {total}";
-            _logEntries.Add(logLine);
+            _logEntries.Insert(0, logLine);
             UpdateLogText();
         }
     }
