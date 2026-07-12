@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using Unity.Netcode;
 using UnityEngine;
@@ -29,6 +30,7 @@ public class MapController : NetworkBehaviour
     private Material _mapMaterial;
     private Texture2D _currentTexture;
     private Vector3 _baseScale = new Vector3(2f, 1, 2f); // переопределится при загрузке
+    private Vector3 _originalPlaneScale; // чистый размер MapPlane до масштабирования
     private bool _isDragging;
     private Vector3 _dragStartPlanePos;
     private Vector3 _dragStartMouseWorld;
@@ -50,6 +52,8 @@ public class MapController : NetworkBehaviour
 
         if (mapPlane != null)
         {
+            _originalPlaneScale = mapPlane.transform.localScale;
+
             var renderer = mapPlane.GetComponent<MeshRenderer>();
             if (renderer != null)
             {
@@ -124,13 +128,25 @@ public class MapController : NetworkBehaviour
     public void LoadImage()
     {
         if (!IsOwner) return;
+        PickImageFile(path =>
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            byte[] data = File.ReadAllBytes(path);
+            ApplyImage(data);
+        });
+    }
+
+    private static void PickImageFile(Action<string> onPicked)
+    {
 #if UNITY_EDITOR
-        string path = EditorUtility.OpenFilePanel("Выберите изображение", "", "png,jpg,jpeg,bmp,tga");
-        if (string.IsNullOrEmpty(path)) return;
-        byte[] data = File.ReadAllBytes(path);
-        ApplyImage(data);
+        string p = EditorUtility.OpenFilePanel("Выберите изображение", "", "png,jpg,jpeg,bmp,tga");
+        onPicked(string.IsNullOrEmpty(p) ? null : p);
 #else
-        Debug.LogWarning("[Map] LoadImage: в билде нужна своя реализация");
+        SimpleFileBrowser.FileBrowser.ShowLoadDialog(
+            (paths) => onPicked(paths.Length > 0 ? paths[0] : null),
+            () => onPicked(null),
+            SimpleFileBrowser.FileBrowser.PickMode.Files,
+            false, null, null, "Выберите изображение", "Select");
 #endif
     }
 
@@ -293,8 +309,8 @@ public class MapController : NetworkBehaviour
     {
         if (_currentTexture == null || mapPlane == null) return;
         float aspect = (float)_currentTexture.width / _currentTexture.height;
-        // Берём текущий scale MapPlane как базовый размер
-        float baseSize = Mathf.Max(mapPlane.transform.localScale.x, mapPlane.transform.localScale.z);
+        // Используем чистый исходный размер, а не текущий localScale (который меняется при масштабировании)
+        float baseSize = Mathf.Max(_originalPlaneScale.x, _originalPlaneScale.z);
         if (aspect >= 1)
             _baseScale = new Vector3(baseSize, 1, baseSize / aspect);
         else

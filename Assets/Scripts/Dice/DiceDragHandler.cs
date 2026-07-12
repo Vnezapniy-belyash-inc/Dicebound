@@ -66,6 +66,11 @@ public class DiceDragHandler : MonoBehaviour
         Keyboard k = Keyboard.current;
         if (m == null || _cam == null) return;
 
+        // Блокируем драг только тому, кто сам использует инструмент
+        if (MeasurementTool.Instance != null && MeasurementTool.Instance.IsActive
+            && MeasurementTool.Instance.IsOwner)
+            return;
+
         bool ctrl = k != null && k.ctrlKey.isPressed;
 
         if (m.leftButton.wasPressedThisFrame)

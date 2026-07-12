@@ -28,7 +28,11 @@ public class TokenManager : MonoBehaviour
     private void Start()
     {
         if (NetworkManager.Singleton != null)
+        {
             NetworkManager.Singleton.OnServerStarted += OnServerStarted;
+            TokenController.EnsureLateJoinHook();
+            CellMarker.EnsureRegistered();
+        }
     }
 
     private void OnServerStarted()
@@ -89,6 +93,7 @@ public class TokenManager : MonoBehaviour
         pos.y = spawnHeight;
         NetworkObject netObj = Instantiate(tokenPrefab, pos, Quaternion.identity);
         netObj.SpawnWithOwnership(ownerId);
+        netObj.DontDestroyWithOwner = true; // не удалять при дисконнекте
         Debug.Log($"[Token] Spawned for owner {ownerId}");
     }
 }

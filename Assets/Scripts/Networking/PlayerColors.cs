@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// Система цветов игроков. Каждому clientId назначается уникальный цвет.
+/// Система цветов игроков. Привязана к нику, переживает переподключения.
 /// </summary>
 public static class PlayerColors
 {
@@ -19,21 +19,47 @@ public static class PlayerColors
         new Color(0.5f, 0.9f, 0.3f), // лайм
     };
 
-    private static readonly Dictionary<ulong, Color> _playerColors = new();
+    private static readonly Dictionary<string, Color> _nickColors = new();
+    private static readonly Dictionary<ulong, string> _clientNicks = new();
     private static int _nextIndex;
 
-    /// <summary>Назначает цвет игроку при подключении.</summary>
-    public static Color AssignColor(ulong clientId)
+    /// <summary>Назначает или возвращает цвет по нику.</summary>
+    public static Color GetOrAssignColor(ulong clientId, string nickname)
     {
+        // Уже есть цвет для этого ника?
+        if (_nickColors.TryGetValue(nickname, out Color existing))
+        {
+            _clientNicks[clientId] = nickname;
+            return existing;
+        }
+
+        // Новый цвет
         Color c = _palette[_nextIndex % _palette.Length];
-        _playerColors[clientId] = c;
         _nextIndex++;
+        _nickColors[nickname] = c;
+        _clientNicks[clientId] = nickname;
         return c;
     }
 
-    /// <summary>Возвращает цвет игрока (или серый если нет).</summary>
+    /// <summary>Возвращает цвет по clientId.</summary>
     public static Color GetColor(ulong clientId)
     {
-        return _playerColors.TryGetValue(clientId, out Color c) ? c : Color.gray;
+        if (_clientNicks.TryGetValue(clientId, out string nick) && _nickColors.TryGetValue(nick, out Color c))
+            return c;
+        return Color.gray;
+    }
+
+    /// <summary>Возвращает ник по clientId.</summary>
+    public static string GetNickname(ulong clientId)
+    {
+        return _clientNicks.TryGetValue(clientId, out string nick) ? nick : null;
+    }
+
+    /// <summary>Сбрасывает все данные (при полном сбросе лобби).</summary>
+    public static void Reset()
+    {
+        _nickColors.Clear();
+        _clientNicks.Clear();
+        _nextIndex = 0;
     }
 }

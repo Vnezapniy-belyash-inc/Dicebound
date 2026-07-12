@@ -1,3 +1,4 @@
+using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
@@ -14,6 +15,7 @@ public class LobbyUI : MonoBehaviour
     public Button joinButton;
     public InputField nicknameInput;
     public Text statusText;
+    public Button exitButton; // кнопка выхода из игры
 
     /// <summary>Никнейм текущего игрока (доступен всем после входа в лобби).</summary>
     public static string LocalNickname { get; private set; } = "Player";
@@ -24,6 +26,8 @@ public class LobbyUI : MonoBehaviour
     {
         hostButton.onClick.AddListener(OnHostClicked);
         joinButton.onClick.AddListener(OnJoinClicked);
+        if (exitButton != null)
+            exitButton.onClick.AddListener(() => Application.Quit());
 
         // Загружаем сохранённый ник
         string saved = PlayerPrefs.GetString("nickname", "");
@@ -34,6 +38,26 @@ public class LobbyUI : MonoBehaviour
 
         lobbyPanel.SetActive(true);
         statusText.text = "";
+
+        InvokeRepeating(nameof(TrySubscribeDisconnect), 0.2f, 0.5f);
+    }
+
+    void TrySubscribeDisconnect()
+    {
+        if (NetworkManager.Singleton == null) return;
+        NetworkManager.Singleton.OnClientDisconnectCallback += OnDisconnected;
+        CancelInvoke(nameof(TrySubscribeDisconnect));
+    }
+
+    void OnDisconnected(ulong clientId)
+    {
+        // Реагируем только на свой дисконнект
+        if (NetworkManager.Singleton != null && clientId != NetworkManager.Singleton.LocalClientId)
+            return;
+
+        PlayerColors.Reset();
+        UnityEngine.SceneManagement.SceneManager.LoadScene(
+            UnityEngine.SceneManagement.SceneManager.GetActiveScene().name);
     }
 
     private async void OnHostClicked()
@@ -47,6 +71,13 @@ public class LobbyUI : MonoBehaviour
 
         try
         {
+            // Сброс предыдущей сессии
+            if (NetworkManager.Singleton != null)
+            {
+                NetworkManager.Singleton.Shutdown();
+                await System.Threading.Tasks.Task.Delay(300);
+            }
+
             string code = await RelayManager.Instance.CreateRelayAllocation(9);
             GameNetworkManager.Instance.StartHost();
             lobbyPanel.SetActive(false);
@@ -83,6 +114,13 @@ public class LobbyUI : MonoBehaviour
 
         try
         {
+            // Сброс предыдущей сессии
+            if (NetworkManager.Singleton != null)
+            {
+                NetworkManager.Singleton.Shutdown();
+                await System.Threading.Tasks.Task.Delay(300);
+            }
+
             await RelayManager.Instance.JoinRelayAllocation(code);
             GameNetworkManager.Instance.StartClient();
             lobbyPanel.SetActive(false);
@@ -129,5 +167,14 @@ public class LobbyUI : MonoBehaviour
         {
             lobbyPanel.SetActive(!lobbyPanel.activeSelf);
         }
+    }
+
+    /// <summary>Принудительно показать меню (при выходе из лобби).</summary>
+    public void ShowLobby()
+    {
+        lobbyPanel.SetActive(true);
+        SetInteractable(true);
+        _isConnecting = false;
+        statusText.text = "";
     }
 }

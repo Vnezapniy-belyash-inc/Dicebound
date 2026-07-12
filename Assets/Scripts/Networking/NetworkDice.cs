@@ -44,6 +44,8 @@ public class NetworkDice : NetworkBehaviour, IDice
 
     private Rigidbody _rb;
     private DieFaceData[] _faces;
+    private MeshRenderer[] _faceRenderers;
+    private Camera _cam;
     private float _settleTimer;
     private bool _didInit;
 
@@ -60,13 +62,12 @@ public class NetworkDice : NetworkBehaviour, IDice
     {
         if (!IsServer) return;
         _netDieType.Value = (int)type;
-        InitializeMesh(type);
-        InitClientRpc((int)type);
 
-        // Красим ПОСЛЕ создания материала
         Color c = PlayerColors.GetColor(OwnerClientId);
         _netDiceColor.Value = new Vector3(c.r, c.g, c.b);
-        ApplyDiceColor(new Vector3(c.r, c.g, c.b));
+
+        InitializeMesh(type);
+        InitClientRpc((int)type);
     }
 
     public override void OnNetworkSpawn()
@@ -74,20 +75,6 @@ public class NetworkDice : NetworkBehaviour, IDice
         _rb = GetComponent<Rigidbody>();
         _rb.isKinematic = !IsOwner;
 
-        // Late-join: синхронизируем цвет
-        if (IsServer)
-        {
-            Color c = PlayerColors.GetColor(OwnerClientId);
-            Debug.Log($"[DiceColor] OnSpawn server: owner={OwnerClientId}, color={c}, _netDiceColor before={_netDiceColor.Value}");
-            _netDiceColor.Value = new Vector3(c.r, c.g, c.b);
-            Debug.Log($"[DiceColor] OnSpawn server: _netDiceColor after={_netDiceColor.Value}");
-        }
-        else
-        {
-            Debug.Log($"[DiceColor] OnSpawn client: owner={OwnerClientId}, _netDiceColor={_netDiceColor.Value}");
-        }
-
-        // Применяем цвет из NetworkVariable (работает для late-join)
         ApplyDiceColor(_netDiceColor.Value);
         _netDiceColor.OnValueChanged += (old, val) => ApplyDiceColor(val);
 
@@ -107,11 +94,14 @@ public class NetworkDice : NetworkBehaviour, IDice
     private void ApplyDiceColor(Vector3 rgb)
     {
         var renderer = GetComponent<MeshRenderer>();
-        if (renderer != null)
-        {
-            renderer.material.SetColor("_BaseColor", new Color(rgb.x, rgb.y, rgb.z));
-            Debug.Log($"[DiceColor] Applied {(Vector3)rgb} to {gameObject.name}, IsOwner={IsOwner}");
-        }
+        if (renderer == null) return;
+
+        var color = new Color(rgb.x, rgb.y, rgb.z);
+        renderer.material.SetColor("_BaseColor", color);
+
+        var highlight = GetComponent<DiceHighlight>();
+        if (highlight != null)
+            highlight.RefreshBaseColor(color);
     }
 
     [Rpc(SendTo.NotServer)]
@@ -137,7 +127,7 @@ public class NetworkDice : NetworkBehaviour, IDice
             Material mat = new Material(urpLit);
             mat.SetColor("_BaseColor", new Color(0.5f, 0.5f, 0.5f)); // серый
             mat.SetFloat("_Smoothness", 0f);
-            mat.EnableKeyword("_EMISSION");
+            mat.SetInt("_Cull", 2);
             renderer.material = mat;
 
             // Восстанавливаем цвет из NetworkVariable (если уже установлен)
@@ -157,11 +147,22 @@ public class NetworkDice : NetworkBehaviour, IDice
 
         CreateFaceLabels();
         gameObject.AddComponent<DiceHighlight>();
+        _cam = Camera.main;
         _didInit = true;
+
+        ApplyDiceColor(_netDiceColor.Value);
     }
 
     private void CreateFaceLabels()
     {
+        for (int i = transform.childCount - 1; i >= 0; i--)
+        {
+            Transform child = transform.GetChild(i);
+            if (child.name.StartsWith("FaceLabel"))
+                Destroy(child.gameObject);
+        }
+
+        _faceRenderers = new MeshRenderer[_faces.Length];
         for (int i = 0; i < _faces.Length; i++)
         {
             var fd = _faces[i];
@@ -179,12 +180,8 @@ public class NetworkDice : NetworkBehaviour, IDice
             tm.characterSize = 0.04f;
 
             MeshRenderer mr = labelObj.GetComponent<MeshRenderer>();
-            if (mr != null)
-            {
-                Shader shader = Shader.Find("MeshokSGovnom/FontFaceUnlit");
-                if (shader != null)
-                    mr.material.shader = shader;
-            }
+            _faceRenderers[i] = mr;
+            DiceLabelSetup.ApplyLabelMaterial(mr, textColor);
         }
     }
 
@@ -221,6 +218,8 @@ public class NetworkDice : NetworkBehaviour, IDice
 
     private void Update()
     {
+        DiceLabelSetup.UpdateBackFaceVisibility(_faceRenderers, _faces, transform, _cam);
+
         if (!IsOwner || !_didInit || !IsRolling || HasResult) return;
 
         bool isSettled = _rb.linearVelocity.magnitude < stopThreshold

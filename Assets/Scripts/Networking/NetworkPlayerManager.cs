@@ -26,9 +26,36 @@ public class NetworkPlayerManager : MonoBehaviour
 
     private void OnClientConnected(ulong clientId)
     {
-        // Назначаем цвет новому игроку
-        var color = PlayerColors.AssignColor(clientId);
-        Debug.Log($"[Multiplayer] Client {clientId} connected. Color: {color}. Total: {NetworkManager.Singleton.ConnectedClients.Count}");
+        // Для локального клиента — используем его ник. Для остальных — фолбэк.
+        string nick = clientId == NetworkManager.Singleton.LocalClientId
+            ? (LobbyUI.LocalNickname ?? $"Player_{clientId}")
+            : $"Player_{clientId}";
+        var color = PlayerColors.GetOrAssignColor(clientId, nick);
+        Debug.Log($"[Multiplayer] Client {clientId} ({nick}) connected. Color: {color}. Total: {NetworkManager.Singleton.ConnectedClients.Count}");
+
+        // Перепривязать старые токены этого ника к новому clientId
+        ReassignTokens(nick, clientId);
+    }
+
+    private static void ReassignTokens(string nickname, ulong newClientId)
+    {
+        if (!NetworkManager.Singleton.IsServer) return;
+        var tokens = FindObjectsByType<TokenController>(FindObjectsInactive.Exclude);
+        foreach (var t in tokens)
+        {
+            if (!t.IsSpawned) continue;
+            string ownerNick = PlayerColors.GetNickname(t.OwnerClientId);
+            // Если токен принадлежал этому же нику (но старому clientId) — передаём владение
+            if (ownerNick == nickname && t.OwnerClientId != newClientId)
+            {
+                try
+                {
+                    t.GetComponent<NetworkObject>().ChangeOwnership(newClientId);
+                    Debug.Log($"[Multiplayer] Reassigned token to {nickname} (new client {newClientId})");
+                }
+                catch (System.Exception) { /* владелец мог отключиться */ }
+            }
+        }
     }
 
     private void OnClientDisconnected(ulong clientId)

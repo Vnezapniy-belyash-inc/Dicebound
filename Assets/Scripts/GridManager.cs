@@ -34,11 +34,19 @@ public class GridManager : MonoBehaviour
     private Bounds _mapBounds;
     private bool _gridCreated;
 
+    // Реестр занятых клеток (для предотвращения наложения токенов)
+    private readonly HashSet<Vector2Int> _occupiedCells = new();
+
     void Start()
     {
         // Форсируем тёмно-серый цвет (переопределяет сохранённый в сцене)
         gridColor = new Color(0.15f, 0.15f, 0.15f, 0.5f);
         GenerateFullGrid();
+
+        // Всегда создаём стены вокруг всей сетки 100×100
+        Bounds defaultBounds = new Bounds(Vector3.zero,
+            new Vector3(gridWidth * cellSize, 0.1f, gridHeight * cellSize));
+        UpdateWalls(defaultBounds);
     }
 
     /// <summary>Обновляет границы карты — показывает только клетки внутри.</summary>
@@ -48,7 +56,6 @@ public class GridManager : MonoBehaviour
         if (!_gridCreated) GenerateFullGrid();
         // Сетка НЕ двигается — остаётся в (0,0,0)
         UpdateVisibleCells();
-        if (createWalls) UpdateWalls(mapBounds);
     }
 
     // ═══ Создание полной сетки 100×100 (один раз) ═══
@@ -105,6 +112,11 @@ public class GridManager : MonoBehaviour
         LineRenderer lr = go.AddComponent<LineRenderer>();
         Material mat = new Material(Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color"));
         mat.SetFloat("_Surface", 1f); // Transparent
+        mat.SetFloat("_Blend", 0f);   // Alpha blending
+        mat.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+        mat.SetInt("_SrcBlend", 5);   // SrcAlpha
+        mat.SetInt("_DstBlend", 10);  // OneMinusSrcAlpha
+        mat.SetInt("_ZWrite", 0);     // Off
         mat.color = color;
         mat.renderQueue = 3000;
         lr.material = mat;
@@ -182,7 +194,7 @@ public class GridManager : MonoBehaviour
 
         _wallsParent = new GameObject("Walls");
         _wallsParent.transform.SetParent(transform);
-        _wallsParent.transform.localPosition = b.center;
+        _wallsParent.transform.localPosition = Vector3.zero; // стены не двигаются
 
         float halfW = b.size.x / 2f;
         float halfH = b.size.z / 2f;
@@ -240,5 +252,42 @@ public class GridManager : MonoBehaviour
         float halfW = gridWidth * cellSize / 2f;
         float halfH = gridHeight * cellSize / 2f;
         return new Vector3(-halfW + (col + 0.5f) * cellSize, y, -halfH + (row + 0.5f) * cellSize);
+    }
+
+    // ═══ Занятость клеток ═══
+
+    public bool IsCellOccupied(Vector2Int cell) => _occupiedCells.Contains(cell);
+
+    public bool TryOccupyCell(Vector2Int cell)
+    {
+        if (cell.x < 0 || cell.y < 0 || cell.x >= gridWidth || cell.y >= gridHeight)
+            return false;
+        return _occupiedCells.Add(cell);
+    }
+
+    public void ReleaseCell(Vector2Int cell) => _occupiedCells.Remove(cell);
+
+    /// <summary>Ищет ближайшую свободную клетку по спирали (радиус до maxRadius).</summary>
+    public Vector2Int FindNearestFreeCell(Vector2Int desired, int maxRadius = 3)
+    {
+        if (!IsCellOccupied(desired)) return desired;
+
+        // Спиральный поиск
+        for (int r = 1; r <= maxRadius; r++)
+        {
+            for (int dx = -r; dx <= r; dx++)
+            {
+                for (int dy = -r; dy <= r; dy++)
+                {
+                    if (Mathf.Abs(dx) != r && Mathf.Abs(dy) != r) continue;
+                    Vector2Int candidate = new(desired.x + dx, desired.y + dy);
+                    if (candidate.x >= 0 && candidate.x < gridWidth &&
+                        candidate.y >= 0 && candidate.y < gridHeight &&
+                        !IsCellOccupied(candidate))
+                        return candidate;
+                }
+            }
+        }
+        return desired; // нет свободных — остаёмся на месте
     }
 }

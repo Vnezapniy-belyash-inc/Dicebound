@@ -3,7 +3,7 @@ using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 /// <summary>
-/// Управление камерой — два режима, переключение по Tab:
+/// Управление камерой — два режима, переключение по F1:
 ///
 ///   [Normal — top-down]
 ///     WASD/стрелки  → движение по XZ
@@ -55,8 +55,8 @@ public class CameraMovement : MonoBehaviour
         Keyboard k = Keyboard.current;
         Mouse m = Mouse.current;
 
-        // ── Toggle режима ──
-        if (k != null && k.tabKey.wasPressedThisFrame)
+        // ── Toggle режима (F1) ──
+        if (k != null && k.f1Key.wasPressedThisFrame)
         {
             _freeMode = !_freeMode;
             // При входе в free — синхронизируем углы с текущим поворотом

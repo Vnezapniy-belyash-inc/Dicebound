@@ -4,7 +4,6 @@ using UnityEngine;
 
 /// <summary>
 /// Враппер над NetworkManager — хост/клиент/шатдаун.
-/// Висит на GameObject «NetworkManager» на сцене.
 /// </summary>
 public class GameNetworkManager : MonoBehaviour
 {
@@ -30,4 +29,25 @@ public class GameNetworkManager : MonoBehaviour
     public ulong LocalClientId => _networkManager.LocalClientId;
 
     public NetworkManager NetManager => _networkManager;
+
+    /// <summary>Полный сброс: шатдаун + ожидание завершения.</summary>
+    public async System.Threading.Tasks.Task ShutdownAndReset()
+    {
+        if (_networkManager == null || !_networkManager.IsListening) return;
+
+        var tcs = new System.Threading.Tasks.TaskCompletionSource<bool>();
+        System.Action<ulong> onDisconnect = null;
+        onDisconnect = (id) =>
+        {
+            _networkManager.OnClientDisconnectCallback -= onDisconnect;
+            tcs.TrySetResult(true);
+        };
+
+        _networkManager.OnClientDisconnectCallback += onDisconnect;
+        _networkManager.Shutdown();
+
+        // Ждём до 3 секунд
+        var timeout = System.Threading.Tasks.Task.Delay(3000);
+        await System.Threading.Tasks.Task.WhenAny(tcs.Task, timeout);
+    }
 }

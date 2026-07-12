@@ -45,10 +45,13 @@ public class RelayManager : MonoBehaviour
     {
         await InitializeServices();
 
+        // Сброс транспорта перед новой аллокацией
+        var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
+        transport.SetConnectionData("127.0.0.1", 7777); // сброс на дефолт
+
         Allocation allocation = await RelayService.Instance.CreateAllocationAsync(maxPlayers - 1);
         string joinCode = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
 
-        var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
         transport.SetHostRelayData(
             allocation.RelayServer.IpV4,
             (ushort)allocation.RelayServer.Port,
@@ -69,9 +72,12 @@ public class RelayManager : MonoBehaviour
     {
         await InitializeServices();
 
+        // Сброс транспорта
+        var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
+        transport.SetConnectionData("127.0.0.1", 7777);
+
         JoinAllocation joinAllocation = await RelayService.Instance.JoinAllocationAsync(joinCode);
 
-        var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
         transport.SetClientRelayData(
             joinAllocation.RelayServer.IpV4,
             (ushort)joinAllocation.RelayServer.Port,

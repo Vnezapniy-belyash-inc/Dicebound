@@ -4,7 +4,7 @@ Shader "MeshokSGovnom/FontFaceUnlit"
     {
         _MainTex ("Font Texture", 2D) = "white" {}
         _Color ("Color", Color) = (1,1,1,1)
-        _Cutoff ("Alpha Cutoff", Range(0, 1)) = 0.5
+        _Cutoff ("Alpha Cutoff", Range(0, 1)) = 0.1
     }
     SubShader
     {

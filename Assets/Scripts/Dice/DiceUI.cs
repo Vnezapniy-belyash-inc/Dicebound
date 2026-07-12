@@ -40,6 +40,16 @@ public class DiceUI : MonoBehaviour
     private readonly List<string> _logEntries = new(); // строки лога
     private GridManager _gridManager;
 
+    // Кнопка выхода
+    private GameObject _leaveButton;
+    private GameObject _leaveConfirmDialog;
+
+    // Список игроков (Tab)
+    private GameObject _playerListPanel;
+
+    // Таб для возврата свёрнутого лога
+    private GameObject _logTab;
+
     void Awake()
     {
         if (Instance != null) { Destroy(gameObject); return; }
@@ -52,39 +62,75 @@ public class DiceUI : MonoBehaviour
         BuildUI();
         if (DiceManager.Instance != null)
             DiceManager.Instance.OnAnyResult += OnDieResult;
+        InvokeRepeating(nameof(TrySubscribeToMeasureTool), 0.1f, 0.5f);
     }
+
+    void TrySubscribeToMeasureTool()
+    {
+        var mt = MeasurementTool.Instance;
+        if (mt == null || _subscribedToMT) return;
+        mt.OnDragStart += () => { if (_textureMenu != null) _textureMenu.SetActive(false); };
+        mt.OnDragEnd += () => { if (mt.IsActive && mt.CurrentMode != MeasurementTool.Mode.Ruler) { _textureMenuOpen = true; _textureMenu?.SetActive(true); } };
+        _subscribedToMT = true;
+        CancelInvoke(nameof(TrySubscribeToMeasureTool));
+    }
+    private bool _subscribedToMT;
 
     void Update()
     {
         Keyboard k = Keyboard.current;
         if (k == null) return;
 
+        // В главном меню хоткеи не работают
+        if (_sidebarGO == null || !_sidebarGO.activeSelf) return;
+
+        // Не работают когда фокус на текстовом поле
+        if (IsInputFocused()) return;
+
+        // Tab — показать/скрыть список игроков
+        if (_playerListPanel != null)
+        {
+            bool tabHeld = k.tabKey.isPressed;
+            if (_playerListPanel.activeSelf != tabHeld)
+            {
+                _playerListPanel.SetActive(tabHeld);
+                if (tabHeld) RefreshPlayerList();
+            }
+        }
+
         if (k.eKey.wasPressedThisFrame)
-        {
-            if (_debugPanelGO != null)
-                _debugPanelGO.SetActive(!_debugPanelGO.activeSelf);
-        }
+            TogglePanel(_debugPanelGO, null);
 
-        if (k.qKey.wasPressedThisFrame && _sidebarGO != null)
-        {
-            _sidebarGO.SetActive(!_sidebarGO.activeSelf);
-        }
+        if (k.qKey.wasPressedThisFrame)
+            TogglePanel(_sidebarGO, null);
 
-        if (k.xKey.wasPressedThisFrame && _bottomPanelGO != null)
-        {
-            _bottomPanelGO.SetActive(!_bottomPanelGO.activeSelf);
-        }
+        if (k.xKey.wasPressedThisFrame)
+            TogglePanel(_bottomPanelGO, null);
 
-        if (k.lKey.wasPressedThisFrame && _logPanelGO != null)
-        {
-            _logPanelGO.SetActive(!_logPanelGO.activeSelf);
-        }
+        if (k.lKey.wasPressedThisFrame)
+            TogglePanel(_logPanelGO, _logTab);
+    }
+
+    void TogglePanel(GameObject panel, GameObject tab)
+    {
+        if (panel == null) return;
+        bool show = !panel.activeSelf;
+        panel.SetActive(show);
+        if (tab != null) tab.SetActive(!show);
     }
 
     void OnDestroy()
     {
         if (DiceManager.Instance != null)
             DiceManager.Instance.OnAnyResult -= OnDieResult;
+    }
+
+    static bool IsInputFocused()
+    {
+        var es = UnityEngine.EventSystems.EventSystem.current;
+        if (es == null) return false;
+        var go = es.currentSelectedGameObject;
+        return go != null && go.GetComponent<InputField>() != null;
     }
 
     // ══════════════════════════════════════════════
@@ -151,11 +197,11 @@ public class DiceUI : MonoBehaviour
         float panelW = 220f;
         float panelH = 50f;
         RectTransform prt = panelGO.GetComponent<RectTransform>();
-        prt.anchorMin = new Vector2(0.5f, 1f);
-        prt.anchorMax = new Vector2(0.5f, 1f);
-        prt.pivot = new Vector2(0.5f, 1f);
+        prt.anchorMin = new Vector2(0.5f, 0.5f);
+        prt.anchorMax = new Vector2(0.5f, 0.5f);
+        prt.pivot = new Vector2(0.5f, 0.5f);
         prt.sizeDelta = new Vector2(panelW, panelH);
-        prt.anchoredPosition = new Vector2(0f, -5f);
+        prt.anchoredPosition = Vector2.zero;
 
         // Кнопка Tex
         float texW = 50f;
@@ -224,12 +270,16 @@ public class DiceUI : MonoBehaviour
         BuildLeftSidebar();
         BuildBottomPanel();
         BuildLogPanel();
+        BuildLeaveButton(canvasGO.transform, uiFont);
+        BuildPlayerListPanel(canvasGO.transform, uiFont);
 
-        // Все панели скрыты при старте — покажутся после входа в лобби
+        // Все панели скрыты при старте — покажутся после host/join
         if (_debugPanelGO != null) _debugPanelGO.SetActive(false);
         if (_sidebarGO != null) _sidebarGO.SetActive(false);
         if (_bottomPanelGO != null) _bottomPanelGO.SetActive(false);
         if (_logPanelGO != null) _logPanelGO.SetActive(false);
+
+        BuildTabs();
     }
 
     /// <summary>Показывает игровые панели (вызывается после host/join).</summary>
@@ -237,7 +287,93 @@ public class DiceUI : MonoBehaviour
     {
         if (_sidebarGO != null) _sidebarGO.SetActive(true);
         if (_bottomPanelGO != null) _bottomPanelGO.SetActive(true);
-        if (_logPanelGO != null) _logPanelGO.SetActive(true);
+        if (_logPanelGO != null) { _logPanelGO.SetActive(true); if (_logTab != null) _logTab.SetActive(false); }
+        if (_leaveButton != null) _leaveButton.SetActive(true);
+    }
+
+    /// <summary>Скрывает все игровые панели (при выходе из лобби).</summary>
+    public void HideGamePanels()
+    {
+        if (_sidebarGO != null) _sidebarGO.SetActive(false);
+        if (_bottomPanelGO != null) _bottomPanelGO.SetActive(false);
+        if (_debugPanelGO != null) _debugPanelGO.SetActive(false);
+        if (_logPanelGO != null) _logPanelGO.SetActive(false);
+        if (_leaveButton != null) _leaveButton.SetActive(false);
+        if (_leaveConfirmDialog != null) _leaveConfirmDialog.SetActive(false);
+        if (_textureMenu != null) _textureMenu.SetActive(false);
+    }
+
+    void BuildLeaveButton(Transform canvasTr, Font font)
+    {
+        // Кнопка выхода (красная, слева сверху)
+        _leaveButton = new GameObject("LeaveButton");
+        _leaveButton.transform.SetParent(canvasTr, false);
+        _leaveButton.SetActive(false); // скрыта до входа в игру
+
+        Image img = _leaveButton.AddComponent<Image>();
+        img.color = new Color(0.85f, 0.1f, 0.1f, 0.85f);
+
+        Button btn = _leaveButton.AddComponent<Button>();
+        btn.onClick.AddListener(ShowLeaveConfirm);
+
+        RectTransform rt = _leaveButton.GetComponent<RectTransform>();
+        rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0f, 1f);
+        rt.sizeDelta = new Vector2(28f, 28f);
+        rt.anchoredPosition = new Vector2(12f, -12f);
+
+        // Крестик
+        GameObject xGO = new GameObject("X");
+        xGO.transform.SetParent(_leaveButton.transform, false);
+        Text xTxt = xGO.AddComponent<Text>();
+        xTxt.text = "✕"; xTxt.font = font; xTxt.fontSize = 18;
+        xTxt.fontStyle = FontStyle.Bold; xTxt.color = Color.white;
+        xTxt.alignment = TextAnchor.MiddleCenter;
+        RectTransform xrt = xTxt.GetComponent<RectTransform>();
+        xrt.anchorMin = Vector2.zero; xrt.anchorMax = Vector2.one;
+        xrt.sizeDelta = Vector2.zero;
+
+        // Диалог подтверждения
+        _leaveConfirmDialog = new GameObject("LeaveConfirm");
+        _leaveConfirmDialog.transform.SetParent(canvasTr, false);
+        _leaveConfirmDialog.SetActive(false);
+
+        Image dImg = _leaveConfirmDialog.AddComponent<Image>();
+        dImg.color = new Color(0.08f, 0.08f, 0.12f, 0.95f);
+
+        RectTransform drt = _leaveConfirmDialog.GetComponent<RectTransform>();
+        drt.anchorMin = drt.anchorMax = drt.pivot = new Vector2(0.5f, 0.5f);
+        drt.sizeDelta = new Vector2(300f, 120f);
+        drt.anchoredPosition = Vector2.zero;
+
+        // Текст
+        GameObject qGO = new GameObject("Question");
+        qGO.transform.SetParent(_leaveConfirmDialog.transform, false);
+        Text qTxt = qGO.AddComponent<Text>();
+        qTxt.text = "Выйти из лобби?";
+        qTxt.font = font; qTxt.fontSize = 20; qTxt.fontStyle = FontStyle.Bold;
+        qTxt.color = Color.white; qTxt.alignment = TextAnchor.MiddleCenter;
+        RectTransform qrt = qTxt.GetComponent<RectTransform>();
+        qrt.anchorMin = new Vector2(0, 0.5f); qrt.anchorMax = new Vector2(1, 1f);
+        qrt.sizeDelta = Vector2.zero; qrt.anchoredPosition = Vector2.zero;
+
+        // Кнопка Да
+        MakeButton(_leaveConfirmDialog.transform, "Да", 40f, -80f, 90f, 34f, font, DoLeave);
+
+        // Кнопка Нет
+        MakeButton(_leaveConfirmDialog.transform, "Нет", 170f, -80f, 90f, 34f, font,
+            () => _leaveConfirmDialog.SetActive(false));
+    }
+
+    void ShowLeaveConfirm()
+    {
+        if (_leaveConfirmDialog != null)
+            _leaveConfirmDialog.SetActive(true);
+    }
+
+    void DoLeave()
+    {
+        if (NetworkManager.Singleton != null)
+            NetworkManager.Singleton.Shutdown();
     }
 
     /// <summary>
@@ -292,15 +428,214 @@ public class DiceUI : MonoBehaviour
             float y = -topMargin - i * (iconSize + iconGap);
             if (i == 0)
             {
-                // Первая иконка — создать токен
-                MakeIcon(sidebarGO.transform, "⬤", new Color(0.5f, 0.6f, 0.9f, 0.9f),
-                    iconX, y, iconSize, uiFont, () => TokenManager.Instance?.RequestSpawnToken(), anchorY: 1f);
+                // Создать токен
+                MakeIcon(sidebarGO.transform, "TOK\nEN", new Color(0.2f, 0.25f, 0.35f, 0.9f),
+                    iconX, y, iconSize, uiFont, () => TokenManager.Instance?.RequestSpawnToken(), anchorY: 1f, fontSize: 16);
+            }
+            else if (i == 1)
+            {
+                // Линейка
+                MakeIcon(sidebarGO.transform, "DI\nST", new Color(0.2f, 0.25f, 0.35f, 0.9f),
+                    iconX, y, iconSize, uiFont, () => MeasurementTool.Instance?.Activate(0), anchorY: 1f, fontSize: 16);
+            }
+            else if (i == 2)
+            {
+                // Радиус (круг)
+                MakeIcon(sidebarGO.transform, "SPH\nERE", new Color(0.2f, 0.25f, 0.35f, 0.9f),
+                    iconX, y, iconSize, uiFont, () => MeasurementTool.Instance?.Activate(1), anchorY: 1f, fontSize: 16);
+            }
+            else if (i == 3)
+            {
+                // Квадрат
+                MakeIcon(sidebarGO.transform, "SQA\nRE", new Color(0.2f, 0.25f, 0.35f, 0.9f),
+                    iconX, y, iconSize, uiFont, () => MeasurementTool.Instance?.Activate(2), anchorY: 1f, fontSize: 16);
+            }
+            else if (i == 4)
+            {
+                // Конус
+                MakeIcon(sidebarGO.transform, "CON\nUS", new Color(0.2f, 0.25f, 0.35f, 0.9f),
+                    iconX, y, iconSize, uiFont, () => MeasurementTool.Instance?.Activate(3), anchorY: 1f, fontSize: 16);
+            }
+            else if (i == 5)
+            {
+                // Применить область
+                MakeIcon(sidebarGO.transform, "EFF\nECT", new Color(0.2f, 0.25f, 0.35f, 0.9f),
+                    iconX, y, iconSize, uiFont, () => ToggleTextureMenu(), anchorY: 1f, fontSize: 16);
+            }
+            else if (i == 6)
+            {
+                // Удалить все эффекты
+                MakeIcon(sidebarGO.transform, "DEL\nEFF", new Color(0.2f, 0.25f, 0.35f, 0.9f),
+                    iconX, y, iconSize, uiFont, () => CellMarker.ClearAllMyMarkers(), anchorY: 1f, fontSize: 16);
             }
             else
             {
                 MakeIcon(sidebarGO.transform, "?", new Color(0.2f, 0.25f, 0.35f, 0.9f),
-                    iconX, y, iconSize, uiFont, () => { /* TODO: функционал */ }, anchorY: 1f);
+                    iconX, y, iconSize, uiFont, () => { /* TODO */ }, anchorY: 1f);
             }
+        }
+
+        BuildTextureMenu(sidebarGO.transform);
+    }
+
+    private GameObject _textureMenu;
+    private bool _textureMenuOpen;
+
+    void ToggleTextureMenu()
+    {
+        if (MeasurementTool.Instance == null || !MeasurementTool.Instance.IsActive) return;
+        _textureMenuOpen = !_textureMenuOpen;
+        if (_textureMenu != null) _textureMenu.SetActive(_textureMenuOpen);
+    }
+
+    // ═══ Список игроков (Tab) ═══
+
+    void BuildPlayerListPanel(Transform canvasTr, Font font)
+    {
+        _playerListPanel = new GameObject("PlayerListPanel", typeof(RectTransform));
+        _playerListPanel.transform.SetParent(canvasTr, false);
+        _playerListPanel.SetActive(false);
+
+        var bg = _playerListPanel.AddComponent<Image>();
+        bg.color = new Color(0.05f, 0.07f, 0.11f, 0.92f);
+
+        var rt = _playerListPanel.GetComponent<RectTransform>();
+        rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0.5f);
+        rt.sizeDelta = new Vector2(280f, 200f);
+        rt.anchoredPosition = Vector2.zero;
+
+        // Заголовок
+        var titleGO = new GameObject("Title", typeof(RectTransform));
+        titleGO.transform.SetParent(_playerListPanel.transform, false);
+        var titleTxt = titleGO.AddComponent<Text>();
+        titleTxt.text = "ИГРОКИ";
+        titleTxt.font = font; titleTxt.fontSize = 14; titleTxt.fontStyle = FontStyle.Bold;
+        titleTxt.color = new Color(0.5f, 0.55f, 0.65f);
+        titleTxt.alignment = TextAnchor.MiddleCenter;
+        var trt = titleGO.GetComponent<RectTransform>();
+        trt.anchorMin = trt.anchorMax = new Vector2(0.5f, 1f);
+        trt.pivot = new Vector2(0.5f, 1f);
+        trt.sizeDelta = new Vector2(260f, 24f);
+        trt.anchoredPosition = new Vector2(0f, -8f);
+
+        // Контейнер для списка
+        _playerListContent = new GameObject("Content", typeof(RectTransform));
+        _playerListContent.transform.SetParent(_playerListPanel.transform, false);
+        var crt = _playerListContent.GetComponent<RectTransform>();
+        crt.anchorMin = Vector2.zero; crt.anchorMax = Vector2.one;
+        crt.offsetMin = new Vector2(10f, 10f);
+        crt.offsetMax = new Vector2(-10f, -36f);
+    }
+
+    private GameObject _playerListContent;
+
+    void RefreshPlayerList()
+    {
+        if (_playerListContent == null) return;
+        foreach (Transform t in _playerListContent.transform) Destroy(t.gameObject);
+
+        var nm = NetworkManager.Singleton;
+        if (nm == null || nm.ConnectedClients == null) return;
+
+        Font font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        float y = 0f;
+
+        foreach (var kv in nm.ConnectedClients)
+        {
+            var entryGO = new GameObject($"Player_{kv.Key}", typeof(RectTransform));
+            entryGO.transform.SetParent(_playerListContent.transform, false);
+
+            var ert = entryGO.GetComponent<RectTransform>();
+            ert.anchorMin = ert.anchorMax = new Vector2(0f, 1f);
+            ert.pivot = new Vector2(0f, 1f);
+            ert.sizeDelta = new Vector2(260f, 22f);
+            ert.anchoredPosition = new Vector2(0f, y);
+
+            // Цветной квадратик
+            var sq = new GameObject("Color", typeof(RectTransform));
+            sq.transform.SetParent(entryGO.transform, false);
+            var sqImg = sq.AddComponent<Image>();
+            Color pc = PlayerColors.GetColor(kv.Key);
+            sqImg.color = pc;
+            var srt = sq.GetComponent<RectTransform>();
+            srt.anchorMin = srt.anchorMax = new Vector2(0f, 0.5f);
+            srt.pivot = new Vector2(0f, 0.5f);
+            srt.sizeDelta = new Vector2(16f, 16f);
+            srt.anchoredPosition = new Vector2(4f, 0f);
+
+            // Ник
+            var nickGO = new GameObject("Nick", typeof(RectTransform));
+            nickGO.transform.SetParent(entryGO.transform, false);
+            var nickTxt = nickGO.AddComponent<Text>();
+            string nick = PlayerColors.GetNickname(kv.Key) ?? $"Player_{kv.Key}";
+            if (kv.Key == nm.LocalClientId) nick += " (Вы)";
+            nickTxt.text = nick;
+            nickTxt.font = font; nickTxt.fontSize = 14;
+            nickTxt.color = Color.white;
+            nickTxt.alignment = TextAnchor.MiddleLeft;
+            var nrt = nickGO.GetComponent<RectTransform>();
+            nrt.anchorMin = nrt.anchorMax = new Vector2(0f, 0.5f);
+            nrt.pivot = new Vector2(0f, 0.5f);
+            nrt.sizeDelta = new Vector2(230f, 20f);
+            nrt.anchoredPosition = new Vector2(24f, 0f);
+
+            y -= 26f;
+        }
+
+        // Обновить высоту панели под количество игроков
+        float h = Mathf.Max(80f, Mathf.Abs(y) + 50f);
+        _playerListPanel.GetComponent<RectTransform>().sizeDelta = new Vector2(280f, h);
+    }
+
+    void BuildTextureMenu(Transform sidebarTransform)
+    {
+        _textureMenu = new GameObject("TextureMenu");
+        _textureMenu.transform.SetParent(_canvas.transform, false);
+        _textureMenu.SetActive(false);
+
+        // Фон
+        Image bg = _textureMenu.AddComponent<Image>();
+        bg.color = new Color(0.05f, 0.08f, 0.15f, 0.92f);
+
+        int cols = 3;
+        int rows = 2;
+        float sqSize = 48f;
+        float gap = 6f;
+        float pad = 8f;
+        float menuW = pad * 2 + cols * sqSize + (cols - 1) * gap;
+        float menuH = pad * 2 + rows * sqSize + (rows - 1) * gap;
+
+        RectTransform rt = _textureMenu.GetComponent<RectTransform>();
+        rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0f, 0.5f);
+        rt.sizeDelta = new Vector2(menuW, menuH);
+        rt.anchoredPosition = new Vector2(80f, 0f);
+
+        for (int i = 0; i < CellMarker.TextureNames.Length; i++)
+        {
+            int idx = i;
+            int col = i % cols;
+            int row = i / cols;
+            float x = pad + col * (sqSize + gap);
+            float y = -pad - row * (sqSize + gap);
+
+            GameObject btnGO = new GameObject($"TexBtn_{i}");
+            btnGO.transform.SetParent(_textureMenu.transform, false);
+
+            Image bImg = btnGO.AddComponent<Image>();
+            bImg.color = CellMarker.TextureColors[i];
+
+            Button btn = btnGO.AddComponent<Button>();
+            btn.onClick.AddListener(() => {
+                MeasurementTool.Instance?.ApplyArea(idx);
+                _textureMenuOpen = false;
+                _textureMenu.SetActive(false);
+            });
+
+            RectTransform brt = btnGO.GetComponent<RectTransform>();
+            brt.anchorMin = brt.anchorMax = new Vector2(0f, 1f);
+            brt.pivot = new Vector2(0f, 1f);
+            brt.sizeDelta = new Vector2(sqSize, sqSize);
+            brt.anchoredPosition = new Vector2(x, y);
         }
     }
 
@@ -378,6 +713,37 @@ public class DiceUI : MonoBehaviour
         rt.sizeDelta = new Vector2(420f, 330f); // ширина × высота
         rt.anchoredPosition = new Vector2(-12f, 12f); // отступ 12px справа и снизу
 
+        // Кнопка сворачивания ► (лямбда ссылается на поле _logTab, а не на параметр)
+        {
+            Font uiFont2 = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            GameObject btnGO = new GameObject("CollapseBtn");
+            btnGO.transform.SetParent(panelGO.transform, false);
+            btnGO.transform.SetAsLastSibling();
+
+            Image img = btnGO.AddComponent<Image>();
+            img.color = new Color(0.08f, 0.12f, 0.22f, 0.7f);
+            img.raycastTarget = true;
+
+            Button btn = btnGO.AddComponent<Button>();
+            btn.onClick.AddListener(() => TogglePanel(panelGO, _logTab)); // поле, не параметр!
+
+            RectTransform brt = btnGO.GetComponent<RectTransform>();
+            brt.anchorMin = brt.anchorMax = brt.pivot = new Vector2(1f, 1f);
+            brt.sizeDelta = new Vector2(28f, 28f);
+            brt.anchoredPosition = new Vector2(-6f, -6f);
+
+            GameObject lbl = new GameObject("Arrow");
+            lbl.transform.SetParent(btnGO.transform, false);
+            Text txt = lbl.AddComponent<Text>();
+            txt.text = "►"; txt.font = uiFont2; txt.fontSize = 16;
+            txt.fontStyle = FontStyle.Bold;
+            txt.color = new Color(0.7f, 0.75f, 0.85f);
+            txt.alignment = TextAnchor.MiddleCenter;
+            RectTransform lrt = txt.GetComponent<RectTransform>();
+            lrt.anchorMin = Vector2.zero; lrt.anchorMax = Vector2.one;
+            lrt.sizeDelta = Vector2.zero;
+        }
+
         // Текст лога
         Font uiFont = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         GameObject textGO = new GameObject("LogText");
@@ -389,6 +755,7 @@ public class DiceUI : MonoBehaviour
         _logText.alignment = TextAnchor.UpperLeft;
         _logText.horizontalOverflow = HorizontalWrapMode.Wrap;
         _logText.verticalOverflow = VerticalWrapMode.Truncate;
+        _logText.raycastTarget = false; // чтобы не перехватывал клики кнопки сворачивания
 
         RectTransform trt = _logText.GetComponent<RectTransform>();
         trt.anchorMin = Vector2.zero;
@@ -397,7 +764,59 @@ public class DiceUI : MonoBehaviour
         trt.offsetMax = new Vector2(-8f, -8f);
     }
 
-    void MakeIcon(Transform parent, string label, Color color, float x, float y, float size, Font font, UnityEngine.Events.UnityAction onClick, float anchorY = 0.5f)
+    // ═══ Табы для возврата скрытых панелей ═══
+
+    void BuildTabs()
+    {
+        if (_canvas == null) return;
+
+        // Log tab (правый край, на высоте середины панели логов: 12 + 330/2 = 177)
+        _logTab = MakeTab(_canvas.transform, "◀",
+            new Vector2(1f, 0f), new Vector2(1f, 0.5f), new Vector2(24f, 60f),
+            () => { if (_logPanelGO != null) { _logPanelGO.SetActive(true); _logTab.SetActive(false); } });
+        _logTab.GetComponent<RectTransform>().anchoredPosition = new Vector2(0f, 177f);
+
+        _logTab.SetActive(false);
+    }
+
+    GameObject MakeTab(Transform parent, string label, Vector2 anchor, Vector2 pivot, Vector2 sizeDelta, UnityEngine.Events.UnityAction onClick)
+    {
+        GameObject go = new GameObject($"Tab_{label}");
+        go.transform.SetParent(parent, false);
+
+        Image img = go.AddComponent<Image>();
+        img.color = new Color(0.05f, 0.1f, 0.25f, 0.8f); // 80% непрозрачности
+
+        Button btn = go.AddComponent<Button>();
+        btn.onClick.AddListener(onClick);
+
+        RectTransform rt = go.GetComponent<RectTransform>();
+        rt.anchorMin = anchor;
+        rt.anchorMax = anchor;
+        rt.pivot = pivot;
+        rt.sizeDelta = sizeDelta;
+        rt.anchoredPosition = Vector2.zero;
+
+        // Текст
+        Font uiFont = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        GameObject labelGO = new GameObject("Label");
+        labelGO.transform.SetParent(go.transform, false);
+        Text txt = labelGO.AddComponent<Text>();
+        txt.text = label;
+        txt.font = uiFont;
+        txt.fontSize = 14;
+        txt.color = new Color(0.7f, 0.75f, 0.85f);
+        txt.alignment = TextAnchor.MiddleCenter;
+
+        RectTransform lrt = txt.GetComponent<RectTransform>();
+        lrt.anchorMin = Vector2.zero;
+        lrt.anchorMax = Vector2.one;
+        lrt.sizeDelta = Vector2.zero;
+
+        return go;
+    }
+
+    void MakeIcon(Transform parent, string label, Color color, float x, float y, float size, Font font, UnityEngine.Events.UnityAction onClick, float anchorY = 0.5f, int fontSize = 13)
     {
         GameObject go = new GameObject($"Icon_{label}");
         go.transform.SetParent(parent, false);
@@ -421,7 +840,7 @@ public class DiceUI : MonoBehaviour
         Text txt = labelGO.AddComponent<Text>();
         txt.text = label;
         txt.font = font;
-        txt.fontSize = 13;
+        txt.fontSize = fontSize;
         txt.fontStyle = FontStyle.Bold;
         txt.color = Color.white;
         txt.alignment = TextAnchor.MiddleCenter;

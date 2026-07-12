@@ -153,14 +153,10 @@ public class NetworkDiceManager : MonoBehaviour
             return;
         }
 
-        // Спавним объект (виден всем)
-        netObj.Spawn();
+        // Спавним объект с правильным владельцем сразу (до OnNetworkSpawn)
+        netObj.SpawnWithOwnership(ownerId);
+        netObj.DontDestroyWithOwner = true;
 
-        // Назначаем владельца
-        if (ownerId != NetworkManager.Singleton.LocalClientId)
-            netObj.ChangeOwnership(ownerId);
-
-        // Инициализируем тип ПОСЛЕ спавна — ClientRpc требует спавненный объект
         var dice = netObj.GetComponent<NetworkDice>();
         if (dice != null) dice.Init(type);
     }

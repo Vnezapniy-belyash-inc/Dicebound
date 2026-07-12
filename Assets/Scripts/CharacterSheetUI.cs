@@ -26,6 +26,7 @@ public class CharacterSheetUI : MonoBehaviour
 
     Canvas _cv;
     GameObject _pn;
+    GameObject _charSheetTab; // таб раскрытия
     CharacterData _cd;
 
     // Статы
@@ -37,6 +38,10 @@ public class CharacterSheetUI : MonoBehaviour
 
     // Низ
     Text _profTxt, _pasPerTxt, _pasInsTxt, _pasInvTxt;
+
+    // Вкладки
+    Image[] _tabImages = new Image[5];
+    Text[] _tabTexts = new Text[5];
 
     // Страницы
     int _currentPage = 0;
@@ -68,12 +73,16 @@ public class CharacterSheetUI : MonoBehaviour
         _cd = characterData ? characterData : FindAnyObjectByType<CharacterData>();
         BuildUI();
         if (_pn) _pn.SetActive(false);
+        if (_charSheetTab != null) _charSheetTab.SetActive(true);
     }
 
     void Update()
     {
         var k = Keyboard.current;
         if (k == null) return;
+
+        // В главном меню хоткеи не работают
+        if (GameNetworkManager.Instance == null || !GameNetworkManager.Instance.IsConnected) return;
 
         // Don't process hotkeys when typing in a text field
         if (UnityEngine.EventSystems.EventSystem.current != null &&
@@ -83,7 +92,9 @@ public class CharacterSheetUI : MonoBehaviour
 
         if (k.cKey.wasPressedThisFrame && _pn)
         {
-            _pn.SetActive(!_pn.activeSelf);
+            bool show = !_pn.activeSelf;
+            _pn.SetActive(show);
+            if (_charSheetTab != null) _charSheetTab.SetActive(!show);
             if (_pn.activeSelf) RefreshDisplay();
         }
     }
@@ -153,6 +164,40 @@ public class CharacterSheetUI : MonoBehaviour
         _page2.SetActive(_currentPage == 2);
         _page3.SetActive(_currentPage == 3);
         _page4.SetActive(_currentPage == 4);
+
+        // Таб раскрытия чарника (правый край, на высоте середины панели)
+        {
+            Font f2 = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            _charSheetTab = new GameObject("CharSheetTab");
+            _charSheetTab.transform.SetParent(cgo.transform, false);
+
+            Image img = _charSheetTab.AddComponent<Image>();
+            img.color = new Color(0.05f, 0.1f, 0.25f, 0.8f);
+            img.raycastTarget = true;
+
+            Button btn = _charSheetTab.AddComponent<Button>();
+            btn.onClick.AddListener(() => {
+                _pn.SetActive(true);
+                _charSheetTab.SetActive(false);
+            });
+
+            RectTransform rt = _charSheetTab.GetComponent<RectTransform>();
+            rt.anchorMin = rt.anchorMax = new Vector2(1f, 1f);
+            rt.pivot = new Vector2(1f, 0.5f);
+            rt.sizeDelta = new Vector2(24f, 60f);
+            rt.anchoredPosition = new Vector2(0f, -12f - th / 2f);
+
+            GameObject lbl = new GameObject("Arrow");
+            lbl.transform.SetParent(_charSheetTab.transform, false);
+            Text txt = lbl.AddComponent<Text>();
+            txt.text = "◀"; txt.font = f2; txt.fontSize = 16;
+            txt.fontStyle = FontStyle.Bold;
+            txt.color = new Color(0.7f, 0.75f, 0.85f);
+            txt.alignment = TextAnchor.MiddleCenter;
+            RectTransform lrt = txt.GetComponent<RectTransform>();
+            lrt.anchorMin = Vector2.zero; lrt.anchorMax = Vector2.one;
+            lrt.sizeDelta = Vector2.zero;
+        }
     }
 
     float BuildTabs(float y, Font f)
@@ -161,6 +206,11 @@ public class CharacterSheetUI : MonoBehaviour
         int n = 5;
         float tw = (w - (n-1)*2f) / n;
         string[] names = { "ХАР-КИ", "АТАКИ", "СПОСОБ.", "СНАРЯЖ.", "ЗАМЕТКИ" };
+
+        Color activeBg = new Color(0.12f, 0.15f, 0.25f);
+        Color inactiveBg = new Color(0.07f, 0.09f, 0.16f);
+        Color activeText = new Color(0.92f, 0.88f, 0.65f);
+        Color inactiveText = new Color(0.5f, 0.55f, 0.65f);
 
         // Фон вкладок
         var bg = GO("TabBar", typeof(RectTransform), typeof(Image));
@@ -173,22 +223,40 @@ public class CharacterSheetUI : MonoBehaviour
             float tx = 2 + i * (tw + 2);
             var btn = GO($"Tab{i}", typeof(RectTransform), typeof(Image), typeof(Button));
             btn.transform.SetParent(bg.transform, false);
-            btn.GetComponent<Image>().color = _currentPage == i
-                ? new Color(0.12f, 0.15f, 0.25f) : new Color(0.07f, 0.09f, 0.16f);
+            _tabImages[i] = btn.GetComponent<Image>();
             int page = i;
             btn.GetComponent<Button>().onClick.AddListener(() => SwitchPage(page));
             R(btn, AL, AL, PL, new(tw, TABH), new(tx, 0));
-            var t = Txt(btn.transform, names[i], f, 12, FontStyle.Bold,
-                _currentPage == i ? new Color(0.92f,0.88f,0.65f) : new Color(0.5f,0.55f,0.65f), TextAnchor.MiddleCenter);
+            var t = Txt(btn.transform, names[i], f, 12, FontStyle.Bold, inactiveText, TextAnchor.MiddleCenter);
             R(t, AC, AC, PC, new(tw, TABH), Vector2.zero);
+            _tabTexts[i] = t.GetComponent<Text>();
         }
 
+        RefreshTabs();
+
         return y - TABH;
+    }
+
+    void RefreshTabs()
+    {
+        Color activeBg = new Color(0.12f, 0.15f, 0.25f);
+        Color inactiveBg = new Color(0.07f, 0.09f, 0.16f);
+        Color activeText = new Color(0.92f, 0.88f, 0.65f);
+        Color inactiveText = new Color(0.5f, 0.55f, 0.65f);
+
+        for (int i = 0; i < 5; i++)
+        {
+            if (_tabImages[i] != null)
+                _tabImages[i].color = _currentPage == i ? activeBg : inactiveBg;
+            if (_tabTexts[i] != null)
+                _tabTexts[i].color = _currentPage == i ? activeText : inactiveText;
+        }
     }
 
     void SwitchPage(int page)
     {
         _currentPage = page;
+        RefreshTabs();
         if (_page0) _page0.SetActive(page == 0);
         if (_page1) _page1.SetActive(page == 1);
         if (_page2) _page2.SetActive(page == 2);
@@ -460,6 +528,40 @@ public class CharacterSheetUI : MonoBehaviour
         bg.transform.SetParent(_pn.transform, false);
         bg.GetComponent<Image>().color = new Color(0.06f, 0.08f, 0.14f, 0.85f);
         R(bg, AL, AL, PL, new(w, SBH), new(PD, y));
+
+        // Кнопка сворачивания ► (правый верхний угол статус-бара)
+        {
+            Font f2 = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            GameObject btnGO = new GameObject("CollapseBtn");
+            btnGO.transform.SetParent(bg.transform, false);
+            btnGO.transform.SetAsLastSibling();
+
+            Image img = btnGO.AddComponent<Image>();
+            img.color = new Color(0.08f, 0.12f, 0.22f, 0.7f);
+            img.raycastTarget = true;
+
+            Button btn = btnGO.AddComponent<Button>();
+            btn.onClick.AddListener(() => {
+                _pn.SetActive(false);
+                if (_charSheetTab != null) _charSheetTab.SetActive(true);
+            });
+
+            RectTransform rt = btnGO.GetComponent<RectTransform>();
+            rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(1f, 1f);
+            rt.sizeDelta = new Vector2(28f, 28f);
+            rt.anchoredPosition = new Vector2(-4f, -4f);
+
+            GameObject lbl = new GameObject("Arrow");
+            lbl.transform.SetParent(btnGO.transform, false);
+            Text txt = lbl.AddComponent<Text>();
+            txt.text = "►"; txt.font = f2; txt.fontSize = 16;
+            txt.fontStyle = FontStyle.Bold;
+            txt.color = new Color(0.7f, 0.75f, 0.85f);
+            txt.alignment = TextAnchor.MiddleCenter;
+            RectTransform lrt = txt.GetComponent<RectTransform>();
+            lrt.anchorMin = Vector2.zero; lrt.anchorMax = Vector2.one;
+            lrt.sizeDelta = Vector2.zero;
+        }
 
         float cy = -4f;
 
