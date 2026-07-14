@@ -34,13 +34,18 @@ public class NetworkDice : NetworkBehaviour, IDice
     public int fontSize = 48;
     public Color textColor = Color.black;
 
-    // Late-join: сервер шлёт тип новым клиентам автоматически
+    // Late-join: -1 = mesh not yet assigned
     private readonly NetworkVariable<int> _netDieType = new(
-        (int)DieType.d20, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+        -1, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
     // Late-join: цвет синхронизируется автоматически
     private readonly NetworkVariable<Vector3> _netDiceColor = new(
         new Vector3(0.5f, 0.5f, 0.5f), NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
+    private readonly NetworkVariable<ulong> _netSpawnerClientId = new(
+        ulong.MaxValue, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
+    public ulong SpawnerClientId => _netSpawnerClientId.Value;
 
     private Rigidbody _rb;
     private DieFaceData[] _faces;
@@ -63,32 +68,90 @@ public class NetworkDice : NetworkBehaviour, IDice
         if (!IsServer) return;
         _netDieType.Value = (int)type;
 
-        Color c = PlayerColors.GetColor(OwnerClientId);
-        _netDiceColor.Value = new Vector3(c.r, c.g, c.b);
+        if (_netSpawnerClientId.Value == ulong.MaxValue)
+            _netSpawnerClientId.Value = OwnerClientId;
 
+        ServerRefreshPlayerColor();
         InitializeMesh(type);
         InitClientRpc((int)type);
+    }
+
+    /// <summary>Server: update spawner after reconnect ownership transfer.</summary>
+    public void ServerUpdateSpawnerClientId(ulong clientId)
+    {
+        if (!IsServer) return;
+        _netSpawnerClientId.Value = clientId;
+    }
+
+    /// <summary>Server: sync baked dice color from player registry to all clients.</summary>
+    public void ServerRefreshPlayerColor()
+    {
+        if (!IsServer) return;
+
+        ulong colorOwner = _netSpawnerClientId.Value != ulong.MaxValue
+            ? _netSpawnerClientId.Value
+            : OwnerClientId;
+        Color c = PlayerRegistry.GetServerPlayerColor(colorOwner);
+        var rgb = new Vector3(c.r, c.g, c.b);
+        _netDiceColor.Value = rgb;
+        ApplyDiceColor(rgb);
+        RefreshColorClientRpc(rgb);
+    }
+
+    [Rpc(SendTo.Everyone)]
+    private void RefreshColorClientRpc(Vector3 rgb)
+    {
+        ApplyDiceColor(rgb);
     }
 
     public override void OnNetworkSpawn()
     {
         _rb = GetComponent<Rigidbody>();
-        _rb.isKinematic = !IsOwner;
+        UpdatePhysicsAuthority();
 
         ApplyDiceColor(_netDiceColor.Value);
         _netDiceColor.OnValueChanged += (old, val) => ApplyDiceColor(val);
 
-        // Late-join: NetworkVariable уже содержит правильное значение
-        int typeInt = _netDieType.Value;
-        if (typeInt != (int)DieType.d20)
-            InitializeMesh((DieType)typeInt);
+        if (IsServer && _netSpawnerClientId.Value == ulong.MaxValue)
+            _netSpawnerClientId.Value = OwnerClientId;
 
-        // На случай если тип изменится после спавна
-        _netDieType.OnValueChanged += (oldVal, newVal) =>
+        TryInitializeMeshFromNetworkType(_netDieType.Value);
+        _netDieType.OnValueChanged += (oldVal, newVal) => TryInitializeMeshFromNetworkType(newVal);
+
+        StartCoroutine(DeferredMeshInit());
+    }
+
+    private System.Collections.IEnumerator DeferredMeshInit()
+    {
+        for (int i = 0; i < 60 && !_didInit; i++)
         {
-            if (!_didInit)
-                InitializeMesh((DieType)newVal);
-        };
+            TryInitializeMeshFromNetworkType(_netDieType.Value);
+            if (_didInit) yield break;
+            yield return null;
+        }
+    }
+
+    private void TryInitializeMeshFromNetworkType(int typeInt)
+    {
+        if (_didInit || typeInt < 0) return;
+        InitializeMesh((DieType)typeInt);
+    }
+
+    public override void OnGainedOwnership()
+    {
+        UpdatePhysicsAuthority();
+    }
+
+    public override void OnLostOwnership()
+    {
+        UpdatePhysicsAuthority();
+        IsRolling = false;
+    }
+
+    private void UpdatePhysicsAuthority()
+    {
+        if (_rb == null) _rb = GetComponent<Rigidbody>();
+        if (_rb != null) _rb.isKinematic = !IsOwner;
     }
 
     private void ApplyDiceColor(Vector3 rgb)
@@ -107,8 +170,27 @@ public class NetworkDice : NetworkBehaviour, IDice
     [Rpc(SendTo.NotServer)]
     private void InitClientRpc(int typeInt)
     {
-        if (!_didInit)
-            InitializeMesh((DieType)typeInt);
+        TryInitializeMeshFromNetworkType(typeInt);
+    }
+
+    /// <summary>Server: ensure reconnecting/late-join client builds mesh.</summary>
+    public void ServerPushMeshToClient(ulong clientId)
+    {
+        if (!IsServer) return;
+        int typeInt = _netDieType.Value;
+        if (typeInt < 0) return;
+
+        var rpcParams = new ClientRpcParams
+        {
+            Send = new ClientRpcSendParams { TargetClientIds = new[] { clientId } }
+        };
+        PushMeshClientRpc(typeInt, rpcParams);
+    }
+
+    [ClientRpc]
+    private void PushMeshClientRpc(int typeInt, ClientRpcParams clientRpcParams = default)
+    {
+        TryInitializeMeshFromNetworkType(typeInt);
     }
 
     private void InitializeMesh(DieType type)
@@ -241,22 +323,22 @@ public class NetworkDice : NetworkBehaviour, IDice
     {
         if (_faces == null || _faces.Length == 0) return;
 
-        float bestDot = float.MinValue;
         int bestIndex = 0;
 
         if (DieType == DieType.d4)
         {
+            // d4: результат на грани, лежащей на столе (нормаль вниз)
+            float lowestDot = float.MaxValue;
             for (int i = 0; i < _faces.Length; i++)
             {
                 Vector3 worldNormal = transform.TransformDirection(_faces[i].normal);
                 float dot = Vector3.Dot(worldNormal, Vector3.up);
-                if (dot < bestDot) continue;
-                bestDot = dot;
-                bestIndex = i;
+                if (dot < lowestDot) { lowestDot = dot; bestIndex = i; }
             }
         }
         else
         {
+            float bestDot = float.MinValue;
             for (int i = 0; i < _faces.Length; i++)
             {
                 Vector3 worldNormal = transform.TransformDirection(_faces[i].normal);
@@ -292,7 +374,6 @@ public class NetworkDice : NetworkBehaviour, IDice
         {
             DieType.d100 when value == 0 => "00",
             DieType.d100 => value.ToString(),
-            DieType.d10 when value == 0 => "0",
             _ => value.ToString(),
         };
     }

@@ -31,6 +31,16 @@ public class TokenController : NetworkBehaviour
     private NetworkVariable<Vector3> _netColor = new(Vector3.one,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
+    private readonly NetworkVariable<ulong> _netSpawnerClientId = new(
+        ulong.MaxValue, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
+    public ulong SpawnerClientId => _netSpawnerClientId.Value;
+
+    public bool IsSpawner =>
+        NetworkManager.Singleton != null
+        && _netSpawnerClientId.Value != ulong.MaxValue
+        && NetworkManager.Singleton.LocalClientId == _netSpawnerClientId.Value;
+
     public static TokenController Instance { get; private set; }
 
     private void Awake()
@@ -60,19 +70,42 @@ public class TokenController : NetworkBehaviour
 
         if (IsServer)
         {
-            Color c = PlayerColors.GetColor(OwnerClientId);
-            _netColor.Value = new Vector3(c.r, c.g, c.b);
+            if (_netSpawnerClientId.Value == ulong.MaxValue)
+                _netSpawnerClientId.Value = OwnerClientId;
+            ServerRefreshPlayerColor();
         }
+
+        TokenImageSync.EnsureInstance();
+        TokenImageSync.TryApplyPending(this);
     }
 
-    private void ApplyColor(Vector3 rgb)
+    /// <summary>Server: update spawner after reconnect ownership transfer.</summary>
+    public void ServerUpdateSpawnerClientId(ulong clientId)
     {
-        if (_portraitMaterial != null && _portraitTexture == null)
-            _portraitMaterial.color = new Color(rgb.x, rgb.y, rgb.z, 1f);
+        if (!IsServer) return;
+        _netSpawnerClientId.Value = clientId;
+    }
+
+    /// <summary>Server: sync baked token color from player registry to all clients.</summary>
+    public void ServerRefreshPlayerColor()
+    {
+        if (!IsServer) return;
+
+        Color c = PlayerRegistry.GetServerPlayerColor(
+            _netSpawnerClientId.Value != ulong.MaxValue ? _netSpawnerClientId.Value : OwnerClientId);
+        var rgb = new Vector3(c.r, c.g, c.b);
+        _netColor.Value = rgb;
+        ApplyColor(rgb);
+        RefreshColorClientRpc(rgb);
     }
 
     [Rpc(SendTo.Everyone)]
-    private void SetColorClientRpc(Vector3 rgb)
+    private void RefreshColorClientRpc(Vector3 rgb)
+    {
+        ApplyColor(rgb);
+    }
+
+    private void ApplyColor(Vector3 rgb)
     {
         if (_portraitMaterial != null && _portraitTexture == null)
             _portraitMaterial.color = new Color(rgb.x, rgb.y, rgb.z, 1f);
@@ -91,12 +124,24 @@ public class TokenController : NetworkBehaviour
         GetComponent<NetworkObject>().ChangeOwnership(rpcParams.Receive.SenderClientId);
     }
 
-    /// <summary>Загружает картинку на токен (только владелец). Данные должны быть сжаты (&lt;1KB).</summary>
+    /// <summary>Загружает картинку на токен (только создатель, не зависит от перетаскивания).</summary>
     public void LoadImage(byte[] jpgData)
     {
-        if (!IsOwner) return;
+        if (!IsSpawner || jpgData == null || jpgData.Length == 0) return;
+
         ApplyImageLocal(jpgData);
-        BroadcastImageClientRpc(jpgData); // сжатый JPG влезает в RPC
+        if (!IsSpawned) return;
+
+        TokenImageSync.EnsureInstance();
+        ulong netId = NetworkObjectId;
+
+        if (IsServer)
+        {
+            TokenImageSync.CachePortrait(netId, jpgData);
+            TokenImageSync.BroadcastImage(netId, jpgData);
+        }
+        else
+            TokenImageSync.UploadToServer(netId, jpgData);
     }
 
     /// <summary>Клиент получает картинку от создателя.</summary>
@@ -122,12 +167,6 @@ public class TokenController : NetworkBehaviour
             _portraitMaterial.color = Color.white;
             Debug.Log($"[Token] Image applied: {tex.width}x{tex.height}");
         }
-    }
-
-    [Rpc(SendTo.Everyone)]
-    private void BroadcastImageClientRpc(byte[] pngData)
-    {
-        ApplyImageLocal(pngData);
     }
 
     // ═══ Снап к сетке ═══
@@ -205,19 +244,23 @@ public class TokenController : NetworkBehaviour
     public void RequestDespawn()
     {
         if (!IsSpawned) return;
-        if (!IsOwner && !IsHost) return;
+        if (!IsSpawner && !IsHost) return;
         RequestDespawnServerRpc();
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     private void RequestDespawnServerRpc(RpcParams rpcParams = default)
     {
-        if (rpcParams.Receive.SenderClientId == OwnerClientId || IsHost)
+        ulong sender = rpcParams.Receive.SenderClientId;
+        if (sender == _netSpawnerClientId.Value || IsHost)
             GetComponent<NetworkObject>().Despawn();
     }
 
     public override void OnNetworkDespawn()
     {
+        if (IsServer)
+            TokenImageSync.RemovePortrait(NetworkObjectId);
+
         var gm = FindAnyObjectByType<GridManager>();
         if (gm != null && _currentCell.x >= 0)
             gm.ReleaseCell(_currentCell);
@@ -263,16 +306,48 @@ public class TokenController : NetworkBehaviour
     {
         PickTokenImageFile(path =>
         {
-            if (!string.IsNullOrEmpty(path))
-            {
-                byte[] data = File.ReadAllBytes(path);
-                Texture2D temp = new Texture2D(2, 2);
-                temp.LoadImage(data);
-                byte[] jpg = temp.EncodeToJPG(30);
-                Destroy(temp);
+            if (string.IsNullOrEmpty(path)) return;
+
+            byte[] jpg = PreparePortraitJpg(File.ReadAllBytes(path));
+            if (jpg != null && jpg.Length > 0)
                 LoadImage(jpg);
-            }
         });
+    }
+
+    private static byte[] PreparePortraitJpg(byte[] fileData, int maxEdge = 512, int quality = 75)
+    {
+        if (fileData == null || fileData.Length == 0) return null;
+
+        var tex = new Texture2D(2, 2);
+        if (!tex.LoadImage(fileData))
+        {
+            Destroy(tex);
+            return null;
+        }
+
+        int w = tex.width;
+        int h = tex.height;
+        if (Mathf.Max(w, h) > maxEdge)
+        {
+            float scale = maxEdge / (float)Mathf.Max(w, h);
+            w = Mathf.Max(1, Mathf.RoundToInt(w * scale));
+            h = Mathf.Max(1, Mathf.RoundToInt(h * scale));
+
+            var rt = RenderTexture.GetTemporary(w, h);
+            Graphics.Blit(tex, rt);
+            var resized = new Texture2D(w, h, TextureFormat.RGB24, false);
+            RenderTexture.active = rt;
+            resized.ReadPixels(new Rect(0, 0, w, h), 0, 0);
+            resized.Apply();
+            RenderTexture.active = null;
+            RenderTexture.ReleaseTemporary(rt);
+            Destroy(tex);
+            tex = resized;
+        }
+
+        byte[] jpg = tex.EncodeToJPG(quality);
+        Destroy(tex);
+        return jpg;
     }
 
     private static void PickTokenImageFile(Action<string> onPicked)
@@ -308,42 +383,5 @@ public class TokenController : NetworkBehaviour
 
         if (Event.current.type == EventType.MouseDown && !_menuRect.Contains(Event.current.mousePosition))
             _showMenu = false;
-    }
-
-    // ═══ Late-join ═══
-
-    private static bool _lateJoinHookRegistered;
-
-    /// <summary>Сервер: отправить все изображения токенов при late-join (с задержкой).</summary>
-    public static void SendAllImagesToLateJoiner(ulong clientId)
-    {
-        if (!NetworkManager.Singleton.IsServer) return;
-        // Задержка чтобы NetworkObjects успели заспавниться на клиенте
-        MonoBehaviour runner = FindAnyObjectByType<MonoBehaviour>();
-        if (runner != null)
-            runner.StartCoroutine(SendImagesDelayed(clientId));
-    }
-
-    private static System.Collections.IEnumerator SendImagesDelayed(ulong clientId)
-    {
-        yield return new WaitForSeconds(2f);
-        if (!NetworkManager.Singleton.IsServer) yield break;
-        var tokens = FindObjectsByType<TokenController>(FindObjectsInactive.Exclude);
-        foreach (var t in tokens)
-        {
-            byte[] jpg = t.GetPortraitJpg();
-            if (jpg != null && jpg.Length > 0)
-                t.BroadcastImageClientRpc(jpg);
-        }
-        Debug.Log($"[Token] Late-join: sent {tokens.Length} token images to client {clientId}");
-    }
-
-    /// <summary>Подписаться на late-join (вызывается один раз).</summary>
-    public static void EnsureLateJoinHook()
-    {
-        if (_lateJoinHookRegistered) return;
-        if (NetworkManager.Singleton == null) return;
-        NetworkManager.Singleton.OnClientConnectedCallback += SendAllImagesToLateJoiner;
-        _lateJoinHookRegistered = true;
     }
 }

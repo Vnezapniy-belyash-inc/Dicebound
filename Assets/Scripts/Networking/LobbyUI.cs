@@ -49,12 +49,17 @@ public class LobbyUI : MonoBehaviour
         CancelInvoke(nameof(TrySubscribeDisconnect));
     }
 
-    void OnDisconnected(ulong clientId)
+    async void OnDisconnected(ulong clientId)
     {
-        // Реагируем только на свой дисконнект
         if (NetworkManager.Singleton != null && clientId != NetworkManager.Singleton.LocalClientId)
             return;
 
+        if (GameNetworkManager.Instance != null)
+            await GameNetworkManager.Instance.ShutdownAndReset();
+        else if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
+            NetworkManager.Singleton.Shutdown();
+
+        CellMarker.ResetRegistration();
         PlayerColors.Reset();
         UnityEngine.SceneManagement.SceneManager.LoadScene(
             UnityEngine.SceneManagement.SceneManager.GetActiveScene().name);
@@ -71,19 +76,21 @@ public class LobbyUI : MonoBehaviour
 
         try
         {
-            // Сброс предыдущей сессии
-            if (NetworkManager.Singleton != null)
-            {
+            if (GameNetworkManager.Instance != null)
+                await GameNetworkManager.Instance.ShutdownAndReset();
+            else if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
                 NetworkManager.Singleton.Shutdown();
-                await System.Threading.Tasks.Task.Delay(300);
-            }
+
+            await System.Threading.Tasks.Task.Delay(200);
 
             string code = await RelayManager.Instance.CreateRelayAllocation(9);
+            CellMarker.EnsureRegistered();
             GameNetworkManager.Instance.StartHost();
             lobbyPanel.SetActive(false);
             GUIUtility.systemCopyBuffer = code;
             statusText.text = $"Host started! Code copied: {code}";
             ShowGameUI();
+            _isConnecting = false;
             Debug.Log($"[Lobby] Host started. Join code: {code}");
         }
         catch (System.Exception ex)
@@ -114,18 +121,20 @@ public class LobbyUI : MonoBehaviour
 
         try
         {
-            // Сброс предыдущей сессии
-            if (NetworkManager.Singleton != null)
-            {
+            if (GameNetworkManager.Instance != null)
+                await GameNetworkManager.Instance.ShutdownAndReset();
+            else if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
                 NetworkManager.Singleton.Shutdown();
-                await System.Threading.Tasks.Task.Delay(300);
-            }
+
+            await System.Threading.Tasks.Task.Delay(200);
 
             await RelayManager.Instance.JoinRelayAllocation(code);
+            CellMarker.EnsureRegistered();
             GameNetworkManager.Instance.StartClient();
             lobbyPanel.SetActive(false);
             statusText.text = "Connected!";
             ShowGameUI();
+            _isConnecting = false;
             Debug.Log("[Lobby] Client connected.");
         }
         catch (System.Exception ex)
@@ -141,6 +150,8 @@ public class LobbyUI : MonoBehaviour
     {
         string nick = nicknameInput.text.Trim();
         if (string.IsNullOrEmpty(nick)) nick = "Player";
+        if (nick == "Player")
+            Debug.LogWarning("[Lobby] Default nickname 'Player' is used — pick a unique name to avoid color conflicts.");
         LocalNickname = nick;
         PlayerPrefs.SetString("nickname", nick);
         PlayerPrefs.Save();

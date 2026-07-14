@@ -16,6 +16,10 @@ public class MeasurementTool : NetworkBehaviour
     public float lineWidth = 0.06f;
     public float yOffset = 0.02f;
     public int circleSegments = 48;
+    [Tooltip("Snap radius as fraction of cell size for sphere center vs corner")]
+    public float sphereSnapTolerance = 0.4f;
+    [Tooltip("Size of origin marker for sphere (cell center dot / intersection cross)")]
+    public float sphereOriginMarkerSize = 0.12f;
 
     private NetworkVariable<Vector3> _netPointA = new(Vector3.zero,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
@@ -29,6 +33,7 @@ public class MeasurementTool : NetworkBehaviour
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
     private LineRenderer _lr;
+    private LineRenderer _sphereOriginLr;
     private bool _isDragging;
     private float _lastSyncTime;
     private Camera _cam;
@@ -63,6 +68,8 @@ public class MeasurementTool : NetworkBehaviour
         _lr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         _lr.receiveShadows = false;
 
+        _sphereOriginLr = CreateChildLineRenderer("SphereOriginMarker");
+
         if (NetworkManager.Singleton != null)
             NetworkManager.Singleton.OnServerStarted += OnServerStarted;
     }
@@ -89,12 +96,34 @@ public class MeasurementTool : NetworkBehaviour
         UpdateVisual();
     }
 
+    private LineRenderer CreateChildLineRenderer(string name)
+    {
+        var go = new GameObject(name);
+        go.transform.SetParent(transform, false);
+        var lr = go.AddComponent<LineRenderer>();
+        lr.material = _lr.material;
+        lr.startWidth = lineWidth * 1.2f;
+        lr.endWidth = lineWidth * 1.2f;
+        lr.useWorldSpace = true;
+        lr.enabled = false;
+        lr.positionCount = 0;
+        lr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        lr.receiveShadows = false;
+        return lr;
+    }
+
     private void ApplyColor(Vector3 rgb)
     {
         Color c = new Color(rgb.x, rgb.y, rgb.z, 0.85f);
         _lr.material.color = c;
         _lr.startColor = c;
         _lr.endColor = c;
+        if (_sphereOriginLr != null)
+        {
+            _sphereOriginLr.material.color = c;
+            _sphereOriginLr.startColor = c;
+            _sphereOriginLr.endColor = c;
+        }
     }
 
     // ═══ Активация ═══
@@ -126,7 +155,7 @@ public class MeasurementTool : NetworkBehaviour
         _netPointB.Value = Vector3.zero;
 
         // Цвет игрока
-        Color pc = PlayerColors.GetColor(clientId);
+        Color pc = PlayerRegistry.GetServerPlayerColor(clientId);
         _netColor.Value = new Vector3(pc.r, pc.g, pc.b);
 
         // Передать владение активирующему клиенту
@@ -173,7 +202,7 @@ public class MeasurementTool : NetworkBehaviour
             Vector3? hit = RaycastGrid(mouse);
             if (hit.HasValue)
             {
-                Vector3 p = SnapToGridCell(hit.Value);
+                Vector3 p = SnapForMode(hit.Value);
                 if (IsServer)
                 {
                     _netPointA.Value = p;
@@ -193,7 +222,7 @@ public class MeasurementTool : NetworkBehaviour
             Vector3? hit = RaycastGrid(mouse);
             if (hit.HasValue && Time.time - _lastSyncTime > 0.08f)
             {
-                Vector3 p = SnapToGridCell(hit.Value);
+                Vector3 p = SnapForMode(hit.Value);
                 if (IsServer)
                     _netPointB.Value = p;
                 else
@@ -208,7 +237,7 @@ public class MeasurementTool : NetworkBehaviour
             Vector3? hit = RaycastGrid(mouse);
             if (hit.HasValue)
             {
-                Vector3 p = SnapToGridCell(hit.Value);
+                Vector3 p = SnapForMode(hit.Value);
                 if (IsServer)
                     _netPointB.Value = p;
                 else
@@ -216,6 +245,19 @@ public class MeasurementTool : NetworkBehaviour
             }
             OnDragEnd?.Invoke();
         }
+    }
+
+    private Vector3 SnapForMode(Vector3 worldPos)
+    {
+        Mode mode = (Mode)_netMode.Value;
+        if (mode == Mode.Circle)
+        {
+            var gm = FindAnyObjectByType<GridManager>();
+            if (gm != null)
+                return gm.SnapSpherePoint(worldPos, yOffset, out _, sphereSnapTolerance);
+        }
+
+        return SnapToGridCell(worldPos);
     }
 
     [Rpc(SendTo.Server)]
@@ -239,6 +281,11 @@ public class MeasurementTool : NetworkBehaviour
         {
             _lr.enabled = false;
             _lr.positionCount = 0;
+            if (_sphereOriginLr != null)
+            {
+                _sphereOriginLr.enabled = false;
+                _sphereOriginLr.positionCount = 0;
+            }
             ClearPreviews();
             return;
         }
@@ -261,16 +308,22 @@ public class MeasurementTool : NetworkBehaviour
             case Mode.Circle:
                 float radius = Vector3.Distance(a, b);
                 DrawCircle(a, radius);
+                DrawSphereOriginMarker(a);
                 break;
 
             case Mode.Square:
+                if (_sphereOriginLr != null) _sphereOriginLr.enabled = false;
                 DrawSquare(a, b);
                 break;
 
             case Mode.Cone:
+                if (_sphereOriginLr != null) _sphereOriginLr.enabled = false;
                 DrawCone(a, b);
                 break;
         }
+
+        if (mode == Mode.Ruler && _sphereOriginLr != null)
+            _sphereOriginLr.enabled = false;
 
         // Обновить превью клеток
         if (mode != Mode.Ruler)
@@ -366,6 +419,35 @@ public class MeasurementTool : NetworkBehaviour
         }
     }
 
+    private void DrawSphereOriginMarker(Vector3 origin)
+    {
+        if (_sphereOriginLr == null) return;
+
+        var gm = FindAnyObjectByType<GridManager>();
+        bool isIntersection = GridManager.IsIntersectionPosition(origin, gm);
+        float s = sphereOriginMarkerSize;
+
+        _sphereOriginLr.enabled = true;
+        if (isIntersection)
+        {
+            _sphereOriginLr.positionCount = 5;
+            _sphereOriginLr.SetPosition(0, new Vector3(origin.x, yOffset, origin.z + s));
+            _sphereOriginLr.SetPosition(1, new Vector3(origin.x + s, yOffset, origin.z));
+            _sphereOriginLr.SetPosition(2, new Vector3(origin.x, yOffset, origin.z - s));
+            _sphereOriginLr.SetPosition(3, new Vector3(origin.x - s, yOffset, origin.z));
+            _sphereOriginLr.SetPosition(4, new Vector3(origin.x, yOffset, origin.z + s));
+        }
+        else
+        {
+            _sphereOriginLr.positionCount = 5;
+            _sphereOriginLr.SetPosition(0, new Vector3(origin.x - s, yOffset, origin.z - s));
+            _sphereOriginLr.SetPosition(1, new Vector3(origin.x + s, yOffset, origin.z - s));
+            _sphereOriginLr.SetPosition(2, new Vector3(origin.x + s, yOffset, origin.z + s));
+            _sphereOriginLr.SetPosition(3, new Vector3(origin.x - s, yOffset, origin.z + s));
+            _sphereOriginLr.SetPosition(4, new Vector3(origin.x - s, yOffset, origin.z - s));
+        }
+    }
+
     private void DrawSquare(Vector3 corner, Vector3 opposite)
     {
         _lr.positionCount = 5;
@@ -441,6 +523,12 @@ public class MeasurementTool : NetworkBehaviour
         }
 
         string label = $"{ft:F0} ft";
+        if (mode == Mode.Circle)
+        {
+            var gm = FindAnyObjectByType<GridManager>();
+            bool isIntersection = GridManager.IsIntersectionPosition(a, gm);
+            label += isIntersection ? " (corner)" : " (center)";
+        }
 
         Vector2 guiPos = new Vector2(screenPos.x, Screen.height - screenPos.y);
         GUIStyle style = new GUIStyle(GUI.skin.label);

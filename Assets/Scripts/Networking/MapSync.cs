@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
@@ -5,7 +6,7 @@ using UnityEngine;
 /// <summary>
 /// Синхронизация карты: чанковая передача через CustomMessagingManager.
 /// Формат: [int chunkIndex][int dataSize][byte... data]
-/// Late-join через OnClientConnectedCallback.
+/// Late-join via LateJoinSync staggered pipeline.
 /// </summary>
 public class MapSync : NetworkBehaviour
 {
@@ -25,6 +26,9 @@ public class MapSync : NetworkBehaviour
     private readonly Dictionary<int, byte[]> _incomingChunks = new();
     private int _incomingTotalChunks;
     private int _incomingChunkCount;
+    private bool _receivingMap;
+
+    public bool IsReceivingMap => _receivingMap;
 
     private void Awake()
     {
@@ -34,8 +38,7 @@ public class MapSync : NetworkBehaviour
 
     private void Start()
     {
-        if (NetworkManager.Singleton != null)
-            NetworkManager.Singleton.OnClientConnectedCallback += OnLateJoin;
+        // Late-join map push is handled by LateJoinSync (staggered).
     }
 
     public override void OnNetworkSpawn()
@@ -50,7 +53,6 @@ public class MapSync : NetworkBehaviour
         {
             cmm.RegisterNamedMessageHandler(MSG_MAP_META, OnMapMetaReceived);
             cmm.RegisterNamedMessageHandler(MSG_MAP_CHUNK, OnMapChunkReceived);
-            RequestMapFromServer();
         }
     }
 
@@ -67,8 +69,6 @@ public class MapSync : NetworkBehaviour
                 cmm.UnregisterNamedMessageHandler(MSG_MAP_CHUNK);
             }
         }
-        if (NetworkManager.Singleton != null)
-            NetworkManager.Singleton.OnClientConnectedCallback -= OnLateJoin;
         base.OnDestroy();
     }
 
@@ -130,6 +130,7 @@ public class MapSync : NetworkBehaviour
     {
         reader.ReadValueSafe(out int totalChunks);
         Debug.Log($"[MapSync] Client: receiving map in {totalChunks} chunks");
+        _receivingMap = true;
         _incomingTotalChunks = totalChunks;
         _incomingChunkCount = 0;
         _incomingChunks.Clear();
@@ -175,25 +176,34 @@ public class MapSync : NetworkBehaviour
         Debug.Log($"[MapSync] Client: map reassembled ({totalSize} bytes)");
         mapController?.ApplyImageLocal(full);
         _incomingChunks.Clear();
+        _receivingMap = false;
+        LateJoinSync.NotifyServerReady();
     }
 
     // ═══ Late-join ═══
 
-    private void OnLateJoin(ulong clientId)
-    {
-        if (!IsServer) return;
-        if (clientId == NetworkManager.ServerClientId) return;
-        if (_cachedPng == null) return;
+    private const int ChunkSize = 1000;
+    private const int ChunksPerFrame = 4;
 
-        Debug.Log($"[MapSync] Late-join: sending map to client {clientId}");
-        const int sz = 1000;
-        int total = Mathf.CeilToInt((float)_cachedPng.Length / sz);
+    public IEnumerator SendMapToClientRoutine(ulong clientId)
+    {
+        if (!IsServer || clientId == NetworkManager.ServerClientId || _cachedPng == null)
+            yield break;
+
+        int total = Mathf.CeilToInt((float)_cachedPng.Length / ChunkSize);
+        Debug.Log($"[MapSync] Sending map to client {clientId}: {_cachedPng.Length} bytes, {total} chunks");
+
         SendMeta(clientId, total);
+        yield return null;
+
         for (int i = 0; i < total; i++)
         {
-            int off = i * sz;
-            int size = Mathf.Min(sz, _cachedPng.Length - off);
+            int off = i * ChunkSize;
+            int size = Mathf.Min(ChunkSize, _cachedPng.Length - off);
             SendChunk(clientId, i, _cachedPng, off, size);
+
+            if ((i + 1) % ChunksPerFrame == 0)
+                yield return null;
         }
     }
 
@@ -201,7 +211,7 @@ public class MapSync : NetworkBehaviour
     {
         if (!IsServer) return;
         Debug.Log($"[MapSync] Client {senderId} requested map");
-        OnLateJoin(senderId);
+        StartCoroutine(SendMapToClientRoutine(senderId));
     }
 
     public static void RequestMapFromServer()

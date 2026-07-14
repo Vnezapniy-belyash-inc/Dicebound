@@ -1,3 +1,4 @@
+using System;
 using System.Threading.Tasks;
 using Unity.Netcode;
 using Unity.Netcode.Transports.UTP;
@@ -44,14 +45,12 @@ public class RelayManager : MonoBehaviour
     public async Task<string> CreateRelayAllocation(int maxPlayers = 9)
     {
         await InitializeServices();
-
-        // Сброс транспорта перед новой аллокацией
-        var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
-        transport.SetConnectionData("127.0.0.1", 7777); // сброс на дефолт
+        ResetTransport();
 
         Allocation allocation = await RelayService.Instance.CreateAllocationAsync(maxPlayers - 1);
         string joinCode = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
 
+        var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
         transport.SetHostRelayData(
             allocation.RelayServer.IpV4,
             (ushort)allocation.RelayServer.Port,
@@ -65,19 +64,49 @@ public class RelayManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Клиент: подключиться к Relay-аллокации по join-коду.
+    /// Клиент: подключиться к Relay-аллокации по join-коду (с повторами при сбое HTTP).
     /// </summary>
-    /// <param name="joinCode">6-символьный код от хоста.</param>
-    public async Task JoinRelayAllocation(string joinCode)
+    public async Task JoinRelayAllocation(string joinCode, int maxAttempts = 3)
     {
         await InitializeServices();
+        ResetTransport();
 
-        // Сброс транспорта
+        Exception lastError = null;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                if (attempt > 1)
+                {
+                    Debug.LogWarning($"[Relay] Join retry {attempt}/{maxAttempts}...");
+                    await Task.Delay(350 * attempt);
+                    ResetTransport();
+                }
+
+                JoinAllocation joinAllocation = await RelayService.Instance.JoinAllocationAsync(joinCode);
+                ApplyClientRelayData(joinAllocation);
+                Debug.Log($"[Relay] Joined relay with code: {joinCode}");
+                return;
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+                Debug.LogWarning($"[Relay] Join attempt {attempt} failed: {ex.Message}");
+            }
+        }
+
+        throw lastError ?? new InvalidOperationException("Relay join failed.");
+    }
+
+    private static void ResetTransport()
+    {
         var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
         transport.SetConnectionData("127.0.0.1", 7777);
+    }
 
-        JoinAllocation joinAllocation = await RelayService.Instance.JoinAllocationAsync(joinCode);
-
+    private static void ApplyClientRelayData(JoinAllocation joinAllocation)
+    {
+        var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
         transport.SetClientRelayData(
             joinAllocation.RelayServer.IpV4,
             (ushort)joinAllocation.RelayServer.Port,
@@ -86,7 +115,5 @@ public class RelayManager : MonoBehaviour
             joinAllocation.ConnectionData,
             joinAllocation.HostConnectionData
         );
-
-        Debug.Log($"[Relay] Joined relay with code: {joinCode}");
     }
 }

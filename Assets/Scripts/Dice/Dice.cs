@@ -151,22 +151,22 @@ public class Dice : MonoBehaviour, IDice
     void DetermineResult()
     {
         if (_faces == null || _faces.Length == 0) return;
-        float bestDot = float.MinValue;
         int bestIndex = 0;
 
         if (DieType == DieType.d4)
         {
+            // d4: результат на грани, лежащей на столе (нормаль вниз)
+            float lowestDot = float.MaxValue;
             for (int i = 0; i < _faces.Length; i++)
             {
                 Vector3 worldNormal = transform.TransformDirection(_faces[i].normal);
                 float dot = Vector3.Dot(worldNormal, Vector3.up);
-                if (dot < bestDot) continue;
-                bestDot = dot;
-                bestIndex = i;
+                if (dot < lowestDot) { lowestDot = dot; bestIndex = i; }
             }
         }
         else
         {
+            float bestDot = float.MinValue;
             for (int i = 0; i < _faces.Length; i++)
             {
                 Vector3 worldNormal = transform.TransformDirection(_faces[i].normal);
@@ -185,7 +185,6 @@ public class Dice : MonoBehaviour, IDice
     {
         DieType.d100 when value == 0 => "00",
         DieType.d100 => value.ToString(),
-        DieType.d10 when value == 0 => "0",
         _ => value.ToString(),
     };
 }

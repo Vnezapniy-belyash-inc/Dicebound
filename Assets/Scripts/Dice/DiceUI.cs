@@ -372,7 +372,9 @@ public class DiceUI : MonoBehaviour
 
     void DoLeave()
     {
-        if (NetworkManager.Singleton != null)
+        if (GameNetworkManager.Instance != null)
+            _ = GameNetworkManager.Instance.ShutdownAndReset();
+        else if (NetworkManager.Singleton != null)
             NetworkManager.Singleton.Shutdown();
     }
 

@@ -85,7 +85,7 @@ public class PingManager : NetworkBehaviour
         mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         mr.receiveShadows = false;
 
-        Color c = PlayerColors.GetColor(clientId);
+        Color c = PlayerRegistry.GetServerPlayerColor(clientId);
         mr.material.color = c;
 
         // Запускаем мерцание + автоуничтожение

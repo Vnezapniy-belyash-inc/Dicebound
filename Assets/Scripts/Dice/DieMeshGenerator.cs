@@ -22,20 +22,51 @@ public static class DieMeshGenerator
     {
         switch (type)
         {
-            case DieType.d4:  return BuildMesh(BuildTetrahedron(),    new[] { 1, 2, 3, 4 });
+            // d4: основание = 1, вокруг вершины по часовой 2,3,4; результат = нижняя грань
+            case DieType.d4:
+            {
+                var (mesh, faces) = BuildMesh(BuildTetrahedron(), EnumerateFaceValues(4));
+                AssignConventionalD4Values(faces);
+                return (mesh, faces);
+            }
             // d6: -Z,+Z,-Y,+Y,-X,+X → противоположные грани: 1↔6, 2↔5, 3↔4
             case DieType.d6:  return BuildMesh(BuildCube(),           new[] { 1, 6, 2, 5, 3, 4 });
-            // d8: верхние 0-3, нижние 4-7 → противоположные: 1↔8, 2↔7, 3↔6, 4↔5
-            case DieType.d8:  return BuildMesh(BuildOctahedron(),     new[] { 1, 2, 3, 4, 6, 5, 8, 7 });
-            // d10: top 0-4, bottom 0-4 → top_i ↔ bottom_(i+2) → 0↔9, 1↔8, 2↔7, 3↔6, 4↔5
-            case DieType.d10:  return BuildD10(new[] { 0, 1, 2, 3, 4, 6, 5, 9, 8, 7 });
-            // d100: 00↔90, 10↔80, 20↔70, 30↔60, 40↔50
-            case DieType.d100: return BuildD10(new[] { 0, 10, 20, 30, 40, 60, 50, 90, 80, 70 });
-            // d12: вокруг вершин икосаэдра 0..11 → vi↔противоположная: 1↔12, 2↔11, 5↔8, 6↔7, 9↔4, 10↔3
-            case DieType.d12: return BuildMesh(BuildDodecahedronVertices(),
-                              new[] { 1, 2, 11, 12, 5, 6, 7, 8, 9, 10, 3, 4 });
-            // d20: 1..20 (противоположные = 21)
-            case DieType.d20: return BuildMesh(BuildIcosahedron(),    EnumerateFaceValues(20));
+            // d8: верхнее кольцо 1,3,5,7 → противоположные 8,6,4,2 (сумма 9)
+            case DieType.d8:
+            {
+                var (mesh, faces) = BuildMesh(BuildOctahedron(), EnumerateFaceValues(8));
+                AssignConventionalD8Values(faces);
+                return (mesh, faces);
+            }
+            // d10: верхнее кольцо по часовой 1,9,5,3,7 → низ 10,2,6,8,4 (сумма 11)
+            case DieType.d10:
+            {
+                var (mesh, faces) = BuildD10(EnumerateFaceValues(10));
+                AssignConventionalD10Values(faces);
+                return (mesh, faces);
+            }
+            // d100: то же кольцо что d10 ×10 → 10,90,50,30,70; низ 80,00,40,60,20 (сумма 90)
+            case DieType.d100:
+            {
+                var (mesh, faces) = BuildD10(EnumerateFaceValues(10));
+                AssignConventionalD100Values(faces);
+                return (mesh, faces);
+            }
+            // d12: грань 1, соседи по часовой 5,10,2,4,6 → противоположные = 13
+            case DieType.d12:
+            {
+                var (mesh, faces) = BuildMesh(BuildDodecahedronVertices(), EnumerateFaceValues(12));
+                AssignConventionalD12Values(faces);
+                return (mesh, faces);
+            }
+            // d20: стандартная раскладка Chessex — чётные на верхней полусфере,
+            // нечётные на нижней, противоположные = 21, числа перемешаны по величине
+            case DieType.d20:
+            {
+                var (mesh, faces) = BuildMesh(BuildIcosahedron(), EnumerateFaceValues(20));
+                AssignConventionalD20Values(faces);
+                return (mesh, faces);
+            }
             default:          return (null, null);
         }
     }
@@ -456,6 +487,281 @@ public static class DieMeshGenerator
         var v = new int[count];
         for (int i = 0; i < count; i++) v[i] = i + 1;
         return v;
+    }
+
+    // d10: верхнее кольцо 1,9,5,3,7; низ 10,2,6,8,4
+    static readonly int[] ConventionalD10UpperRing = { 1, 9, 5, 3, 7 };
+    // d100: то же расположение ×10; 0 отображается как «00»
+    static readonly int[] ConventionalD100UpperRing = { 10, 90, 50, 30, 70 };
+
+    static void AssignConventionalD10Values(DieFaceData[] faces)
+        => AssignTrapezohedronRingValues(faces, ConventionalD10UpperRing, 11);
+
+    static void AssignConventionalD100Values(DieFaceData[] faces)
+        => AssignTrapezohedronRingValues(faces, ConventionalD100UpperRing, 90);
+
+    /// <summary>Верхнее кольцо по часовой (вид сверху), противоположные = oppositeSum.</summary>
+    static void AssignTrapezohedronRingValues(DieFaceData[] faces, int[] upperValues, int oppositeSum)
+    {
+        if (faces.Length != 10 || upperValues.Length != 5) return;
+
+        var upperRing = new List<int>();
+        for (int i = 0; i < faces.Length; i++)
+        {
+            if (faces[i].center.y > 0f)
+                upperRing.Add(i);
+        }
+        if (upperRing.Count != 5) return;
+
+        SortFacesAroundY(faces, upperRing, clockwise: true);
+
+        for (int i = 0; i < 5; i++)
+        {
+            int upper = upperRing[i];
+            int lower = FindOppositeFace(faces, upper);
+            if (lower < 0) return;
+
+            int upperVal = upperValues[i];
+            SetFaceValue(faces, upper, upperVal);
+            SetFaceValue(faces, lower, oppositeSum - upperVal);
+        }
+    }
+
+    // d12: грань 1, кольцо соседей 5,10,2,4,6; противоположная 12
+    static readonly int[] ConventionalD12NeighborRing = { 5, 10, 2, 4, 6 };
+
+    static void AssignConventionalD12Values(DieFaceData[] faces)
+    {
+        if (faces.Length != 12) return;
+
+        var adj = BuildFaceAdjacency(faces);
+
+        int poleFace = 0;
+        float maxY = float.MinValue;
+        for (int i = 0; i < faces.Length; i++)
+        {
+            if (faces[i].center.y > maxY) { maxY = faces[i].center.y; poleFace = i; }
+        }
+
+        var ring = new List<int>(adj[poleFace]);
+        if (ring.Count != 5) return;
+
+        SortFacesAroundPole(faces, ring, poleFace, clockwise: true);
+
+        SetFaceValue(faces, poleFace, 1);
+        int poleOpposite = FindOppositeFace(faces, poleFace);
+        if (poleOpposite < 0) return;
+        SetFaceValue(faces, poleOpposite, 12);
+
+        for (int i = 0; i < 5; i++)
+        {
+            int ringFace = ring[i];
+            int ringOpposite = FindOppositeFace(faces, ringFace);
+            if (ringOpposite < 0) return;
+
+            int ringVal = ConventionalD12NeighborRing[i];
+            SetFaceValue(faces, ringFace, ringVal);
+            SetFaceValue(faces, ringOpposite, 13 - ringVal);
+        }
+    }
+
+    // d4: грань-основание (против вершины) = 1, три боковые по часовой = 2,3,4
+    static readonly int[] ConventionalD4ApexRing = { 2, 3, 4 };
+
+    static void AssignConventionalD4Values(DieFaceData[] faces)
+    {
+        if (faces.Length != 4) return;
+
+        int baseFace = 0;
+        float minCenterY = float.MaxValue;
+        for (int i = 0; i < faces.Length; i++)
+        {
+            if (faces[i].center.y < minCenterY)
+            {
+                minCenterY = faces[i].center.y;
+                baseFace = i;
+            }
+        }
+
+        var apexFaces = new List<int>();
+        for (int i = 0; i < faces.Length; i++)
+        {
+            if (i != baseFace)
+                apexFaces.Add(i);
+        }
+
+        SortFacesAroundY(faces, apexFaces, clockwise: true);
+        SetFaceValue(faces, baseFace, 1);
+        for (int i = 0; i < 3; i++)
+            SetFaceValue(faces, apexFaces[i], ConventionalD4ApexRing[i]);
+    }
+
+    static readonly int[] ConventionalD8UpperRing = { 1, 3, 5, 7 };
+
+    static void AssignConventionalD8Values(DieFaceData[] faces)
+    {
+        int n = faces.Length;
+        if (n != 8) return;
+
+        var upperRing = new List<int>();
+        for (int i = 0; i < n; i++)
+        {
+            if (faces[i].center.y > 0f)
+                upperRing.Add(i);
+        }
+        if (upperRing.Count != 4) return;
+
+        // Обход по часовой стрелке, если смотреть сверху вниз (вдоль +Y)
+        SortFacesAroundY(faces, upperRing, clockwise: true);
+
+        for (int i = 0; i < 4; i++)
+        {
+            int upper = upperRing[i];
+            int lower = FindOppositeFace(faces, upper);
+            if (lower < 0) return;
+
+            int upperVal = ConventionalD8UpperRing[i];
+            SetFaceValue(faces, upper, upperVal);
+            SetFaceValue(faces, lower, 9 - upperVal);
+        }
+    }
+
+    /// <summary>Сортировка граней вокруг вертикальной оси Y (вид сверху).</summary>
+    static void SortFacesAroundY(DieFaceData[] faces, List<int> ring, bool clockwise)
+    {
+        ring.Sort((a, b) =>
+        {
+            float angA = Mathf.Atan2(faces[a].center.x, faces[a].center.z);
+            float angB = Mathf.Atan2(faces[b].center.x, faces[b].center.z);
+            int cmp = angA.CompareTo(angB);
+            return clockwise ? cmp : -cmp;
+        });
+    }
+
+    // верх: 20,8,14,2,10,16,6,4,18,12  |  низ: 1,13,7,19,11,5,15,17,3,9
+    // у 20 соседи: 8,14,2  |  у 1 соседи: 13,7,19
+    static readonly int[] ConventionalD20UpperValues = { 20, 8, 14, 2, 10, 16, 6, 4, 18, 12 };
+    static readonly int[] ConventionalD20LowerValues = { 1, 13, 7, 19, 11, 5, 15, 17, 3, 9 };
+
+    /// <summary>
+    /// Раскладка Chessex: обход колец от полюса, не сортировка пар по азимуту.
+    /// </summary>
+    static void AssignConventionalD20Values(DieFaceData[] faces)
+    {
+        int n = faces.Length;
+        var adj = BuildFaceAdjacency(faces);
+
+        int topFace = 0;
+        float maxY = float.MinValue;
+        for (int i = 0; i < n; i++)
+        {
+            if (faces[i].center.y > maxY) { maxY = faces[i].center.y; topFace = i; }
+        }
+
+        int bottomFace = FindOppositeFace(faces, topFace);
+        if (bottomFace < 0) return;
+
+        var upperOrder = OrderHemisphereFaces(faces, adj, topFace, clockwise: false);
+        var lowerOrder = OrderHemisphereFaces(faces, adj, bottomFace, clockwise: true);
+
+        if (upperOrder.Count != 10 || lowerOrder.Count != 10) return;
+
+        for (int i = 0; i < 10; i++)
+            SetFaceValue(faces, upperOrder[i], ConventionalD20UpperValues[i]);
+        for (int i = 0; i < 10; i++)
+            SetFaceValue(faces, lowerOrder[i], ConventionalD20LowerValues[i]);
+    }
+
+    static void SetFaceValue(DieFaceData[] faces, int idx, int value)
+    {
+        faces[idx] = new DieFaceData { center = faces[idx].center, normal = faces[idx].normal, value = value };
+    }
+
+    static int FindOppositeFace(DieFaceData[] faces, int faceIdx)
+    {
+        for (int j = 0; j < faces.Length; j++)
+        {
+            if (j == faceIdx) continue;
+            if (Vector3.Dot(faces[faceIdx].normal, faces[j].normal) < -0.95f)
+                return j;
+        }
+        return -1;
+    }
+
+    static List<int>[] BuildFaceAdjacency(DieFaceData[] faces)
+    {
+        int n = faces.Length;
+        var adj = new List<int>[n];
+        for (int i = 0; i < n; i++) adj[i] = new List<int>();
+
+        float minDot = 0.6f, maxDot = 0.85f;
+        if (n == 12) { minDot = 0.25f; maxDot = 0.55f; } // додекаэдр
+
+        for (int i = 0; i < n; i++)
+        for (int j = i + 1; j < n; j++)
+        {
+            float dot = Vector3.Dot(faces[i].normal, faces[j].normal);
+            if (dot > minDot && dot < maxDot)
+            {
+                adj[i].Add(j);
+                adj[j].Add(i);
+            }
+        }
+        return adj;
+    }
+
+    /// <summary>10 граней полусферы: полюс + кольцо из 3 + кольцо из 6.</summary>
+    static List<int> OrderHemisphereFaces(DieFaceData[] faces, List<int>[] adj, int poleFace, bool clockwise)
+    {
+        var ordered = new List<int> { poleFace };
+        var visited = new HashSet<int> { poleFace };
+
+        var ring1 = new List<int>();
+        foreach (int nb in adj[poleFace])
+        {
+            if (IsInHemisphereOf(faces, poleFace, nb))
+                ring1.Add(nb);
+        }
+        SortFacesAroundPole(faces, ring1, poleFace, clockwise);
+        ordered.AddRange(ring1);
+        foreach (int f in ring1) visited.Add(f);
+
+        var ring2 = new List<int>();
+        foreach (int r in ring1)
+        foreach (int nb in adj[r])
+        {
+            if (visited.Contains(nb) || !IsInHemisphereOf(faces, poleFace, nb)) continue;
+            if (!ring2.Contains(nb)) ring2.Add(nb);
+        }
+        SortFacesAroundPole(faces, ring2, poleFace, clockwise);
+        ordered.AddRange(ring2);
+
+        return ordered;
+    }
+
+    static bool IsInHemisphereOf(DieFaceData[] faces, int poleFace, int faceIdx)
+    {
+        return faces[poleFace].center.y >= 0f
+            ? faces[faceIdx].center.y >= -1e-4f
+            : faces[faceIdx].center.y <= 1e-4f;
+    }
+
+    static void SortFacesAroundPole(DieFaceData[] faces, List<int> ring, int poleFace, bool clockwise)
+    {
+        Vector3 axis = faces[poleFace].center.normalized;
+        Vector3 refDir = Mathf.Abs(Vector3.Dot(axis, Vector3.up)) < 0.9f ? Vector3.up : Vector3.forward;
+        Vector3 tangent = Vector3.Cross(axis, refDir).normalized;
+        Vector3 bitangent = Vector3.Cross(axis, tangent).normalized;
+
+        ring.Sort((a, b) =>
+        {
+            Vector3 pa = faces[a].center - axis * Vector3.Dot(faces[a].center, axis);
+            Vector3 pb = faces[b].center - axis * Vector3.Dot(faces[b].center, axis);
+            float angA = Mathf.Atan2(Vector3.Dot(pa, tangent), Vector3.Dot(pa, bitangent));
+            float angB = Mathf.Atan2(Vector3.Dot(pb, tangent), Vector3.Dot(pb, bitangent));
+            int cmp = angA.CompareTo(angB);
+            return clockwise ? -cmp : cmp;
+        });
     }
 
     static (int, int, int) SortTriple(int a, int b, int c)

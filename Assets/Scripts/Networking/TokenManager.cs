@@ -30,7 +30,7 @@ public class TokenManager : MonoBehaviour
         if (NetworkManager.Singleton != null)
         {
             NetworkManager.Singleton.OnServerStarted += OnServerStarted;
-            TokenController.EnsureLateJoinHook();
+            TokenImageSync.EnsureInstance();
             CellMarker.EnsureRegistered();
         }
     }

@@ -254,6 +254,88 @@ public class GridManager : MonoBehaviour
         return new Vector3(-halfW + (col + 0.5f) * cellSize, y, -halfH + (row + 0.5f) * cellSize);
     }
 
+    public enum SphereSnapKind { CellCenter, Intersection }
+
+    /// <summary>
+    /// Snap sphere origin/radius handle to cell center or grid intersection.
+    /// Uses tolerance zones so the user does not need pixel-perfect clicks.
+    /// </summary>
+    public Vector3 SnapSpherePoint(Vector3 worldPos, float y, out SphereSnapKind kind, float toleranceFraction = 0.4f)
+    {
+        kind = SphereSnapKind.CellCenter;
+        float halfW = gridWidth * cellSize / 2f;
+        float halfH = gridHeight * cellSize / 2f;
+        float tolerance = cellSize * toleranceFraction;
+
+        Vector2Int cell = GetGridPosition(worldPos);
+        Vector3 center = cell.x >= 0 ? GetCellCenter(cell.x, cell.y, y) : worldPos;
+
+        int ix = Mathf.Clamp(Mathf.RoundToInt((worldPos.x + halfW) / cellSize), 0, gridWidth);
+        int iz = Mathf.Clamp(Mathf.RoundToInt((worldPos.z + halfH) / cellSize), 0, gridHeight);
+        Vector3 intersection = new Vector3(-halfW + ix * cellSize, y, -halfH + iz * cellSize);
+
+        float distCenter = HorizontalDistance(worldPos, center);
+        float distIntersection = HorizontalDistance(worldPos, intersection);
+
+        bool nearCenter = distCenter <= tolerance;
+        bool nearIntersection = distIntersection <= tolerance;
+
+        if (nearCenter && nearIntersection)
+        {
+            if (distCenter <= distIntersection)
+            {
+                kind = SphereSnapKind.CellCenter;
+                return center;
+            }
+
+            kind = SphereSnapKind.Intersection;
+            return intersection;
+        }
+
+        if (nearCenter)
+        {
+            kind = SphereSnapKind.CellCenter;
+            return center;
+        }
+
+        if (nearIntersection)
+        {
+            kind = SphereSnapKind.Intersection;
+            return intersection;
+        }
+
+        // Fallback: snap to whichever grid anchor is closer.
+        if (distCenter <= distIntersection)
+        {
+            kind = SphereSnapKind.CellCenter;
+            return center;
+        }
+
+        kind = SphereSnapKind.Intersection;
+        return intersection;
+    }
+
+    public static bool IsIntersectionPosition(Vector3 position, GridManager gm)
+    {
+        if (gm == null) return false;
+
+        float halfW = gm.gridWidth * gm.cellSize / 2f;
+        float halfH = gm.gridHeight * gm.cellSize / 2f;
+        float relX = (position.x + halfW) / gm.cellSize;
+        float relZ = (position.z + halfH) / gm.cellSize;
+        const float eps = 0.001f;
+
+        return Mathf.Abs(relX - Mathf.Round(relX)) < eps
+            && Mathf.Abs(relZ - Mathf.Round(relZ)) < eps;
+    }
+
+    private static float HorizontalDistance(Vector3 a, Vector3 b)
+    {
+        float dx = a.x - b.x;
+        float dz = a.z - b.z;
+        return Mathf.Sqrt(dx * dx + dz * dz);
+    }
+
     // ═══ Занятость клеток ═══
 
     public bool IsCellOccupied(Vector2Int cell) => _occupiedCells.Contains(cell);

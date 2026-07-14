@@ -7,6 +7,9 @@ using UnityEngine;
 /// </summary>
 public class CellMarker : NetworkBehaviour
 {
+    private const uint PrefabHash = 3847291051u;
+    private const uint LegacyPrefabHash = 0;
+
     [Header("Visual")]
     public float yOffset = 0.015f;
 
@@ -27,28 +30,50 @@ public class CellMarker : NetworkBehaviour
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
     private MeshRenderer _renderer;
-    private static GameObject _prefab;
+    private static GameObject _template;
     private static bool _handlerRegistered;
+
+    internal static GameObject GetTemplate()
+    {
+        if (_template == null || !_template)
+            _template = CreateTemplate();
+        return _template;
+    }
 
     public static void EnsureRegistered()
     {
-        if (_handlerRegistered) return;
-        if (_prefab == null)
-            _prefab = CreatePrefab();
+        if (NetworkManager.Singleton == null) return;
 
-        // Регистрируем через PrefabHandler чтобы клиенты могли спавнить
-        var netObj = _prefab.GetComponent<NetworkObject>();
-        NetworkManager.Singleton.PrefabHandler.AddHandler(netObj, new CellMarkerSpawnHandler(_prefab));
+        GetTemplate();
+
+        if (_handlerRegistered) return;
+
+        var handler = new CellMarkerSpawnHandler();
+        NetworkManager.Singleton.PrefabHandler.AddHandler(PrefabHash, handler);
+        NetworkManager.Singleton.PrefabHandler.AddHandler(LegacyPrefabHash, new CellMarkerSpawnHandler());
         _handlerRegistered = true;
+        Debug.Log($"[CellMarker] Prefab handler registered (hash={PrefabHash}, legacy={LegacyPrefabHash})");
     }
+
+    public static void ResetRegistration()
+    {
+        if (NetworkManager.Singleton != null && _handlerRegistered)
+        {
+            NetworkManager.Singleton.PrefabHandler.RemoveHandler(PrefabHash);
+            NetworkManager.Singleton.PrefabHandler.RemoveHandler(LegacyPrefabHash);
+        }
+
+        _handlerRegistered = false;
+    }
+
     public static void Spawn(Vector3 position, int textureIndex)
     {
         if (!NetworkManager.Singleton.IsServer) return;
 
-        if (_prefab == null)
-            _prefab = CreatePrefab();
+        EnsureRegistered();
 
-        var go = Instantiate(_prefab, position, Quaternion.identity);
+        var go = Object.Instantiate(GetTemplate(), position, Quaternion.identity);
+        go.SetActive(true);
         var netObj = go.GetComponent<NetworkObject>();
         netObj.Spawn();
 
@@ -56,21 +81,23 @@ public class CellMarker : NetworkBehaviour
         marker._netTexIndex.Value = textureIndex;
     }
 
-    private static GameObject CreatePrefab()
+    private static GameObject CreateTemplate()
     {
-        var go = new GameObject("CellMarker");
-        go.AddComponent<NetworkObject>();
+        var go = new GameObject("CellMarkerTemplate");
+        go.SetActive(false);
+        Object.DontDestroyOnLoad(go);
 
-        // Quad
+        var netObj = go.AddComponent<NetworkObject>();
+        NetworkPrefabHash.Set(netObj, PrefabHash);
+
         var quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
         quad.transform.SetParent(go.transform);
         quad.transform.localPosition = Vector3.zero;
         quad.transform.localRotation = Quaternion.Euler(90, 0, 0);
-        quad.transform.localScale = new Vector3(0.95f, 0.95f, 1f); // чуть меньше клетки
+        quad.transform.localScale = new Vector3(0.95f, 0.95f, 1f);
 
-        // Удаляем коллайдер (не нужен)
         var collider = quad.GetComponent<Collider>();
-        if (collider != null) Destroy(collider);
+        if (collider != null) Object.Destroy(collider);
 
         go.AddComponent<CellMarker>();
         return go;
@@ -106,7 +133,6 @@ public class CellMarker : NetworkBehaviour
         _renderer.material.color = TextureColors[index];
     }
 
-    /// <summary>Удалить этот маркер (вызывается по ПКМ).</summary>
     public void RequestRemove()
     {
         if (IsServer)
@@ -121,7 +147,6 @@ public class CellMarker : NetworkBehaviour
         GetComponent<NetworkObject>().Despawn();
     }
 
-    /// <summary>Удаляет все маркеры, созданные текущим игроком.</summary>
     public static void ClearAllMyMarkers()
     {
         var markers = FindObjectsByType<CellMarker>(FindObjectsInactive.Exclude);
@@ -133,21 +158,22 @@ public class CellMarker : NetworkBehaviour
     }
 }
 
-/// <summary>Обработчик спавна CellMarker на клиенте.</summary>
 public class CellMarkerSpawnHandler : INetworkPrefabInstanceHandler
 {
-    private GameObject _prefab;
-
-    public CellMarkerSpawnHandler(GameObject prefab) { _prefab = prefab; }
-
     public NetworkObject Instantiate(ulong ownerClientId, Vector3 position, Quaternion rotation)
     {
-        var go = Object.Instantiate(_prefab, position, rotation);
+        var template = CellMarker.GetTemplate();
+        if (template == null || !template)
+            return null;
+
+        var go = Object.Instantiate(template, position, rotation);
+        go.SetActive(true);
         return go.GetComponent<NetworkObject>();
     }
 
     public void Destroy(NetworkObject netObj)
     {
-        Object.Destroy(netObj.gameObject);
+        if (netObj != null)
+            Object.Destroy(netObj.gameObject);
     }
 }
