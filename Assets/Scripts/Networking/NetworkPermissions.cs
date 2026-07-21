@@ -10,7 +10,7 @@ public static class NetworkPermissions
     public static bool IsHostClient(ulong clientId)
     {
         var nm = NetworkManager.Singleton;
-        return nm != null && clientId == nm.ServerClientId;
+        return nm != null && clientId == NetworkManager.ServerClientId;
     }
 
     public static bool HostHasSpawnedDice(ulong hostClientId)
