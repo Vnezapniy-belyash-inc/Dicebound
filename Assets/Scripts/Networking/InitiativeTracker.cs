@@ -8,7 +8,8 @@ using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 /// <summary>
-/// Initiative Tracker. Хост управляет. I — показать/скрыть.
+/// Initiative Tracker. Права: IsHost — добавление, ход, очистка.
+/// Клиенты только просматривают (I — показать/скрыть).
 /// </summary>
 [RequireComponent(typeof(NetworkObject))]
 public class InitiativeTracker : NetworkBehaviour
@@ -23,6 +24,10 @@ public class InitiativeTracker : NetworkBehaviour
     private Canvas _canvas;
     private GameObject _panel;
     private Font _font;
+    private GameObject _btnAdd;
+    private GameObject _btnNext;
+    private GameObject _btnClear;
+    private bool _hostControlsVisible;
 
     private struct Entry
     {
@@ -61,6 +66,8 @@ public class InitiativeTracker : NetworkBehaviour
             ParseData(_netData.Value.ToString());
             RebuildCards();
         }
+
+        UpdateHostControlsVisibility();
     }
 
     private void Update()
@@ -69,9 +76,30 @@ public class InitiativeTracker : NetworkBehaviour
         if (_panel != null && _panel.activeSelf != connected)
             _panel.SetActive(connected);
 
-        var k = Keyboard.current;
-        if (k != null && k.iKey.wasPressedThisFrame && _panel != null && connected)
-            _panel.SetActive(!_panel.activeSelf);
+        if (GameplayInputGate.AllowsKeyboardHotkeys)
+        {
+            var k = Keyboard.current;
+            if (k != null && k.iKey.wasPressedThisFrame && _panel != null && connected)
+                _panel.SetActive(!_panel.activeSelf);
+        }
+
+        if (connected)
+            UpdateHostControlsVisibility();
+    }
+
+    private void UpdateHostControlsVisibility()
+    {
+        bool show = IsHost;
+        if (_btnAdd != null) _btnAdd.SetActive(show);
+        if (_btnNext != null) _btnNext.SetActive(show);
+        if (_btnClear != null) _btnClear.SetActive(show);
+
+        if (!show && _addPanel != null && _addPanel.activeSelf)
+            _addPanel.SetActive(false);
+
+        if (show == _hostControlsVisible) return;
+        _hostControlsVisible = show;
+        RebuildCards();
     }
 
     // ═══ Данные (JSON: idx|n,i,c;n,i,c;...) ═══
@@ -190,13 +218,14 @@ public class InitiativeTracker : NetworkBehaviour
         _cardsRt.anchorMin = _cardsRt.anchorMax = new Vector2(0, 1);
         _cardsRt.pivot = new Vector2(0, 1);
 
-        // Кнопки
+        // Кнопки (хост)
         float bx = PW - PD - 24;
-        MkBtn(_panel.transform, "+", _font, new Color(0.12f, 0.25f, 0.4f), bx - 56, -PD, 24, 24, ShowAddPanel);
-        MkBtn(_panel.transform, ">", _font, new Color(0.12f, 0.25f, 0.4f), bx - 28, -PD, 24, 24, NextTurn);
-        MkBtn(_panel.transform, "X", _font, new Color(0.35f, 0.12f, 0.12f), bx, -PD, 24, 24, ClearAll);
+        _btnAdd = MkBtn(_panel.transform, "+", _font, new Color(0.12f, 0.25f, 0.4f), bx - 56, -PD, 24, 24, ShowAddPanel);
+        _btnNext = MkBtn(_panel.transform, ">", _font, new Color(0.12f, 0.25f, 0.4f), bx - 28, -PD, 24, 24, NextTurn);
+        _btnClear = MkBtn(_panel.transform, "X", _font, new Color(0.35f, 0.12f, 0.12f), bx, -PD, 24, 24, ClearAll);
 
         BuildAddPanel(cgo.transform);
+        UpdateHostControlsVisibility();
     }
 
     private float _panelX, _panelY, _panelW, _panelPD;
@@ -208,7 +237,7 @@ public class InitiativeTracker : NetworkBehaviour
         foreach (Transform t in _cardsParent.transform) Destroy(t.gameObject);
 
         float cardW = 160f, rowH = 36f, gap = 6f;
-        float btnRowH = 28f; // высота строки с кнопками
+        float btnRowH = IsHost ? 28f : 0f;
         float availW = _panelW - _panelPD * 2;
         int perRow = Mathf.Max(1, (int)((availW + gap) / (cardW + gap)));
 
@@ -313,7 +342,11 @@ public class InitiativeTracker : NetworkBehaviour
     private GameObject _addPanel;
     private InputField _nameInput, _initInput;
 
-    void ShowAddPanel() { if (_addPanel != null) _addPanel.SetActive(true); }
+    void ShowAddPanel()
+    {
+        if (!IsHost || _addPanel == null) return;
+        _addPanel.SetActive(true);
+    }
 
     // ═══ Хелперы ═══
 

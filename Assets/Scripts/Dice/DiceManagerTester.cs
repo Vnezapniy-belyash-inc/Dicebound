@@ -15,6 +15,8 @@ public class DiceManagerTester : MonoBehaviour
         Keyboard k = Keyboard.current;
         if (k == null) return;
 
+        if (!GameplayInputGate.AllowsKeyboardHotkeys) return;
+
         if (k.rKey.wasPressedThisFrame)
             DiceManager.Instance.RollAll();
 

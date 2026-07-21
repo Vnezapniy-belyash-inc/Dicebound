@@ -182,10 +182,7 @@ public class MeasurementTool : NetworkBehaviour
     {
         if (!IsOwner || !_netActive.Value) return;
 
-        // Не обрабатываем клики по UI
-        if (UnityEngine.EventSystems.EventSystem.current != null &&
-            UnityEngine.EventSystems.EventSystem.current.IsPointerOverGameObject())
-            return;
+        if (!GameplayInputGate.AllowsWorldPointerInput) return;
 
         var mouse = Mouse.current;
         if (mouse == null) return;
@@ -673,7 +670,7 @@ public class MeasurementTool : NetworkBehaviour
         if (cells.Count == 0) return;
 
         if (IsServer)
-            SpawnMarkers(cells, textureIndex);
+            SpawnMarkers(cells, textureIndex, OwnerClientId);
         else
             RequestApplyAreaServerRpc(SerializeCells(cells), textureIndex);
 
@@ -681,20 +678,20 @@ public class MeasurementTool : NetworkBehaviour
     }
 
     [Rpc(SendTo.Server)]
-    private void RequestApplyAreaServerRpc(string cellData, int textureIndex)
+    private void RequestApplyAreaServerRpc(string cellData, int textureIndex, RpcParams rpcParams = default)
     {
         var cells = DeserializeCells(cellData);
-        SpawnMarkers(cells, textureIndex);
+        SpawnMarkers(cells, textureIndex, rpcParams.Receive.SenderClientId);
     }
 
-    private void SpawnMarkers(List<Vector2Int> cells, int textureIndex)
+    private void SpawnMarkers(List<Vector2Int> cells, int textureIndex, ulong spawnerClientId)
     {
         foreach (var cell in cells)
         {
             var gm = FindAnyObjectByType<GridManager>();
             if (gm == null) continue;
             Vector3 pos = gm.GetCellCenter(cell.x, cell.y, 0.015f);
-            CellMarker.Spawn(pos, textureIndex);
+            CellMarker.Spawn(pos, textureIndex, spawnerClientId);
         }
     }
 

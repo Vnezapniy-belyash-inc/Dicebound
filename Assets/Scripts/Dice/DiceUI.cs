@@ -35,6 +35,8 @@ public class DiceUI : MonoBehaviour
     private GameObject _sidebarGO;
     private GameObject _bottomPanelGO; // панель снизу-слева (X — скрыть/показать)
     private GameObject _debugPanelGO;  // панель генерации дайсов (E — скрыть/показать)
+    private GameObject _mapTexButton;
+    private GameObject _mapScaleLabel;
     private GameObject _logPanelGO;    // панель лога событий (L — скрыть/показать)
     private Text _logText;
     private readonly List<string> _logEntries = new(); // строки лога
@@ -84,8 +86,7 @@ public class DiceUI : MonoBehaviour
         // В главном меню хоткеи не работают
         if (_sidebarGO == null || !_sidebarGO.activeSelf) return;
 
-        // Не работают когда фокус на текстовом поле
-        if (IsInputFocused()) return;
+        if (!GameplayInputGate.AllowsKeyboardHotkeys) return;
 
         // Tab — показать/скрыть список игроков
         if (_playerListPanel != null)
@@ -98,7 +99,7 @@ public class DiceUI : MonoBehaviour
             }
         }
 
-        if (k.eKey.wasPressedThisFrame)
+        if (k.eKey.wasPressedThisFrame && IsLocalHost())
             TogglePanel(_debugPanelGO, null);
 
         if (k.qKey.wasPressedThisFrame)
@@ -109,6 +110,24 @@ public class DiceUI : MonoBehaviour
 
         if (k.lKey.wasPressedThisFrame)
             TogglePanel(_logPanelGO, _logTab);
+
+        UpdateHostMapControls();
+    }
+
+    static bool IsLocalHost()
+    {
+        return NetworkManager.Singleton != null && NetworkManager.Singleton.IsHost;
+    }
+
+    void UpdateHostMapControls()
+    {
+        bool isHost = IsLocalHost();
+        if (_mapTexButton != null) _mapTexButton.SetActive(isHost);
+        if (_mapScaleLabel != null) _mapScaleLabel.SetActive(isHost);
+        if (_scaleInput != null) _scaleInput.gameObject.SetActive(isHost);
+
+        if (!isHost && _debugPanelGO != null && _debugPanelGO.activeSelf)
+            _debugPanelGO.SetActive(false);
     }
 
     void TogglePanel(GameObject panel, GameObject tab)
@@ -123,14 +142,6 @@ public class DiceUI : MonoBehaviour
     {
         if (DiceManager.Instance != null)
             DiceManager.Instance.OnAnyResult -= OnDieResult;
-    }
-
-    static bool IsInputFocused()
-    {
-        var es = UnityEngine.EventSystems.EventSystem.current;
-        if (es == null) return false;
-        var go = es.currentSelectedGameObject;
-        return go != null && go.GetComponent<InputField>() != null;
     }
 
     // ══════════════════════════════════════════════
@@ -206,10 +217,12 @@ public class DiceUI : MonoBehaviour
         // Кнопка Tex
         float texW = 50f;
         MakeButton(panelGO.transform, "Tex", 8f, -8f, texW, buttonHeight, uiFont, OpenTexturePicker);
+        _mapTexButton = panelGO.transform.Find("Btn_Tex")?.gameObject;
 
         // Поле Scale
         float scaleX = 8f + texW + gap;
         GameObject scaleGO = new GameObject("ScaleLabel");
+        _mapScaleLabel = scaleGO;
         scaleGO.transform.SetParent(panelGO.transform, false);
         Text scaleLabel = scaleGO.AddComponent<Text>();
         scaleLabel.font = uiFont;
@@ -289,6 +302,7 @@ public class DiceUI : MonoBehaviour
         if (_bottomPanelGO != null) _bottomPanelGO.SetActive(true);
         if (_logPanelGO != null) { _logPanelGO.SetActive(true); if (_logTab != null) _logTab.SetActive(false); }
         if (_leaveButton != null) _leaveButton.SetActive(true);
+        UpdateHostMapControls();
     }
 
     /// <summary>Скрывает все игровые панели (при выходе из лобби).</summary>
@@ -986,17 +1000,25 @@ public class DiceUI : MonoBehaviour
 
     void ClearAll()
     {
-        // Удаляем сетевые кубики
+        var nm = NetworkManager.Singleton;
+        bool isHost = nm != null && nm.IsHost;
+        ulong localClientId = nm != null ? nm.LocalClientId : 0;
+        bool hostHasOwnDice = isHost && NetworkPermissions.HostHasSpawnedDice(localClientId);
+
+        // Удаляем сетевые кубики (права: IsSpawner; хост без своих — все)
         var netDice = FindObjectsByType<NetworkDice>(FindObjectsInactive.Exclude);
         foreach (var nd in netDice)
         {
-            if (nd.IsOwner && nd.TryGetComponent<NetworkObject>(out var no) && no.IsSpawned)
-            {
-                if (NetworkManager.Singleton.IsServer)
-                    no.Despawn();
-                else
-                    SendDespawnRequest(no.NetworkObjectId);
-            }
+            if (!NetworkPermissions.ShouldDeleteDiceInClearAll(nd, localClientId, isHost, hostHasOwnDice))
+                continue;
+
+            if (!nd.TryGetComponent<NetworkObject>(out var no) || !no.IsSpawned)
+                continue;
+
+            if (nm != null && nm.IsServer)
+                no.Despawn();
+            else
+                SendDespawnRequest(no.NetworkObjectId);
         }
 
         // Удаляем локальные кубики

@@ -3,9 +3,8 @@ using Unity.Netcode;
 using UnityEngine;
 
 /// <summary>
-/// Сетевой кубик. Физика на владельце, позиция через NetworkTransform.
-/// Тип: InitClientRpc для текущих клиентов + NetworkVariable для late-join.
-/// Результат: владелец → ServerRpc → ClientRpc всем.
+/// Сетевой кубик. Права: IsSpawner — удаление; IsOwner — бросок и физика (любой игрок).
+/// Тип: InitClientRpc + NetworkVariable для late-join.
 /// </summary>
 [RequireComponent(typeof(Rigidbody))]
 [RequireComponent(typeof(NetworkObject))]
@@ -46,6 +45,11 @@ public class NetworkDice : NetworkBehaviour, IDice
         ulong.MaxValue, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
     public ulong SpawnerClientId => _netSpawnerClientId.Value;
+
+    public bool IsSpawner =>
+        NetworkManager.Singleton != null
+        && SpawnerClientId != ulong.MaxValue
+        && NetworkManager.Singleton.LocalClientId == SpawnerClientId;
 
     private Rigidbody _rb;
     private DieFaceData[] _faces;

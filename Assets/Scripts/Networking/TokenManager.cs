@@ -58,10 +58,7 @@ public class TokenManager : MonoBehaviour
     {
         if (NetworkManager.Singleton == null || tokenPrefab == null) return;
 
-        // Позиция: центр карты
-        Vector3 pos = MapController.Instance != null
-            ? MapController.Instance.transform.position
-            : Vector3.zero;
+        Vector3 pos = GetDefaultSpawnPosition();
 
         if (NetworkManager.Singleton.IsServer)
         {
@@ -80,6 +77,30 @@ public class TokenManager : MonoBehaviour
         }
     }
 
+    /// <summary>Server: duplicate token at default spawn; copier becomes owner/spawner.</summary>
+    public TokenController CopyToken(TokenController source, ulong copierClientId)
+    {
+        if (!NetworkManager.Singleton.IsServer || source == null || !source.IsSpawned || tokenPrefab == null)
+            return null;
+
+        TokenController copy = SpawnTokenForClient(GetDefaultSpawnPosition(), copierClientId);
+        if (copy == null) return null;
+
+        byte[] portrait = TokenImageSync.GetPortraitBytesForCopy(source);
+        if (portrait != null && portrait.Length > 0)
+            TokenImageSync.BroadcastImage(copy.NetworkObjectId, portrait);
+
+        Debug.Log($"[Token] Copied {source.NetworkObjectId} -> {copy.NetworkObjectId} for {copierClientId}");
+        return copy;
+    }
+
+    public static Vector3 GetDefaultSpawnPosition()
+    {
+        return MapController.Instance != null
+            ? MapController.Instance.transform.position
+            : Vector3.zero;
+    }
+
     private void OnSpawnTokenRequest(ulong senderId, FastBufferReader reader)
     {
         reader.ReadValueSafe(out float x);
@@ -88,12 +109,13 @@ public class TokenManager : MonoBehaviour
         SpawnTokenForClient(new Vector3(x, y, z), senderId);
     }
 
-    private void SpawnTokenForClient(Vector3 pos, ulong ownerId)
+    private TokenController SpawnTokenForClient(Vector3 pos, ulong ownerId)
     {
         pos.y = spawnHeight;
         NetworkObject netObj = Instantiate(tokenPrefab, pos, Quaternion.identity);
         netObj.SpawnWithOwnership(ownerId);
-        netObj.DontDestroyWithOwner = true; // не удалять при дисконнекте
+        netObj.DontDestroyWithOwner = true;
         Debug.Log($"[Token] Spawned for owner {ownerId}");
+        return netObj.GetComponent<TokenController>();
     }
 }

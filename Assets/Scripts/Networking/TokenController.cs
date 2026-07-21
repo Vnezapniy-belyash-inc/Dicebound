@@ -8,10 +8,8 @@ using UnityEditor;
 #endif
 
 /// <summary>
-/// Сетевой токен (шайба с портретом).
-/// Двигать может любой (через RequestOwnership).
-/// Картинку загружает только создатель.
-/// Привязка к сетке при отпускании.
+/// Сетевой токен. Права: IsSpawner — свои; IsHost — любые (картинка, удаление, копирование).
+/// IsOwner — перемещение (любой игрок через RequestOwnership).
 /// </summary>
 [RequireComponent(typeof(NetworkObject))]
 public class TokenController : NetworkBehaviour
@@ -124,10 +122,10 @@ public class TokenController : NetworkBehaviour
         GetComponent<NetworkObject>().ChangeOwnership(rpcParams.Receive.SenderClientId);
     }
 
-    /// <summary>Загружает картинку на токен (только создатель, не зависит от перетаскивания).</summary>
+    /// <summary>Загружает картинку на токен (создатель или хост).</summary>
     public void LoadImage(byte[] jpgData)
     {
-        if (!IsSpawner || jpgData == null || jpgData.Length == 0) return;
+        if ((!IsSpawner && !IsHost) || jpgData == null || jpgData.Length == 0) return;
 
         ApplyImageLocal(jpgData);
         if (!IsSpawned) return;
@@ -274,6 +272,32 @@ public class TokenController : NetworkBehaviour
             gm.ReleaseCell(_currentCell);
     }
 
+    // ═══ Копирование ═══
+
+    public void RequestCopy()
+    {
+        if (!IsSpawned) return;
+        if (!IsSpawner && !IsHost) return;
+
+        if (IsServer)
+        {
+            if (NetworkPermissions.CanCopyToken(NetworkManager.Singleton.LocalClientId, this))
+                TokenManager.Instance?.CopyToken(this, NetworkManager.Singleton.LocalClientId);
+        }
+        else
+        {
+            RequestCopyServerRpc();
+        }
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void RequestCopyServerRpc(RpcParams rpcParams = default)
+    {
+        ulong sender = rpcParams.Receive.SenderClientId;
+        if (!NetworkPermissions.CanCopyToken(sender, this)) return;
+        TokenManager.Instance?.CopyToken(this, sender);
+    }
+
     // ═══ Контекстное меню (OnGUI) ═══
 
     private static TokenController _activeMenuToken;
@@ -288,6 +312,10 @@ public class TokenController : NetworkBehaviour
 
     private void OnMouseOver()
     {
+        if (!IsSpawner && !IsHost) return;
+
+        if (!GameplayInputGate.AllowsWorldPointerInput) return;
+
         var mouse = Mouse.current;
         if (mouse != null && mouse.rightButton.wasPressedThisFrame)
         {
@@ -298,7 +326,7 @@ public class TokenController : NetworkBehaviour
 
             _showMenu = true;
             Vector2 mousePos = mouse.position.ReadValue();
-            _menuRect = new Rect(mousePos.x, Screen.height - mousePos.y - 70, 160, 75);
+            _menuRect = new Rect(mousePos.x, Screen.height - mousePos.y - 108, 160, 108);
         }
     }
 
@@ -367,15 +395,42 @@ public class TokenController : NetworkBehaviour
     private void OnGUI()
     {
         if (!_showMenu) return;
-        GUI.Box(_menuRect, "");
 
-        if (GUI.Button(new Rect(_menuRect.x + 4, _menuRect.y + 4, 152, 28), "Загрузить изображение"))
+        bool canLoad = IsSpawner || IsHost;
+        bool canCopy = IsSpawner || IsHost;
+        bool canDelete = IsSpawner || IsHost;
+        if (!canLoad && !canCopy && !canDelete)
         {
-            LoadImageDialog();
             _showMenu = false;
+            return;
         }
 
-        if (GUI.Button(new Rect(_menuRect.x + 4, _menuRect.y + 38, 152, 28), "Удалить токен"))
+        GUI.Box(_menuRect, "");
+
+        float y = _menuRect.y + 4f;
+        if (canLoad)
+        {
+            if (GUI.Button(new Rect(_menuRect.x + 4, y, 152, 28), "Загрузить изображение"))
+            {
+                LoadImageDialog();
+                _showMenu = false;
+                return;
+            }
+
+            y += 34f;
+        }
+
+        if (canCopy && GUI.Button(new Rect(_menuRect.x + 4, y, 152, 28), "Копировать"))
+        {
+            RequestCopy();
+            _showMenu = false;
+            return;
+        }
+
+        if (canCopy)
+            y += 34f;
+
+        if (canDelete && GUI.Button(new Rect(_menuRect.x + 4, y, 152, 28), "Удалить токен"))
         {
             RequestDespawn();
             _showMenu = false;

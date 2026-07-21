@@ -10,8 +10,7 @@ using UnityEditor;
 
 /// <summary>
 /// Контроллер карты: загрузка PNG, масштаб, drag (средняя кнопка), rotate (R).
-/// NetworkBehaviour: NetworkTransform для позиции/поворота, NetworkVariable для масштаба.
-/// Только хост (IsOwner) управляет.
+/// Права: только хост (IsHost) — загрузка, масштаб, перемещение, поворот.
 /// </summary>
 [RequireComponent(typeof(NetworkObject))]
 public class MapController : NetworkBehaviour
@@ -114,10 +113,15 @@ public class MapController : NetworkBehaviour
 
     private void Update()
     {
-        if (IsOwner)
+        if (IsHost)
         {
-            HandleDrag();
-            HandleRotate();
+            if (GameplayInputGate.AllowsWorldPointerInput)
+                HandleDrag();
+            else
+                _isDragging = false;
+
+            if (GameplayInputGate.AllowsKeyboardHotkeys)
+                HandleRotate();
         }
         // Сетка обновляется у всех (позиция синхронится через NetworkTransform)
         RebuildGrid();
@@ -127,7 +131,7 @@ public class MapController : NetworkBehaviour
 
     public void LoadImage()
     {
-        if (!IsOwner) return;
+        if (!IsHost) return;
         PickImageFile(path =>
         {
             if (string.IsNullOrEmpty(path)) return;
@@ -153,7 +157,7 @@ public class MapController : NetworkBehaviour
     /// <summary>Хост загружает картинку и рассылает клиентам.</summary>
     public void ApplyImage(byte[] pngData)
     {
-        if (!IsOwner) return;
+        if (!IsHost) return;
         ApplyImageInternal(pngData);
         MapSync.Instance?.SendMapToAll(pngData);
     }
@@ -200,7 +204,7 @@ public class MapController : NetworkBehaviour
 
     private void OnScaleInputChanged(string text)
     {
-        if (!IsOwner) return;
+        if (!IsHost) return;
         if (float.TryParse(text, System.Globalization.NumberStyles.Float,
             System.Globalization.CultureInfo.InvariantCulture, out float scale))
         {
@@ -215,8 +219,11 @@ public class MapController : NetworkBehaviour
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    private void RequestScaleServerRpc(float scale)
+    private void RequestScaleServerRpc(float scale, RpcParams rpcParams = default)
     {
+        if (!NetworkPermissions.IsHostClient(rpcParams.Receive.SenderClientId))
+            return;
+
         _netScale.Value = Mathf.Clamp(scale, minScale, maxScale);
     }
 
@@ -274,7 +281,7 @@ public class MapController : NetworkBehaviour
 
     public void ResetMap()
     {
-        if (!IsOwner || mapPlane == null) return;
+        if (!IsHost || mapPlane == null) return;
         _baseScale = mapPlane.transform.localScale; // сохраняем текущий
         transform.position = Vector3.zero;
         transform.rotation = Quaternion.identity;

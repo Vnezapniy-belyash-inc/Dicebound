@@ -84,11 +84,7 @@ public class CharacterSheetUI : MonoBehaviour
         // В главном меню хоткеи не работают
         if (GameNetworkManager.Instance == null || !GameNetworkManager.Instance.IsConnected) return;
 
-        // Don't process hotkeys when typing in a text field
-        if (UnityEngine.EventSystems.EventSystem.current != null &&
-            UnityEngine.EventSystems.EventSystem.current.currentSelectedGameObject != null &&
-            UnityEngine.EventSystems.EventSystem.current.currentSelectedGameObject.GetComponent<InputField>() != null)
-            return;
+        if (!GameplayInputGate.AllowsKeyboardHotkeys) return;
 
         if (k.cKey.wasPressedThisFrame && _pn)
         {

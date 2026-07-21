@@ -2,7 +2,7 @@ using Unity.Netcode;
 using UnityEngine;
 
 /// <summary>
-/// Маркер на клетку: цветной полупрозрачный Quad.
+/// Маркер на клетку (эффект). Права: IsSpawner — свои; IsHost — все (вторая очистка).
 /// Спавнится через MeasurementTool.ApplyArea().
 /// </summary>
 public class CellMarker : NetworkBehaviour
@@ -28,6 +28,16 @@ public class CellMarker : NetworkBehaviour
 
     private NetworkVariable<int> _netTexIndex = new(0,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
+    private readonly NetworkVariable<ulong> _netSpawnerClientId = new(
+        ulong.MaxValue, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
+    public ulong SpawnerClientId => _netSpawnerClientId.Value;
+
+    public bool IsSpawner =>
+        NetworkManager.Singleton != null
+        && SpawnerClientId != ulong.MaxValue
+        && NetworkManager.Singleton.LocalClientId == SpawnerClientId;
 
     private MeshRenderer _renderer;
     private static GameObject _template;
@@ -66,7 +76,7 @@ public class CellMarker : NetworkBehaviour
         _handlerRegistered = false;
     }
 
-    public static void Spawn(Vector3 position, int textureIndex)
+    public static void Spawn(Vector3 position, int textureIndex, ulong spawnerClientId)
     {
         if (!NetworkManager.Singleton.IsServer) return;
 
@@ -78,6 +88,7 @@ public class CellMarker : NetworkBehaviour
         netObj.Spawn();
 
         var marker = go.GetComponent<CellMarker>();
+        marker._netSpawnerClientId.Value = spawnerClientId;
         marker._netTexIndex.Value = textureIndex;
     }
 
@@ -135,24 +146,50 @@ public class CellMarker : NetworkBehaviour
 
     public void RequestRemove()
     {
-        if (IsServer)
-            GetComponent<NetworkObject>().Despawn();
+        if (!IsSpawned) return;
+
+        var nm = NetworkManager.Singleton;
+        if (nm == null) return;
+
+        if (nm.IsServer)
+        {
+            if (NetworkPermissions.CanDespawnCellMarker(nm.LocalClientId, this))
+                GetComponent<NetworkObject>().Despawn();
+        }
         else
+        {
             RequestRemoveServerRpc();
+        }
     }
 
     [Rpc(SendTo.Server)]
-    private void RequestRemoveServerRpc()
+    private void RequestRemoveServerRpc(RpcParams rpcParams = default)
     {
-        GetComponent<NetworkObject>().Despawn();
+        if (NetworkPermissions.CanDespawnCellMarker(rpcParams.Receive.SenderClientId, this))
+            GetComponent<NetworkObject>().Despawn();
     }
 
+    /// <summary>
+    /// Clear effects button: own spawner markers; host without own markers clears all.
+    /// </summary>
     public static void ClearAllMyMarkers()
     {
+        var nm = NetworkManager.Singleton;
+        if (nm == null) return;
+
+        bool isHost = nm.IsHost;
+        ulong localClientId = nm.LocalClientId;
+        bool hostHasOwnMarkers = isHost && NetworkPermissions.HostHasSpawnedCellMarkers(localClientId);
+
         var markers = FindObjectsByType<CellMarker>(FindObjectsInactive.Exclude);
         foreach (var m in markers)
         {
-            if (m.IsOwner)
+            if (!NetworkPermissions.ShouldDeleteCellMarkerInClearAll(m, localClientId, isHost, hostHasOwnMarkers))
+                continue;
+
+            if (nm.IsServer)
+                m.GetComponent<NetworkObject>().Despawn();
+            else
                 m.RequestRemove();
         }
     }

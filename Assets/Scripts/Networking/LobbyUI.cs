@@ -174,10 +174,10 @@ public class LobbyUI : MonoBehaviour
 
     private void Update()
     {
+        if (!GameplayInputGate.AllowsKeyboardHotkeys) return;
+
         if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
-        {
             lobbyPanel.SetActive(!lobbyPanel.activeSelf);
-        }
     }
 
     /// <summary>Принудительно показать меню (при выходе из лобби).</summary>

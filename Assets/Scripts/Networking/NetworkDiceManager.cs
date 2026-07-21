@@ -74,8 +74,17 @@ public class NetworkDiceManager : MonoBehaviour
     private void OnDespawnDiceRequest(ulong senderId, FastBufferReader reader)
     {
         reader.ReadValueSafe(out ulong netId);
-        if (NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(netId, out var netObj))
-            netObj.Despawn();
+        if (!NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(netId, out var netObj))
+            return;
+
+        if (!netObj.TryGetComponent<NetworkDice>(out var dice)
+            || !NetworkPermissions.CanDespawnDice(senderId, dice))
+        {
+            Debug.LogWarning($"[DiceManager] Despawn rejected for {netId} from {senderId}");
+            return;
+        }
+
+        netObj.Despawn();
     }
 
     private void OnDestroy()

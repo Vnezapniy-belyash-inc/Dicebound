@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
 
 /// <summary>
@@ -71,6 +70,14 @@ public class DiceDragHandler : MonoBehaviour
             && MeasurementTool.Instance.IsOwner)
             return;
 
+        if (!GameplayInputGate.AllowsWorldPointerInput)
+        {
+            if (_isDragging) ReleaseAll();
+            _areaSelectPending = false;
+            _isAreaSelecting = false;
+            return;
+        }
+
         bool ctrl = k != null && k.ctrlKey.isPressed;
 
         if (m.leftButton.wasPressedThisFrame)
@@ -105,9 +112,6 @@ public class DiceDragHandler : MonoBehaviour
 
     void HandlePress(Mouse m, bool ctrl)
     {
-        if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
-            return;
-
         Ray ray = _cam.ScreenPointToRay(m.position.ReadValue());
 
         if (Physics.Raycast(ray, out RaycastHit hit))

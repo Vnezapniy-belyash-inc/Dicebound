@@ -214,6 +214,27 @@ public class TokenImageSync : MonoBehaviour
         PortraitCache.Remove(networkObjectId);
     }
 
+    public static bool TryGetCachedPortrait(ulong networkObjectId, out byte[] jpgData)
+    {
+        if (PortraitCache.TryGetValue(networkObjectId, out jpgData)
+            && jpgData != null && jpgData.Length > 0)
+            return true;
+
+        jpgData = null;
+        return false;
+    }
+
+    /// <summary>Server: portrait bytes for copying (cache, then live token texture).</summary>
+    public static byte[] GetPortraitBytesForCopy(TokenController source)
+    {
+        if (source == null || !source.IsSpawned) return null;
+
+        if (TryGetCachedPortrait(source.NetworkObjectId, out byte[] cached))
+            return cached;
+
+        return source.GetPortraitJpg();
+    }
+
     public static bool TryApplyPending(TokenController token)
     {
         if (Instance == null || token == null || !token.IsSpawned) return false;
@@ -320,7 +341,7 @@ public class TokenImageSync : MonoBehaviour
         reader.ReadValueSafe(out int total);
 
         var token = FindToken(netId);
-        if (token == null || token.SpawnerClientId != senderId)
+        if (!NetworkPermissions.CanUploadTokenPortrait(senderId, token))
         {
             Debug.LogWarning($"[TokenImageSync] Upload rejected for token {netId} from {senderId}");
             return;

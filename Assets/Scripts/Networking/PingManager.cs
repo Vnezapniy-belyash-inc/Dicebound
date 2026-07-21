@@ -39,10 +39,7 @@ public class PingManager : NetworkBehaviour
         // Alt+ЛКМ
         if (k.altKey.isPressed && m.leftButton.wasPressedThisFrame)
         {
-            // Не пингуем если курсор над UI
-            if (UnityEngine.EventSystems.EventSystem.current != null &&
-                UnityEngine.EventSystems.EventSystem.current.IsPointerOverGameObject())
-                return;
+            if (!GameplayInputGate.AllowsWorldPointerInput) return;
 
             Vector3? hit = RaycastGrid(m);
             if (hit.HasValue)
