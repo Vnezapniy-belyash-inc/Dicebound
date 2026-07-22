@@ -34,14 +34,23 @@ public static class GameplayInputGate
     public static bool IsPointerOverUI =>
         EventSystem.current != null && EventSystem.current.IsPointerOverGameObject();
 
+    /// <summary>True while the host has the client curtain down (clients only).</summary>
+    public static bool IsHostCurtainBlocking =>
+        HostSceneCurtain.IsBlockingLocalPlayer;
+
+    /// <summary>IMGUI overlays (measurement labels, token menus) — blocked for blinded clients.</summary>
+    public static bool AllowsImGuiOverlays => !IsHostCurtainBlocking;
+
     /// <summary>
     /// Keyboard shortcuts: panel toggles, map rotate, camera movement keys, debug keys, etc.
     /// </summary>
-    public static bool AllowsKeyboardHotkeys => !IsTextInputFocused;
+    public static bool AllowsKeyboardHotkeys =>
+        !IsTextInputFocused && !IsHostCurtainBlocking;
 
     /// <summary>
     /// Mouse actions on the game world: dice drag, map pan, measurement, pings, token menus.
     /// Blocked while typing or when the cursor is over UI.
     /// </summary>
-    public static bool AllowsWorldPointerInput => !IsTextInputFocused && !IsPointerOverUI;
+    public static bool AllowsWorldPointerInput =>
+        !IsTextInputFocused && !IsPointerOverUI && !IsHostCurtainBlocking;
 }

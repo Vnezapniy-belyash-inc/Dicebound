@@ -27,6 +27,7 @@ public class NetworkPlayerManager : MonoBehaviour
 
         LateJoinSync.EnsureInstance();
         TokenImageSync.EnsureInstance();
+        HostSceneCurtain.EnsureInstance();
 
         TrySubscribe();
     }

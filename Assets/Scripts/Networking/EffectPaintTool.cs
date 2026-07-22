@@ -39,7 +39,7 @@ public class EffectPaintTool : MonoBehaviour
         if (!GameplayInputGate.AllowsWorldPointerInput) return;
 
         var mt = MeasurementTool.Instance;
-        if (mt != null && mt.IsActive && mt.CurrentMode != MeasurementTool.Mode.Ruler)
+        if (mt != null && mt.IsLocalActive && mt.CurrentMode != MeasurementTool.Mode.Ruler)
             return;
 
         var mouse = Mouse.current;

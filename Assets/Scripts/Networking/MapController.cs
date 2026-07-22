@@ -54,11 +54,9 @@ public class MapController : NetworkBehaviour
             _originalPlaneScale = mapPlane.transform.localScale;
 
             var renderer = mapPlane.GetComponent<MeshRenderer>();
-            if (renderer != null)
-            {
-                _mapMaterial = renderer.material;
+            EnsureUnlitMapMaterial(renderer);
+            if (_mapMaterial != null)
                 _mapMaterial.color = new Color(1, 1, 1, 0);
-            }
         }
 
         FindScaleInput();
@@ -187,9 +185,7 @@ public class MapController : NetworkBehaviour
             return;
         }
 
-        _mapMaterial.mainTexture = tex;
-        _mapMaterial.color = Color.white;
-        _mapMaterial.SetFloat("_Surface", 0f);
+        ApplyTextureToMapMaterial(tex);
 
         // Скрываем GameBoard (теперь карта на MapPlane)
         HideGameBoard();
@@ -292,6 +288,42 @@ public class MapController : NetworkBehaviour
     }
 
     // ═══ Утилиты ═══
+
+    private void EnsureUnlitMapMaterial(MeshRenderer renderer)
+    {
+        if (renderer == null) return;
+
+        Shader shader = Shader.Find("Universal Render Pipeline/Unlit")
+            ?? Shader.Find("Unlit/Texture")
+            ?? Shader.Find("Unlit/Color");
+        if (shader == null)
+        {
+            _mapMaterial = renderer.material;
+            return;
+        }
+
+        _mapMaterial = new Material(shader) { name = "MapPlaneUnlit" };
+        renderer.material = _mapMaterial;
+        renderer.receiveShadows = false;
+        renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        renderer.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off;
+        renderer.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
+    }
+
+    private void ApplyTextureToMapMaterial(Texture2D tex)
+    {
+        _mapMaterial.mainTexture = tex;
+        _mapMaterial.color = Color.white;
+
+        if (_mapMaterial.HasProperty("_BaseMap"))
+            _mapMaterial.SetTexture("_BaseMap", tex);
+        if (_mapMaterial.HasProperty("_BaseColor"))
+            _mapMaterial.SetColor("_BaseColor", Color.white);
+        if (_mapMaterial.HasProperty("_Smoothness"))
+            _mapMaterial.SetFloat("_Smoothness", 0f);
+        if (_mapMaterial.HasProperty("_Metallic"))
+            _mapMaterial.SetFloat("_Metallic", 0f);
+    }
 
     private void HideGameBoard()
     {

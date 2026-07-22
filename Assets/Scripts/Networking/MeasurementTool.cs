@@ -5,7 +5,7 @@ using UnityEngine.InputSystem;
 
 /// <summary>
 /// Инструмент измерения: линейка, радиус, квадрат, конус.
-/// Любой игрок активирует, все видят. Снап к сетке.
+/// У каждого игрока своя независимая сессия — несколько инструментов одновременно.
 /// Расстояние в футах: 1 клетка = 5 футов.
 /// </summary>
 public class MeasurementTool : NetworkBehaviour
@@ -21,29 +21,34 @@ public class MeasurementTool : NetworkBehaviour
     [Tooltip("Size of origin marker for sphere (cell center dot / intersection cross)")]
     public float sphereOriginMarkerSize = 0.12f;
 
-    private NetworkVariable<Vector3> _netPointA = new(Vector3.zero,
-        NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-    private NetworkVariable<Vector3> _netPointB = new(Vector3.zero,
-        NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-    private NetworkVariable<bool> _netActive = new(false,
-        NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-    private NetworkVariable<int> _netMode = new(0,
-        NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-    private NetworkVariable<Vector3> _netColor = new(Vector3.one,
-        NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    private NetworkList<MeasurementSnapshot> _sessions = new NetworkList<MeasurementSnapshot>(
+        default,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
 
-    private LineRenderer _lr;
-    private LineRenderer _sphereOriginLr;
+    private readonly Dictionary<ulong, MeasurementSessionVisual> _visuals = new();
+    private MeasurementSnapshot _localSession;
     private bool _isDragging;
     private float _lastSyncTime;
     private Camera _cam;
 
-    // Превью клеток
-    private readonly List<GameObject> _previewCells = new();
-    private Material _previewMat;
-
     public static MeasurementTool Instance { get; private set; }
-    public bool IsActive => _netActive.Value;
+
+    /// <summary>Локальный игрок использует инструмент.</summary>
+    public bool IsLocalActive
+    {
+        get
+        {
+            var nm = NetworkManager.Singleton;
+            return nm != null && _localSession.Active && _localSession.ClientId == nm.LocalClientId;
+        }
+    }
+
+    /// <summary>Совместимость: активна ли локальная сессия.</summary>
+    public bool IsActive => IsLocalActive;
+
+    public Mode CurrentMode =>
+        TryGetLocalSnapshot(out var snap) ? (Mode)snap.Mode : Mode.Ruler;
 
     public System.Action OnDragStart;
     public System.Action OnDragEnd;
@@ -58,18 +63,6 @@ public class MeasurementTool : NetworkBehaviour
     {
         _cam = Camera.main;
 
-        _lr = gameObject.AddComponent<LineRenderer>();
-        _lr.material = new Material(Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color"));
-        _lr.startWidth = lineWidth;
-        _lr.endWidth = lineWidth;
-        _lr.useWorldSpace = true;
-        _lr.enabled = false;
-        _lr.positionCount = 0;
-        _lr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-        _lr.receiveShadows = false;
-
-        _sphereOriginLr = CreateChildLineRenderer("SphereOriginMarker");
-
         if (NetworkManager.Singleton != null)
             NetworkManager.Singleton.OnServerStarted += OnServerStarted;
     }
@@ -83,105 +76,162 @@ public class MeasurementTool : NetworkBehaviour
 
     public override void OnNetworkSpawn()
     {
-        // Применить текущий цвет сразу (OnValueChanged не сработает на начальное значение)
-        ApplyColor(_netColor.Value);
-
-        _netActive.OnValueChanged += (old, val) => UpdateVisual();
-        _netPointA.OnValueChanged += (old, val) => UpdateVisual();
-        _netPointB.OnValueChanged += (old, val) => UpdateVisual();
-        _netMode.OnValueChanged += (old, val) => UpdateVisual();
-        _netColor.OnValueChanged += (old, val) => ApplyColor(val);
-
-        // Обновить визуал для начального состояния (late-join)
-        UpdateVisual();
+        _sessions.OnListChanged += OnSessionsChanged;
+        RebuildAllVisuals();
     }
 
-    private LineRenderer CreateChildLineRenderer(string name)
+    public override void OnNetworkDespawn()
     {
-        var go = new GameObject(name);
-        go.transform.SetParent(transform, false);
-        var lr = go.AddComponent<LineRenderer>();
-        lr.material = _lr.material;
-        lr.startWidth = lineWidth * 1.2f;
-        lr.endWidth = lineWidth * 1.2f;
-        lr.useWorldSpace = true;
-        lr.enabled = false;
-        lr.positionCount = 0;
-        lr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-        lr.receiveShadows = false;
-        return lr;
-    }
-
-    private void ApplyColor(Vector3 rgb)
-    {
-        Color c = new Color(rgb.x, rgb.y, rgb.z, 0.85f);
-        _lr.material.color = c;
-        _lr.startColor = c;
-        _lr.endColor = c;
-        if (_sphereOriginLr != null)
-        {
-            _sphereOriginLr.material.color = c;
-            _sphereOriginLr.startColor = c;
-            _sphereOriginLr.endColor = c;
-        }
+        _sessions.OnListChanged -= OnSessionsChanged;
     }
 
     // ═══ Активация ═══
 
     public void Activate(int mode)
     {
+        EnsureSpawned();
         if (!IsSpawned) return;
+
+        var nm = NetworkManager.Singleton;
+        if (nm == null) return;
+
         if (IsServer)
         {
-            ActivateInternal(mode, NetworkManager.Singleton.LocalClientId);
+            ActivateInternal(nm.LocalClientId, mode);
         }
         else
         {
+            // Optimistic local session so first click/drag works before list sync arrives.
+            Color pc = PlayerColors.GetColor(nm.LocalClientId);
+            _localSession = MeasurementSnapshot.Create(nm.LocalClientId, mode, pc);
             RequestActivateServerRpc(mode);
         }
+    }
+
+    void EnsureSpawned()
+    {
+        if (IsSpawned) return;
+        var netObj = GetComponent<NetworkObject>();
+        if (netObj != null && IsServer && !netObj.IsSpawned)
+            netObj.Spawn();
     }
 
     [Rpc(SendTo.Server)]
     private void RequestActivateServerRpc(int mode, RpcParams rpcParams = default)
     {
-        ActivateInternal(mode, rpcParams.Receive.SenderClientId);
+        ActivateInternal(rpcParams.Receive.SenderClientId, mode);
     }
 
-    private void ActivateInternal(int mode, ulong clientId)
+    private void ActivateInternal(ulong clientId, int mode)
     {
-        _netActive.Value = true;
-        _netMode.Value = mode;
-        _netPointA.Value = Vector3.zero;
-        _netPointB.Value = Vector3.zero;
-
-        // Цвет игрока
         Color pc = PlayerRegistry.GetServerPlayerColor(clientId);
-        _netColor.Value = new Vector3(pc.r, pc.g, pc.b);
-
-        // Передать владение активирующему клиенту
-        GetComponent<NetworkObject>().ChangeOwnership(clientId);
+        var snap = MeasurementSnapshot.Create(clientId, mode, pc);
+        UpsertSession(snap);
+        MirrorLocalSession(snap);
     }
 
     public void Deactivate()
     {
+        if (!IsSpawned) return;
         if (IsServer)
-            _netActive.Value = false;
+            DeactivateInternal(NetworkManager.Singleton.LocalClientId);
         else
             RequestDeactivateServerRpc();
     }
 
     [Rpc(SendTo.Server)]
-    private void RequestDeactivateServerRpc()
+    private void RequestDeactivateServerRpc(RpcParams rpcParams = default)
     {
-        _netActive.Value = false;
+        DeactivateInternal(rpcParams.Receive.SenderClientId);
     }
 
-    // ═══ Ввод (только владелец) ═══
+    private void DeactivateInternal(ulong clientId)
+    {
+        int idx = FindSessionIndex(clientId);
+        if (idx < 0) return;
+
+        ulong removedId = _sessions[idx].ClientId;
+        _sessions.RemoveAt(idx);
+        RemoveVisual(removedId);
+
+        var nm = NetworkManager.Singleton;
+        if (nm != null && removedId == nm.LocalClientId)
+            _localSession = default;
+    }
+
+    private void UpsertSession(MeasurementSnapshot snap)
+    {
+        int idx = FindSessionIndex(snap.ClientId);
+        if (idx >= 0)
+            _sessions.Set(idx, snap, forceUpdate: true);
+        else
+            _sessions.Add(snap);
+    }
+
+    private int FindSessionIndex(ulong clientId)
+    {
+        for (int i = 0; i < _sessions.Count; i++)
+        {
+            if (_sessions[i].ClientId == clientId)
+                return i;
+        }
+
+        return -1;
+    }
+
+    public bool TryGetLocalSnapshot(out MeasurementSnapshot snap)
+    {
+        snap = default;
+        var nm = NetworkManager.Singleton;
+        if (nm == null) return false;
+
+        if (_localSession.ClientId == nm.LocalClientId && _localSession.Active)
+        {
+            snap = _localSession;
+            return true;
+        }
+
+        ulong localId = nm.LocalClientId;
+        for (int i = 0; i < _sessions.Count; i++)
+        {
+            if (_sessions[i].ClientId == localId && _sessions[i].Active)
+            {
+                snap = _sessions[i];
+                _localSession = snap;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    void MirrorLocalSession(MeasurementSnapshot snap)
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm != null && snap.ClientId == nm.LocalClientId && snap.Active)
+            _localSession = snap;
+    }
+
+    void ApplyLocalPoints(Vector3 a, Vector3 b, bool markReady = false)
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm == null || !_localSession.Active || _localSession.ClientId != nm.LocalClientId)
+            return;
+
+        var snap = _localSession;
+        snap.PointA = a;
+        snap.PointB = b;
+        if (markReady || snap.HasPoints)
+            snap.PointsReadyFlag = 1;
+        _localSession = snap;
+        ApplyVisual(snap);
+    }
+
+    // ═══ Ввод (локальная сессия) ═══
 
     private void Update()
     {
-        if (!IsOwner || !_netActive.Value) return;
-
+        if (!IsLocalActive) return;
         if (!GameplayInputGate.AllowsWorldPointerInput) return;
 
         var mouse = Mouse.current;
@@ -191,6 +241,7 @@ public class MeasurementTool : NetworkBehaviour
             mouse.rightButton.wasPressedThisFrame)
         {
             Deactivate();
+            _isDragging = false;
             return;
         }
 
@@ -200,15 +251,12 @@ public class MeasurementTool : NetworkBehaviour
             if (hit.HasValue)
             {
                 Vector3 p = SnapForMode(hit.Value);
+                ApplyLocalPoints(p, p, markReady: true);
                 if (IsServer)
-                {
-                    _netPointA.Value = p;
-                    _netPointB.Value = p;
-                }
+                    SetPointsInternal(NetworkManager.Singleton.LocalClientId, p, p);
                 else
-                {
                     SetPointServerRpc(p, p);
-                }
+
                 _isDragging = true;
                 OnDragStart?.Invoke();
             }
@@ -220,10 +268,12 @@ public class MeasurementTool : NetworkBehaviour
             if (hit.HasValue && Time.time - _lastSyncTime > 0.08f)
             {
                 Vector3 p = SnapForMode(hit.Value);
+                ApplyLocalPoints(_localSession.PointA, p);
                 if (IsServer)
-                    _netPointB.Value = p;
+                    SetPointBInternal(NetworkManager.Singleton.LocalClientId, p);
                 else
                     UpdatePointBServerRpc(p);
+
                 _lastSyncTime = Time.time;
             }
         }
@@ -235,19 +285,23 @@ public class MeasurementTool : NetworkBehaviour
             if (hit.HasValue)
             {
                 Vector3 p = SnapForMode(hit.Value);
+                ApplyLocalPoints(_localSession.PointA, p);
                 if (IsServer)
-                    _netPointB.Value = p;
+                    SetPointBInternal(NetworkManager.Singleton.LocalClientId, p);
                 else
                     UpdatePointBServerRpc(p);
             }
+
             OnDragEnd?.Invoke();
         }
     }
 
     private Vector3 SnapForMode(Vector3 worldPos)
     {
-        Mode mode = (Mode)_netMode.Value;
-        if (mode == Mode.Circle)
+        if (!TryGetLocalSnapshot(out var snap))
+            return SnapToGridCell(worldPos);
+
+        if ((Mode)snap.Mode == Mode.Circle)
         {
             var gm = FindAnyObjectByType<GridManager>();
             if (gm != null)
@@ -258,265 +312,202 @@ public class MeasurementTool : NetworkBehaviour
     }
 
     [Rpc(SendTo.Server)]
-    private void SetPointServerRpc(Vector3 a, Vector3 b)
+    private void SetPointServerRpc(Vector3 a, Vector3 b, RpcParams rpcParams = default)
     {
-        _netPointA.Value = a;
-        _netPointB.Value = b;
+        SetPointsInternal(rpcParams.Receive.SenderClientId, a, b);
     }
 
     [Rpc(SendTo.Server)]
-    private void UpdatePointBServerRpc(Vector3 b)
+    private void UpdatePointBServerRpc(Vector3 b, RpcParams rpcParams = default)
     {
-        _netPointB.Value = b;
+        SetPointBInternal(rpcParams.Receive.SenderClientId, b);
     }
 
-    // ═══ Визуал ═══
-
-    private void UpdateVisual()
+    private void SetPointsInternal(ulong clientId, Vector3 a, Vector3 b)
     {
-        if (!_netActive.Value)
+        int idx = FindSessionIndex(clientId);
+        if (idx < 0 || !_sessions[idx].Active) return;
+
+        var snap = _sessions[idx];
+        snap.PointA = a;
+        snap.PointB = b;
+        snap.PointsReadyFlag = 1;
+        CommitSession(snap);
+    }
+
+    private void SetPointBInternal(ulong clientId, Vector3 b)
+    {
+        int idx = FindSessionIndex(clientId);
+        if (idx < 0 || !_sessions[idx].Active) return;
+
+        var nm = NetworkManager.Singleton;
+        bool isLocal = nm != null && clientId == nm.LocalClientId;
+
+        var snap = _sessions[idx];
+        if (isLocal && _localSession.HasPoints)
+            snap.PointA = _localSession.PointA;
+        snap.PointB = b;
+        snap.PointsReadyFlag = 1;
+        CommitSession(snap);
+    }
+
+    void CommitSession(MeasurementSnapshot snap)
+    {
+        int idx = FindSessionIndex(snap.ClientId);
+        if (idx < 0) return;
+
+        _sessions.Set(idx, snap, forceUpdate: true);
+
+        var nm = NetworkManager.Singleton;
+        if (nm != null && snap.ClientId == nm.LocalClientId)
+            _localSession = snap;
+
+        ApplyVisual(snap);
+    }
+
+    // ═══ Синхронизация визуала ═══
+
+    private void OnSessionsChanged(NetworkListEvent<MeasurementSnapshot> changeEvent)
+    {
+        var nm = NetworkManager.Singleton;
+        bool isLocal = nm != null && changeEvent.Value.ClientId == nm.LocalClientId;
+
+        switch (changeEvent.Type)
         {
-            _lr.enabled = false;
-            _lr.positionCount = 0;
-            if (_sphereOriginLr != null)
-            {
-                _sphereOriginLr.enabled = false;
-                _sphereOriginLr.positionCount = 0;
-            }
-            ClearPreviews();
+            case NetworkListEvent<MeasurementSnapshot>.EventType.Add:
+            case NetworkListEvent<MeasurementSnapshot>.EventType.Insert:
+            case NetworkListEvent<MeasurementSnapshot>.EventType.Value:
+                if (isLocal)
+                {
+                    // Локальный визуал обновляем сами при вводе — не затираем из сети.
+                    if (!changeEvent.Value.Active)
+                        _localSession = default;
+                    else if (!_localSession.HasPoints)
+                        MirrorLocalSession(changeEvent.Value);
+                }
+                else
+                {
+                    ApplyVisual(changeEvent.Value);
+                }
+                break;
+
+            case NetworkListEvent<MeasurementSnapshot>.EventType.RemoveAt:
+                RemoveVisual(changeEvent.Value.ClientId);
+                if (isLocal)
+                    _localSession = default;
+                break;
+
+            case NetworkListEvent<MeasurementSnapshot>.EventType.Clear:
+                ClearAllVisuals();
+                _localSession = default;
+                break;
+
+            case NetworkListEvent<MeasurementSnapshot>.EventType.Full:
+                RebuildAllVisuals();
+                break;
+        }
+    }
+
+    private void RebuildAllVisuals()
+    {
+        ClearAllVisuals();
+
+        var nm = NetworkManager.Singleton;
+        for (int i = 0; i < _sessions.Count; i++)
+        {
+            var snap = _sessions[i];
+            if (nm != null && snap.ClientId == nm.LocalClientId)
+                MirrorLocalSession(snap);
+            ApplyVisual(snap);
+        }
+    }
+
+    private void ApplyVisual(MeasurementSnapshot snap)
+    {
+        if (!snap.Active || !snap.HasPoints)
+        {
+            if (_visuals.TryGetValue(snap.ClientId, out var hidden))
+                hidden.Hide();
             return;
         }
 
-        _lr.enabled = true;
-        Mode mode = (Mode)_netMode.Value;
-        Vector3 a = _netPointA.Value;
-        Vector3 b = _netPointB.Value;
-        a.y = yOffset;
-        b.y = yOffset;
-
-        switch (mode)
+        if (!_visuals.TryGetValue(snap.ClientId, out var visual))
         {
-            case Mode.Ruler:
-                _lr.positionCount = 2;
-                _lr.SetPosition(0, a);
-                _lr.SetPosition(1, b);
-                break;
-
-            case Mode.Circle:
-                float radius = Vector3.Distance(a, b);
-                DrawCircle(a, radius);
-                DrawSphereOriginMarker(a);
-                break;
-
-            case Mode.Square:
-                if (_sphereOriginLr != null) _sphereOriginLr.enabled = false;
-                DrawSquare(a, b);
-                break;
-
-            case Mode.Cone:
-                if (_sphereOriginLr != null) _sphereOriginLr.enabled = false;
-                DrawCone(a, b);
-                break;
+            visual = MeasurementSessionVisual.Create(
+                transform, lineWidth, yOffset, circleSegments,
+                sphereSnapTolerance, sphereOriginMarkerSize);
+            _visuals[snap.ClientId] = visual;
         }
 
-        if (mode == Mode.Ruler && _sphereOriginLr != null)
-            _sphereOriginLr.enabled = false;
-
-        // Обновить превью клеток
-        if (mode != Mode.Ruler)
-            UpdatePreviews();
-        else
-            ClearPreviews();
+        visual.Apply(snap);
     }
 
-    // ═══ Превью клеток (серое мерцание) ═══
-
-    private void UpdatePreviews()
+    private void RemoveVisual(ulong clientId)
     {
-        var cells = GetCellsInArea();
-        var gm = FindAnyObjectByType<GridManager>();
-        if (gm == null) return;
-
-        // Удаляем лишние, создаём недостающие
-        while (_previewCells.Count > cells.Count)
+        if (_visuals.TryGetValue(clientId, out var visual))
         {
-            var go = _previewCells[_previewCells.Count - 1];
-            _previewCells.RemoveAt(_previewCells.Count - 1);
-            if (go != null) Destroy(go);
-        }
-
-        for (int i = 0; i < cells.Count; i++)
-        {
-            Vector3 pos = gm.GetCellCenter(cells[i].x, cells[i].y, yOffset);
-            GameObject go;
-            if (i < _previewCells.Count)
-            {
-                go = _previewCells[i];
-                go.transform.position = pos;
-            }
-            else
-            {
-                go = CreatePreviewQuad(pos);
-                _previewCells.Add(go);
-            }
+            visual.Destroy();
+            _visuals.Remove(clientId);
         }
     }
 
-    private GameObject CreatePreviewQuad(Vector3 pos)
+    private void ClearAllVisuals()
     {
-        var go = GameObject.CreatePrimitive(PrimitiveType.Quad);
-        go.name = "PreviewCell";
-        go.transform.position = pos;
-        go.transform.rotation = Quaternion.Euler(90, 0, 0);
-        go.transform.localScale = new Vector3(0.9f, 0.9f, 1f);
-
-        var collider = go.GetComponent<Collider>();
-        if (collider != null) Destroy(collider);
-
-        // Кешируем материал
-        if (_previewMat == null)
-        {
-            _previewMat = new Material(Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color"));
-            _previewMat.SetFloat("_Surface", 1f);
-            _previewMat.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
-            _previewMat.SetInt("_SrcBlend", 5);
-            _previewMat.SetInt("_DstBlend", 10);
-            _previewMat.SetInt("_ZWrite", 0);
-            _previewMat.renderQueue = 3000;
-        }
-
-        var mr = go.GetComponent<MeshRenderer>();
-        mr.material = _previewMat;
-        mr.material.color = new Color(0.4f, 0.4f, 0.4f, 0.3f);
-        mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-        mr.receiveShadows = false;
-
-        var blinker = go.AddComponent<PreviewBlinker>();
-        return go;
+        foreach (var visual in _visuals.Values)
+            visual.Destroy();
+        _visuals.Clear();
     }
 
-    private void ClearPreviews()
-    {
-        foreach (var go in _previewCells)
-        {
-            if (go != null) Destroy(go);
-        }
-        _previewCells.Clear();
-    }
-
-    private void DrawCircle(Vector3 center, float radius)
-    {
-        _lr.positionCount = circleSegments + 1;
-        for (int i = 0; i <= circleSegments; i++)
-        {
-            float angle = i * Mathf.PI * 2f / circleSegments;
-            float x = center.x + Mathf.Cos(angle) * radius;
-            float z = center.z + Mathf.Sin(angle) * radius;
-            _lr.SetPosition(i, new Vector3(x, yOffset, z));
-        }
-    }
-
-    private void DrawSphereOriginMarker(Vector3 origin)
-    {
-        if (_sphereOriginLr == null) return;
-
-        var gm = FindAnyObjectByType<GridManager>();
-        bool isIntersection = GridManager.IsIntersectionPosition(origin, gm);
-        float s = sphereOriginMarkerSize;
-
-        _sphereOriginLr.enabled = true;
-        if (isIntersection)
-        {
-            _sphereOriginLr.positionCount = 5;
-            _sphereOriginLr.SetPosition(0, new Vector3(origin.x, yOffset, origin.z + s));
-            _sphereOriginLr.SetPosition(1, new Vector3(origin.x + s, yOffset, origin.z));
-            _sphereOriginLr.SetPosition(2, new Vector3(origin.x, yOffset, origin.z - s));
-            _sphereOriginLr.SetPosition(3, new Vector3(origin.x - s, yOffset, origin.z));
-            _sphereOriginLr.SetPosition(4, new Vector3(origin.x, yOffset, origin.z + s));
-        }
-        else
-        {
-            _sphereOriginLr.positionCount = 5;
-            _sphereOriginLr.SetPosition(0, new Vector3(origin.x - s, yOffset, origin.z - s));
-            _sphereOriginLr.SetPosition(1, new Vector3(origin.x + s, yOffset, origin.z - s));
-            _sphereOriginLr.SetPosition(2, new Vector3(origin.x + s, yOffset, origin.z + s));
-            _sphereOriginLr.SetPosition(3, new Vector3(origin.x - s, yOffset, origin.z + s));
-            _sphereOriginLr.SetPosition(4, new Vector3(origin.x - s, yOffset, origin.z - s));
-        }
-    }
-
-    private void DrawSquare(Vector3 corner, Vector3 opposite)
-    {
-        _lr.positionCount = 5;
-        float halfCell = 0.5f;
-        var gm = FindAnyObjectByType<GridManager>();
-        if (gm != null) halfCell = gm.CellSize / 2f;
-
-        float minX = Mathf.Min(corner.x, opposite.x) - halfCell;
-        float maxX = Mathf.Max(corner.x, opposite.x) + halfCell;
-        float minZ = Mathf.Min(corner.z, opposite.z) - halfCell;
-        float maxZ = Mathf.Max(corner.z, opposite.z) + halfCell;
-
-        _lr.SetPosition(0, new Vector3(minX, yOffset, minZ));
-        _lr.SetPosition(1, new Vector3(maxX, yOffset, minZ));
-        _lr.SetPosition(2, new Vector3(maxX, yOffset, maxZ));
-        _lr.SetPosition(3, new Vector3(minX, yOffset, maxZ));
-        _lr.SetPosition(4, new Vector3(minX, yOffset, minZ));
-    }
-
-    private void DrawCone(Vector3 origin, Vector3 target)
-    {
-        Vector3 dir = target - origin;
-        float length = dir.magnitude;
-        if (length < 0.01f) { _lr.positionCount = 0; return; }
-        dir /= length;
-
-        // Перпендикуляр в плоскости XZ
-        Vector3 perp = new Vector3(-dir.z, 0, dir.x).normalized;
-        float halfWidth = length * 0.5f; // D&D: ширина = расстоянию
-
-        Vector3 o = new Vector3(origin.x, yOffset, origin.z);
-        Vector3 r = o + dir * length + perp * halfWidth;
-        Vector3 l = o + dir * length - perp * halfWidth;
-
-        // Замкнутый треугольник
-        _lr.positionCount = 4;
-        _lr.SetPosition(0, o);
-        _lr.SetPosition(1, r);
-        _lr.SetPosition(2, l);
-        _lr.SetPosition(3, o);
-    }
-
-    // ═══ Метка расстояния (OnGUI) ═══
+    // ═══ Метки расстояния ═══
 
     private void OnGUI()
     {
-        if (!_netActive.Value || _cam == null) return;
+        if (!GameplayInputGate.AllowsImGuiOverlays) return;
+        if (_cam == null) _cam = Camera.main;
+        if (_cam == null) return;
 
-        Vector3 a = _netPointA.Value;
-        Vector3 b = _netPointB.Value;
-        if (a == Vector3.zero && b == Vector3.zero) return;
+        var nm = NetworkManager.Singleton;
+        var labels = new Dictionary<ulong, MeasurementSnapshot>();
 
-        // Метка у точки B (дальний конец)
+        for (int i = 0; i < _sessions.Count; i++)
+        {
+            var snap = _sessions[i];
+            if (!snap.Active || !snap.HasPoints) continue;
+            labels[snap.ClientId] = snap;
+        }
+
+        if (nm != null
+            && _localSession.Active
+            && _localSession.HasPoints
+            && _localSession.ClientId == nm.LocalClientId)
+        {
+            labels[nm.LocalClientId] = _localSession;
+        }
+
+        foreach (var snap in labels.Values)
+            DrawDistanceLabel(snap);
+    }
+
+    private void DrawDistanceLabel(MeasurementSnapshot snap)
+    {
+        Vector3 a = snap.PointA;
+        Vector3 b = snap.PointB;
+        if (!snap.HasPoints) return;
+
         Vector3 screenPos = _cam.WorldToScreenPoint(b);
         if (screenPos.z < 0) return;
 
         float ft;
-        Mode mode = (Mode)_netMode.Value;
+        var mode = (Mode)snap.Mode;
         if (mode == Mode.Square)
         {
-            // Для квадрата — длина стороны (центры клеток → +1 клетка)
             float w = Mathf.Abs(b.x - a.x);
             float h = Mathf.Abs(b.z - a.z);
             ft = (Mathf.Max(w, h) + 1f) * 5f;
         }
-        else if (mode == Mode.Cone)
-        {
-            ft = Vector3.Distance(a, b) / 1f * 5f;
-        }
         else
         {
-            ft = Vector3.Distance(a, b) / 1f * 5f;
+            ft = Vector3.Distance(a, b) * 5f;
         }
 
         string label = $"{ft:F0} ft";
@@ -528,15 +519,31 @@ public class MeasurementTool : NetworkBehaviour
         }
 
         Vector2 guiPos = new Vector2(screenPos.x, Screen.height - screenPos.y);
-        GUIStyle style = new GUIStyle(GUI.skin.label);
-        style.fontSize = 18;
-        style.fontStyle = FontStyle.Bold;
-        style.normal.textColor = Color.white;
-        style.alignment = TextAnchor.MiddleCenter;
+        var style = new GUIStyle(GUI.skin.label)
+        {
+            fontSize = 18,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter
+        };
+        Color playerColor = new Color(snap.ColorRgb.x, snap.ColorRgb.y, snap.ColorRgb.z);
+        style.normal.textColor = playerColor;
 
         Vector2 size = style.CalcSize(new GUIContent(label));
-        Rect rect = new Rect(guiPos.x - size.x / 2f, guiPos.y - size.y - 8f, size.x + 16, size.y + 8);
-        GUI.Box(rect, "");
+        Rect rect = new Rect(guiPos.x - size.x / 2f - 8f, guiPos.y - size.y - 12f, size.x + 16f, size.y + 8f);
+
+        var bgStyle = new GUIStyle(GUI.skin.box)
+        {
+            alignment = TextAnchor.MiddleCenter
+        };
+        bgStyle.normal.background = Texture2D.whiteTexture;
+        Color oldColor = GUI.color;
+        GUI.color = new Color(0f, 0f, 0f, 0.65f);
+        GUI.Box(rect, GUIContent.none, bgStyle);
+        GUI.color = oldColor;
+
+        var shadowStyle = new GUIStyle(style);
+        shadowStyle.normal.textColor = new Color(0f, 0f, 0f, 0.85f);
+        GUI.Label(new Rect(rect.x + 1f, rect.y + 1f, rect.width, rect.height), label, shadowStyle);
         GUI.Label(rect, label, style);
     }
 
@@ -566,17 +573,21 @@ public class MeasurementTool : NetworkBehaviour
         return Vector3.Distance(a, b) / cellSize * 5f;
     }
 
-    // ═══ Получение клеток в области ═══
-
-    /// <summary>Возвращает все клетки внутри текущей измеряемой области.</summary>
     public List<Vector2Int> GetCellsInArea()
     {
-        var gm = FindAnyObjectByType<GridManager>();
-        if (gm == null) return new List<Vector2Int>();
+        return TryGetLocalSnapshot(out var snap)
+            ? GetCellsForSnapshot(snap)
+            : new List<Vector2Int>();
+    }
 
-        Mode mode = (Mode)_netMode.Value;
-        Vector3 a = _netPointA.Value;
-        Vector3 b = _netPointB.Value;
+    public static List<Vector2Int> GetCellsForSnapshot(MeasurementSnapshot snap)
+    {
+        var gm = Object.FindAnyObjectByType<GridManager>();
+        if (gm == null || !snap.Active || !snap.HasPoints) return new List<Vector2Int>();
+
+        var mode = (Mode)snap.Mode;
+        Vector3 a = snap.PointA;
+        Vector3 b = snap.PointB;
 
         return mode switch
         {
@@ -587,12 +598,11 @@ public class MeasurementTool : NetworkBehaviour
         };
     }
 
-    private List<Vector2Int> GetCellsInCircle(GridManager gm, Vector3 center, float radius)
+    private static List<Vector2Int> GetCellsInCircle(GridManager gm, Vector3 center, float radius)
     {
         var cells = new List<Vector2Int>();
         if (radius < 0.01f) return cells;
 
-        // Перебираем клетки в bounding box круга
         Vector2Int min = gm.GetGridPosition(center - new Vector3(radius, 0, radius));
         Vector2Int max = gm.GetGridPosition(center + new Vector3(radius, 0, radius));
         min.x = Mathf.Max(min.x, 0); min.y = Mathf.Max(min.y, 0);
@@ -607,10 +617,11 @@ public class MeasurementTool : NetworkBehaviour
                     cells.Add(new Vector2Int(x, y));
             }
         }
+
         return cells;
     }
 
-    private List<Vector2Int> GetCellsInSquare(GridManager gm, Vector3 corner, Vector3 opposite)
+    private static List<Vector2Int> GetCellsInSquare(GridManager gm, Vector3 corner, Vector3 opposite)
     {
         var cells = new List<Vector2Int>();
         float minX = Mathf.Min(corner.x, opposite.x);
@@ -626,10 +637,11 @@ public class MeasurementTool : NetworkBehaviour
         for (int x = min.x; x <= max.x; x++)
             for (int y = min.y; y <= max.y; y++)
                 cells.Add(new Vector2Int(x, y));
+
         return cells;
     }
 
-    private List<Vector2Int> GetCellsInCone(GridManager gm, Vector3 origin, Vector3 target)
+    private static List<Vector2Int> GetCellsInCone(GridManager gm, Vector3 origin, Vector3 target)
     {
         var cells = new List<Vector2Int>();
         Vector3 dir3 = target - origin;
@@ -640,7 +652,6 @@ public class MeasurementTool : NetworkBehaviour
         Vector2 perp = new Vector2(-dir.y, dir.x);
         Vector2 o2 = new Vector2(origin.x, origin.z);
 
-        // Перебираем клетки в bounding box конуса
         Vector2Int min = gm.GetGridPosition(origin - new Vector3(length, 0, length));
         Vector2Int max = gm.GetGridPosition(origin + new Vector3(length, 0, length));
         min.x = Mathf.Max(min.x, 0); min.y = Mathf.Max(min.y, 0);
@@ -655,22 +666,24 @@ public class MeasurementTool : NetworkBehaviour
                 float proj = Vector2.Dot(p, dir);
                 if (proj < 0 || proj > length) continue;
                 float perpDist = Mathf.Abs(Vector2.Dot(p, perp));
-                if (perpDist <= proj * 0.5f) // D&D: half-width = distance/2
+                if (perpDist <= proj * 0.5f)
                     cells.Add(new Vector2Int(x, y));
             }
         }
+
         return cells;
     }
 
     /// <summary>Применить область: спавнит CellMarker на всех клетках и очищает измерение.</summary>
     public void ApplyArea(int textureIndex)
     {
-        if (!IsOwner || !_netActive.Value) return;
+        if (!IsLocalActive) return;
+
         var cells = GetCellsInArea();
         if (cells.Count == 0) return;
 
         if (IsServer)
-            SpawnMarkers(cells, textureIndex, OwnerClientId);
+            SpawnMarkers(cells, textureIndex, NetworkManager.Singleton.LocalClientId);
         else
             RequestApplyAreaServerRpc(SerializeCells(cells), textureIndex);
 
@@ -713,16 +726,17 @@ public class MeasurementTool : NetworkBehaviour
             if (parts.Length == 2 && int.TryParse(parts[0], out int x) && int.TryParse(parts[1], out int y))
                 list.Add(new Vector2Int(x, y));
         }
+
         return list;
     }
 
-    public Mode CurrentMode => (Mode)_netMode.Value;
-
     private new void OnDestroy()
     {
-        ClearPreviews();
+        ClearAllVisuals();
         if (NetworkManager.Singleton != null)
             NetworkManager.Singleton.OnServerStarted -= OnServerStarted;
+        if (Instance == this)
+            Instance = null;
     }
 }
 
@@ -738,7 +752,6 @@ public class PreviewBlinker : MonoBehaviour
 
     private void Update()
     {
-        // Медленное синхронизированное мерцание (Time.time для одинаковой фазы)
         float alpha = 0.15f + 0.35f * Mathf.Abs(Mathf.Sin(Time.time * 4f));
         _mat.color = new Color(0.4f, 0.4f, 0.4f, alpha);
     }

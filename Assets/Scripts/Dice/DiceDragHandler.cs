@@ -66,8 +66,7 @@ public class DiceDragHandler : MonoBehaviour
         if (m == null || _cam == null) return;
 
         // Блокируем драг только тому, кто сам использует инструмент
-        if (MeasurementTool.Instance != null && MeasurementTool.Instance.IsActive
-            && MeasurementTool.Instance.IsOwner)
+        if (MeasurementTool.Instance != null && MeasurementTool.Instance.IsLocalActive)
             return;
 
         if (!GameplayInputGate.AllowsWorldPointerInput)
@@ -110,11 +109,13 @@ public class DiceDragHandler : MonoBehaviour
 
     // ═══ Нажатие ═══
 
+    private static readonly int InteractionRaycastMask = Physics.DefaultRaycastLayers;
+
     void HandlePress(Mouse m, bool ctrl)
     {
         Ray ray = _cam.ScreenPointToRay(m.position.ReadValue());
 
-        if (Physics.Raycast(ray, out RaycastHit hit))
+        if (Physics.Raycast(ray, out RaycastHit hit, Mathf.Infinity, InteractionRaycastMask))
         {
             // Ищем IDice — сначала Dice, потом NetworkDice
             IDice dice = hit.collider.GetComponentInParent<Dice>();
@@ -209,6 +210,7 @@ public class DiceDragHandler : MonoBehaviour
 
     void OnGUI()
     {
+        if (!GameplayInputGate.AllowsImGuiOverlays) return;
         if (!_isAreaSelecting) return;
 
         if (_whiteTex == null) _whiteTex = Texture2D.whiteTexture;

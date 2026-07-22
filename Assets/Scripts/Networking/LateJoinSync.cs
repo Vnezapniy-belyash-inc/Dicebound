@@ -90,6 +90,8 @@ public class LateJoinSync : MonoBehaviour
     {
         if (!NetworkManager.Singleton.IsServer) return;
 
+        HostSceneCurtain.Instance?.SendCurtainStateToClient(clientId);
+
         if (_initialSyncStarted.Contains(clientId))
             StartCoroutine(PortraitsAndDiceOnlyRoutine(clientId));
         else
@@ -162,6 +164,8 @@ public class LateJoinSync : MonoBehaviour
         Debug.Log($"[LateJoin] Sync started for client {clientId}");
         yield return new WaitForSeconds(initialDelay);
 
+        HostSceneCurtain.Instance?.SendCurtainStateToClient(clientId);
+
         PlayerRegistry.Instance?.SendFullStateToClient(clientId);
         yield return new WaitForSeconds(0.25f);
 
@@ -184,6 +188,7 @@ public class LateJoinSync : MonoBehaviour
     private IEnumerator PortraitsAndDiceOnlyRoutine(ulong clientId)
     {
         Debug.Log($"[LateJoin] Portrait/dice re-sync for client {clientId}");
+        HostSceneCurtain.Instance?.SendCurtainStateToClient(clientId);
         yield return new WaitForSeconds(0.25f);
 
         if (TokenImageSync.Instance != null)

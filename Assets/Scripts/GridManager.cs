@@ -231,8 +231,8 @@ public class GridManager : MonoBehaviour
         float halfW = size.x / 2f;
         float halfH = size.z / 2f;
         float thickness = Mathf.Max(wallThickness, 2f);
-        float hw = halfW + thickness / 2f;
-        float hh = halfH + thickness / 2f;
+        float hw = halfW + thickness;
+        float hh = halfH + thickness;
         float hy = wallHeight / 2f;
         float lenX = size.x + thickness * 2f;
         float lenZ = size.z + thickness * 2f;
@@ -250,13 +250,14 @@ public class GridManager : MonoBehaviour
         {
             wall = new GameObject(name);
             wall.transform.SetParent(_wallsParent.transform, worldPositionStays: false);
-            wall.layer = gameObject.layer;
+            wall.layer = LayerMask.NameToLayer("Ignore Raycast");
             var bc = wall.AddComponent<BoxCollider>();
             if (wallPhysics != null) bc.material = wallPhysics;
             _wallObjs[index] = wall;
         }
 
         wall.name = name;
+        wall.layer = LayerMask.NameToLayer("Ignore Raycast");
         wall.transform.localPosition = localPos;
         wall.GetComponent<BoxCollider>().size = colliderSize;
     }

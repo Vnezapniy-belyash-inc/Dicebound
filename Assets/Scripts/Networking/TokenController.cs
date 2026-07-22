@@ -394,6 +394,7 @@ public class TokenController : NetworkBehaviour
 
     private void OnGUI()
     {
+        if (!GameplayInputGate.AllowsImGuiOverlays) return;
         if (!_showMenu) return;
 
         bool canLoad = IsSpawner || IsHost;
