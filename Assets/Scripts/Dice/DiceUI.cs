@@ -61,6 +61,8 @@ public class DiceUI : MonoBehaviour
     void Start()
     {
         _gridManager = FindAnyObjectByType<GridManager>();
+        if (GetComponent<EffectPaintTool>() == null)
+            gameObject.AddComponent<EffectPaintTool>();
         BuildUI();
         if (DiceManager.Instance != null)
             DiceManager.Instance.OnAnyResult += OnDieResult;
@@ -499,7 +501,6 @@ public class DiceUI : MonoBehaviour
 
     void ToggleTextureMenu()
     {
-        if (MeasurementTool.Instance == null || !MeasurementTool.Instance.IsActive) return;
         _textureMenuOpen = !_textureMenuOpen;
         if (_textureMenu != null) _textureMenu.SetActive(_textureMenuOpen);
     }
@@ -556,6 +557,29 @@ public class DiceUI : MonoBehaviour
         Font font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         float y = 0f;
 
+        string joinCode = RelayManager.CurrentJoinCode;
+        if (!string.IsNullOrEmpty(joinCode))
+        {
+            var codeGO = new GameObject("LobbyCode", typeof(RectTransform));
+            codeGO.transform.SetParent(_playerListContent.transform, false);
+
+            var codeRt = codeGO.GetComponent<RectTransform>();
+            codeRt.anchorMin = codeRt.anchorMax = new Vector2(0f, 1f);
+            codeRt.pivot = new Vector2(0f, 1f);
+            codeRt.sizeDelta = new Vector2(260f, 22f);
+            codeRt.anchoredPosition = new Vector2(0f, y);
+
+            var codeTxt = codeGO.AddComponent<Text>();
+            codeTxt.text = $"Код лобби: {joinCode}";
+            codeTxt.font = font;
+            codeTxt.fontSize = 13;
+            codeTxt.fontStyle = FontStyle.Bold;
+            codeTxt.color = new Color(0.75f, 0.85f, 1f);
+            codeTxt.alignment = TextAnchor.MiddleLeft;
+
+            y -= 28f;
+        }
+
         foreach (var kv in nm.ConnectedClients)
         {
             var entryGO = new GameObject($"Player_{kv.Key}", typeof(RectTransform));
@@ -598,8 +622,9 @@ public class DiceUI : MonoBehaviour
             y -= 26f;
         }
 
-        // Обновить высоту панели под количество игроков
-        float h = Mathf.Max(80f, Mathf.Abs(y) + 50f);
+        // Обновить высоту панели под количество игроков (+ строка кода)
+        float headerExtra = string.IsNullOrEmpty(joinCode) ? 0f : 28f;
+        float h = Mathf.Max(80f, Mathf.Abs(y) + 50f + headerExtra);
         _playerListPanel.GetComponent<RectTransform>().sizeDelta = new Vector2(280f, h);
     }
 
@@ -609,12 +634,11 @@ public class DiceUI : MonoBehaviour
         _textureMenu.transform.SetParent(_canvas.transform, false);
         _textureMenu.SetActive(false);
 
-        // Фон
         Image bg = _textureMenu.AddComponent<Image>();
         bg.color = new Color(0.05f, 0.08f, 0.15f, 0.92f);
 
         int cols = 3;
-        int rows = 2;
+        int rows = 3;
         float sqSize = 48f;
         float gap = 6f;
         float pad = 8f;
@@ -626,32 +650,71 @@ public class DiceUI : MonoBehaviour
         rt.sizeDelta = new Vector2(menuW, menuH);
         rt.anchoredPosition = new Vector2(80f, 0f);
 
-        for (int i = 0; i < CellMarker.TextureNames.Length; i++)
+        int totalButtons = CellMarker.TextureNames.Length + 1;
+        for (int i = 0; i < totalButtons; i++)
         {
-            int idx = i;
+            int idx = i < CellMarker.TextureNames.Length ? i : CellMarker.EraseToolIndex;
             int col = i % cols;
             int row = i / cols;
             float x = pad + col * (sqSize + gap);
             float y = -pad - row * (sqSize + gap);
 
-            GameObject btnGO = new GameObject($"TexBtn_{i}");
+            GameObject btnGO = new GameObject(i < CellMarker.TextureNames.Length ? $"TexBtn_{i}" : "TexBtn_Erase");
             btnGO.transform.SetParent(_textureMenu.transform, false);
 
             Image bImg = btnGO.AddComponent<Image>();
-            bImg.color = CellMarker.TextureColors[i];
+            if (idx == CellMarker.EraseToolIndex)
+                bImg.color = new Color(1f, 1f, 1f, 0.25f);
+            else
+                bImg.color = CellMarker.TextureColors[i];
+
+            if (idx == CellMarker.EraseToolIndex)
+                AddEraseCross(btnGO.transform, sqSize);
 
             Button btn = btnGO.AddComponent<Button>();
-            btn.onClick.AddListener(() => {
-                MeasurementTool.Instance?.ApplyArea(idx);
-                _textureMenuOpen = false;
-                _textureMenu.SetActive(false);
-            });
+            btn.onClick.AddListener(() => OnTextureMenuPick(idx));
 
             RectTransform brt = btnGO.GetComponent<RectTransform>();
             brt.anchorMin = brt.anchorMax = new Vector2(0f, 1f);
             brt.pivot = new Vector2(0f, 1f);
             brt.sizeDelta = new Vector2(sqSize, sqSize);
             brt.anchoredPosition = new Vector2(x, y);
+        }
+    }
+
+    void OnTextureMenuPick(int textureIndex)
+    {
+        if (EffectPaintTool.Instance != null)
+            EffectPaintTool.Instance.Activate(textureIndex);
+
+        var mt = MeasurementTool.Instance;
+        if (mt != null && mt.IsActive && mt.CurrentMode != MeasurementTool.Mode.Ruler
+            && textureIndex >= 0)
+            mt.ApplyArea(textureIndex);
+
+        _textureMenuOpen = false;
+        if (_textureMenu != null) _textureMenu.SetActive(false);
+    }
+
+    static void AddEraseCross(Transform parent, float size)
+    {
+        Color crossColor = new Color(0.85f, 0.15f, 0.15f, 0.95f);
+        float thickness = 4f;
+        float len = size * 0.55f;
+
+        for (int d = 0; d < 2; d++)
+        {
+            var lineGO = new GameObject(d == 0 ? "Cross1" : "Cross2");
+            lineGO.transform.SetParent(parent, false);
+            var img = lineGO.AddComponent<Image>();
+            img.color = crossColor;
+            img.raycastTarget = false;
+
+            var lrt = lineGO.GetComponent<RectTransform>();
+            lrt.anchorMin = lrt.anchorMax = new Vector2(0.5f, 0.5f);
+            lrt.pivot = new Vector2(0.5f, 0.5f);
+            lrt.sizeDelta = new Vector2(len, thickness);
+            lrt.localRotation = Quaternion.Euler(0f, 0f, d == 0 ? 45f : -45f);
         }
     }
 

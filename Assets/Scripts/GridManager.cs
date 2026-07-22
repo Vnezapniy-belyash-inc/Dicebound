@@ -4,6 +4,7 @@ using System.Collections.Generic;
 /// <summary>
 /// Менеджер игрового поля: визуальная сетка, привязка позиций к клеткам.
 /// Базовая сетка 100×100, отображаются только клетки в границах карты.
+/// Невидимые стены-коллайдеры следуют за границами карты (MapController.GetMapBounds).
 /// </summary>
 public class GridManager : MonoBehaviour
 {
@@ -19,8 +20,9 @@ public class GridManager : MonoBehaviour
 
     [Header("Стены")]
     public bool createWalls = true;
-    public float wallHeight = 3f;
-    public float wallThickness = 1f;
+    public float wallHeight = 20f;
+    [Tooltip("Толщина невидимых коллайдеров — должна быть достаточной, чтобы кубики не пролетали сквозь.")]
+    public float wallThickness = 3f;
     public PhysicsMaterial wallPhysics;
 
     public int Width => gridWidth;
@@ -29,6 +31,8 @@ public class GridManager : MonoBehaviour
 
     private GameObject _gridLinesParent;
     private GameObject _wallsParent;
+    private readonly GameObject[] _wallObjs = new GameObject[4];
+    private Vector3 _cachedWallSize = Vector3.zero;
     private List<GameObject> _hLines = new();
     private List<GameObject> _vLines = new();
     private Bounds _mapBounds;
@@ -39,23 +43,17 @@ public class GridManager : MonoBehaviour
 
     void Start()
     {
-        // Форсируем тёмно-серый цвет (переопределяет сохранённый в сцене)
         gridColor = new Color(0.15f, 0.15f, 0.15f, 0.5f);
         GenerateFullGrid();
-
-        // Всегда создаём стены вокруг всей сетки 100×100
-        Bounds defaultBounds = new Bounds(Vector3.zero,
-            new Vector3(gridWidth * cellSize, 0.1f, gridHeight * cellSize));
-        UpdateWalls(defaultBounds);
     }
 
-    /// <summary>Обновляет границы карты — показывает только клетки внутри.</summary>
+    /// <summary>Обновляет границы карты — сетка и невидимые стены следуют за картой.</summary>
     public void SetBounds(Bounds mapBounds)
     {
         _mapBounds = mapBounds;
         if (!_gridCreated) GenerateFullGrid();
-        // Сетка НЕ двигается — остаётся в (0,0,0)
         UpdateVisibleCells();
+        UpdateWalls(mapBounds);
     }
 
     // ═══ Создание полной сетки 100×100 (один раз) ═══
@@ -182,43 +180,107 @@ public class GridManager : MonoBehaviour
         }
     }
 
-    // ═══ Стены ═══
+    // ═══ Стены (невидимые коллайдеры по границам карты) ═══
 
     void UpdateWalls(Bounds b)
+    {
+        if (!createWalls)
+        {
+            DestroyWalls();
+            return;
+        }
+
+        if (b.size.x <= 0f || b.size.z <= 0f)
+        {
+            DestroyWalls();
+            return;
+        }
+
+        Vector3 center = new Vector3(b.center.x, 0f, b.center.z);
+        Vector3 size = new Vector3(b.size.x, wallHeight, b.size.z);
+
+        if (_wallsParent == null)
+        {
+            _wallsParent = new GameObject("Walls");
+            _wallsParent.transform.SetParent(transform);
+            BuildWallColliders(size);
+            _cachedWallSize = size;
+        }
+
+        _wallsParent.transform.position = center;
+
+        if (!Approximately(size, _cachedWallSize))
+        {
+            ResizeWallColliders(size);
+            _cachedWallSize = size;
+        }
+    }
+
+    void BuildWallColliders(Vector3 size)
+    {
+        ApplyWallGeometry(size);
+    }
+
+    void ResizeWallColliders(Vector3 size)
+    {
+        ApplyWallGeometry(size);
+    }
+
+    void ApplyWallGeometry(Vector3 size)
+    {
+        float halfW = size.x / 2f;
+        float halfH = size.z / 2f;
+        float thickness = Mathf.Max(wallThickness, 2f);
+        float hw = halfW + thickness / 2f;
+        float hh = halfH + thickness / 2f;
+        float hy = wallHeight / 2f;
+        float lenX = size.x + thickness * 2f;
+        float lenZ = size.z + thickness * 2f;
+
+        EnsureWallObj(0, "Wall_N", new Vector3(0f, hy, hh), new Vector3(lenX, wallHeight, thickness));
+        EnsureWallObj(1, "Wall_S", new Vector3(0f, hy, -hh), new Vector3(lenX, wallHeight, thickness));
+        EnsureWallObj(2, "Wall_E", new Vector3(hw, hy, 0f), new Vector3(thickness, wallHeight, lenZ));
+        EnsureWallObj(3, "Wall_W", new Vector3(-hw, hy, 0f), new Vector3(thickness, wallHeight, lenZ));
+    }
+
+    void EnsureWallObj(int index, string name, Vector3 localPos, Vector3 colliderSize)
+    {
+        GameObject wall = _wallObjs[index];
+        if (wall == null)
+        {
+            wall = new GameObject(name);
+            wall.transform.SetParent(_wallsParent.transform, worldPositionStays: false);
+            wall.layer = gameObject.layer;
+            var bc = wall.AddComponent<BoxCollider>();
+            if (wallPhysics != null) bc.material = wallPhysics;
+            _wallObjs[index] = wall;
+        }
+
+        wall.name = name;
+        wall.transform.localPosition = localPos;
+        wall.GetComponent<BoxCollider>().size = colliderSize;
+    }
+
+    static bool Approximately(Vector3 a, Vector3 b)
+    {
+        return Mathf.Abs(a.x - b.x) < 0.01f
+            && Mathf.Abs(a.y - b.y) < 0.01f
+            && Mathf.Abs(a.z - b.z) < 0.01f;
+    }
+
+    void DestroyWalls()
     {
         if (_wallsParent != null)
         {
             if (Application.isPlaying) Destroy(_wallsParent);
             else DestroyImmediate(_wallsParent);
+            _wallsParent = null;
         }
 
-        _wallsParent = new GameObject("Walls");
-        _wallsParent.transform.SetParent(transform);
-        _wallsParent.transform.localPosition = Vector3.zero; // стены не двигаются
+        for (int i = 0; i < _wallObjs.Length; i++)
+            _wallObjs[i] = null;
 
-        float halfW = b.size.x / 2f;
-        float halfH = b.size.z / 2f;
-        float hw = halfW + wallThickness / 2f;
-        float hh = halfH + wallThickness / 2f;
-        float hy = wallHeight / 2f;
-        float lenX = b.size.x + wallThickness * 2f;
-        float lenZ = b.size.z + wallThickness * 2f;
-
-        CreateWallObj("Wall_N", new Vector3(0, hy, hh), new Vector3(lenX, wallHeight, wallThickness));
-        CreateWallObj("Wall_S", new Vector3(0, hy, -hh), new Vector3(lenX, wallHeight, wallThickness));
-        CreateWallObj("Wall_E", new Vector3(hw, hy, 0), new Vector3(wallThickness, wallHeight, lenZ));
-        CreateWallObj("Wall_W", new Vector3(-hw, hy, 0), new Vector3(wallThickness, wallHeight, lenZ));
-    }
-
-    void CreateWallObj(string name, Vector3 pos, Vector3 size)
-    {
-        GameObject wall = new GameObject(name);
-        wall.transform.SetParent(_wallsParent.transform, worldPositionStays: false);
-        wall.transform.localPosition = pos;
-        wall.layer = gameObject.layer;
-        BoxCollider bc = wall.AddComponent<BoxCollider>();
-        bc.size = size;
-        if (wallPhysics != null) bc.material = wallPhysics;
+        _cachedWallSize = Vector3.zero;
     }
 
     // ═══ Публичные методы ═══

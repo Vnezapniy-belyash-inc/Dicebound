@@ -123,7 +123,8 @@ public class MapController : NetworkBehaviour
             if (GameplayInputGate.AllowsKeyboardHotkeys)
                 HandleRotate();
         }
-        // Сетка обновляется у всех (позиция синхронится через NetworkTransform)
+        // Сетка и стены обновляются у всех клиентов из синхронизированных bounds карты
+        // (NetworkTransform — позиция/поворот, NetworkVariable — масштаб, MapSync — текстура).
         RebuildGrid();
     }
 

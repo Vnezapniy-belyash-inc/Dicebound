@@ -16,6 +16,11 @@ public class RelayManager : MonoBehaviour
 {
     public static RelayManager Instance { get; private set; }
 
+    /// <summary>Актуальный join-код текущей сессии (хост и клиенты).</summary>
+    public static string CurrentJoinCode { get; private set; }
+
+    public static void ClearJoinCode() => CurrentJoinCode = null;
+
     private void Awake()
     {
         if (Instance != null) { Destroy(gameObject); return; }
@@ -60,6 +65,7 @@ public class RelayManager : MonoBehaviour
         );
 
         Debug.Log($"[Relay] Host allocation created. Join code: {joinCode}");
+        CurrentJoinCode = joinCode;
         return joinCode;
     }
 
@@ -86,6 +92,7 @@ public class RelayManager : MonoBehaviour
                 JoinAllocation joinAllocation = await RelayService.Instance.JoinAllocationAsync(joinCode);
                 ApplyClientRelayData(joinAllocation);
                 Debug.Log($"[Relay] Joined relay with code: {joinCode}");
+                CurrentJoinCode = joinCode;
                 return;
             }
             catch (Exception ex)

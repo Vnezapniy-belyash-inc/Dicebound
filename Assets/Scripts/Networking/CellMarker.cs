@@ -26,6 +26,12 @@ public class CellMarker : NetworkBehaviour
         "Огонь", "Вода", "Природа", "Препят.", "Тьма", "Стена"
     };
 
+    public const int EraseToolIndex = -1;
+
+    private const string MSG_PAINT_CELL = "PaintCell";
+
+    private static bool _paintHandlerRegistered;
+
     private NetworkVariable<int> _netTexIndex = new(0,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
@@ -55,6 +61,7 @@ public class CellMarker : NetworkBehaviour
         if (NetworkManager.Singleton == null) return;
 
         GetTemplate();
+        EnsurePaintHandlerRegistered();
 
         if (_handlerRegistered) return;
 
@@ -65,15 +72,103 @@ public class CellMarker : NetworkBehaviour
         Debug.Log($"[CellMarker] Prefab handler registered (hash={PrefabHash}, legacy={LegacyPrefabHash})");
     }
 
+    public static void EnsurePaintHandlerRegistered()
+    {
+        if (_paintHandlerRegistered || NetworkManager.Singleton == null) return;
+
+        var cmm = NetworkManager.Singleton.CustomMessagingManager;
+        if (cmm == null) return;
+
+        cmm.RegisterNamedMessageHandler(MSG_PAINT_CELL, OnPaintCellRequest);
+        _paintHandlerRegistered = true;
+    }
+
+    private static void OnPaintCellRequest(ulong senderId, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out int x);
+        reader.ReadValueSafe(out int y);
+        reader.ReadValueSafe(out int textureIndex);
+        ServerApplyCell(new Vector2Int(x, y), textureIndex, senderId);
+    }
+
+    public static void RequestApplyCell(Vector2Int cell, int textureIndex)
+    {
+        if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsConnectedClient) return;
+
+        EnsurePaintHandlerRegistered();
+
+        var writer = new FastBufferWriter(sizeof(int) * 3, Unity.Collections.Allocator.Temp);
+        writer.WriteValueSafe(cell.x);
+        writer.WriteValueSafe(cell.y);
+        writer.WriteValueSafe(textureIndex);
+        NetworkManager.Singleton.CustomMessagingManager.SendNamedMessage(
+            MSG_PAINT_CELL, NetworkManager.ServerClientId, writer);
+        writer.Dispose();
+    }
+
+    public static void ServerApplyCell(Vector2Int cell, int textureIndex, ulong senderId)
+    {
+        if (!NetworkManager.Singleton.IsServer || cell.x < 0) return;
+
+        var gm = Object.FindAnyObjectByType<GridManager>();
+        if (gm == null) return;
+
+        if (textureIndex == EraseToolIndex)
+        {
+            foreach (var marker in FindAtCell(cell, gm))
+            {
+                if (NetworkPermissions.CanRemoveSingleCellMarker(senderId, marker))
+                    marker.GetComponent<NetworkObject>().Despawn();
+            }
+
+            return;
+        }
+
+        if (textureIndex < 0 || textureIndex >= TextureColors.Length) return;
+
+        foreach (var marker in FindAtCell(cell, gm))
+        {
+            if (!NetworkPermissions.CanRemoveSingleCellMarker(senderId, marker))
+                return;
+
+            marker.GetComponent<NetworkObject>().Despawn();
+        }
+
+        Vector3 pos = gm.GetCellCenter(cell.x, cell.y, 0.015f);
+        Spawn(pos, textureIndex, senderId);
+    }
+
+    public static System.Collections.Generic.List<CellMarker> FindAtCell(Vector2Int cell, GridManager gm)
+    {
+        var result = new System.Collections.Generic.List<CellMarker>();
+        if (gm == null || cell.x < 0) return result;
+
+        foreach (var marker in Object.FindObjectsByType<CellMarker>(FindObjectsInactive.Exclude))
+        {
+            if (marker == null || !marker.IsSpawned) continue;
+            if (gm.GetGridPosition(marker.transform.position) == cell)
+                result.Add(marker);
+        }
+
+        return result;
+    }
+
     public static void ResetRegistration()
     {
-        if (NetworkManager.Singleton != null && _handlerRegistered)
+        if (NetworkManager.Singleton != null)
         {
-            NetworkManager.Singleton.PrefabHandler.RemoveHandler(PrefabHash);
-            NetworkManager.Singleton.PrefabHandler.RemoveHandler(LegacyPrefabHash);
+            if (_handlerRegistered)
+            {
+                NetworkManager.Singleton.PrefabHandler.RemoveHandler(PrefabHash);
+                NetworkManager.Singleton.PrefabHandler.RemoveHandler(LegacyPrefabHash);
+            }
+
+            if (_paintHandlerRegistered && NetworkManager.Singleton.CustomMessagingManager != null)
+                NetworkManager.Singleton.CustomMessagingManager.UnregisterNamedMessageHandler(MSG_PAINT_CELL);
         }
 
         _handlerRegistered = false;
+        _paintHandlerRegistered = false;
     }
 
     public static void Spawn(Vector3 position, int textureIndex, ulong spawnerClientId)
@@ -153,7 +248,7 @@ public class CellMarker : NetworkBehaviour
 
         if (nm.IsServer)
         {
-            if (NetworkPermissions.CanDespawnCellMarker(nm.LocalClientId, this))
+            if (NetworkPermissions.CanRemoveSingleCellMarker(nm.LocalClientId, this))
                 GetComponent<NetworkObject>().Despawn();
         }
         else
@@ -165,7 +260,7 @@ public class CellMarker : NetworkBehaviour
     [Rpc(SendTo.Server)]
     private void RequestRemoveServerRpc(RpcParams rpcParams = default)
     {
-        if (NetworkPermissions.CanDespawnCellMarker(rpcParams.Receive.SenderClientId, this))
+        if (NetworkPermissions.CanRemoveSingleCellMarker(rpcParams.Receive.SenderClientId, this))
             GetComponent<NetworkObject>().Despawn();
     }
 

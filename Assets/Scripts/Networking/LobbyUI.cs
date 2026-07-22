@@ -61,6 +61,7 @@ public class LobbyUI : MonoBehaviour
 
         CellMarker.ResetRegistration();
         PlayerColors.Reset();
+        RelayManager.ClearJoinCode();
         UnityEngine.SceneManagement.SceneManager.LoadScene(
             UnityEngine.SceneManagement.SceneManager.GetActiveScene().name);
     }
@@ -162,6 +163,8 @@ public class LobbyUI : MonoBehaviour
         var diceUI = FindAnyObjectByType<DiceUI>();
         if (diceUI != null)
             diceUI.ShowGamePanels();
+
+        CharacterSheetUI.Instance?.SetSessionActive(true);
     }
 
     private void SetInteractable(bool interactable)
@@ -183,6 +186,7 @@ public class LobbyUI : MonoBehaviour
     /// <summary>Принудительно показать меню (при выходе из лобби).</summary>
     public void ShowLobby()
     {
+        CharacterSheetUI.Instance?.SetSessionActive(false);
         lobbyPanel.SetActive(true);
         SetInteractable(true);
         _isConnecting = false;

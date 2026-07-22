@@ -93,6 +93,15 @@ public static class NetworkPermissions
         return CanDespawnSpawnedObject(senderId, marker.SpawnerClientId, hostHasOwn);
     }
 
+    public static bool CanRemoveSingleCellMarker(ulong senderId, CellMarker marker)
+    {
+        if (marker == null || !marker.IsSpawned) return false;
+
+        if (senderId == marker.SpawnerClientId) return true;
+
+        return IsHostClient(senderId);
+    }
+
     public static bool CanUploadTokenPortrait(ulong senderId, TokenController token)
     {
         if (token == null || !token.IsSpawned) return false;

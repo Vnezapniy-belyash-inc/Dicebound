@@ -8,11 +8,13 @@ using UnityEditor;
 
 /// <summary>
 /// Чарник D&D в стиле референса: блоки статов, навыки с кружками, пассивные чувства.
-/// Клавиша C.
+/// C или таб ◀ — только после подключения к сессии (Host/Join).
 /// </summary>
 public class CharacterSheetUI : MonoBehaviour
 {
     public CharacterData characterData;
+
+    public static CharacterSheetUI Instance { get; private set; }
 
     float PW = 740f;  // ширина панели
     float CW = 350f;  // ширина колонки
@@ -68,31 +70,77 @@ public class CharacterSheetUI : MonoBehaviour
         new[]{0}, new[]{1,2,3}, new int[]{}, new[]{4,5,6,7,8}, new[]{9,10,11,12,13}, new[]{14,15,16,17},
     };
 
+    void Awake()
+    {
+        if (Instance != null && Instance != this)
+        {
+            Destroy(this);
+            return;
+        }
+
+        Instance = this;
+    }
+
     void Start()
     {
         _cd = characterData ? characterData : FindAnyObjectByType<CharacterData>();
         BuildUI();
-        if (_pn) _pn.SetActive(false);
-        if (_charSheetTab != null) _charSheetTab.SetActive(true);
+        SetSessionActive(false);
     }
+
+    static bool IsSessionActive =>
+        GameNetworkManager.Instance != null && GameNetworkManager.Instance.IsConnected;
 
     void Update()
     {
+        SyncSessionAccess();
+
         var k = Keyboard.current;
         if (k == null) return;
 
-        // В главном меню хоткеи не работают
-        if (GameNetworkManager.Instance == null || !GameNetworkManager.Instance.IsConnected) return;
-
         if (!GameplayInputGate.AllowsKeyboardHotkeys) return;
 
-        if (k.cKey.wasPressedThisFrame && _pn)
+        if (k.cKey.wasPressedThisFrame && IsSessionActive)
+            ToggleSheet();
+    }
+
+    /// <summary>Вызывается при входе/выходе из сессии.</summary>
+    public void SetSessionActive(bool active)
+    {
+        if (!active)
         {
-            bool show = !_pn.activeSelf;
-            _pn.SetActive(show);
-            if (_charSheetTab != null) _charSheetTab.SetActive(!show);
-            if (_pn.activeSelf) RefreshDisplay();
+            if (_pn != null && _pn.activeSelf)
+                SetSheetVisible(false);
+            if (_charSheetTab != null)
+                _charSheetTab.SetActive(false);
+            return;
         }
+
+        if (_charSheetTab != null && (_pn == null || !_pn.activeSelf))
+            _charSheetTab.SetActive(true);
+    }
+
+    void SyncSessionAccess()
+    {
+        if (!IsSessionActive)
+            SetSessionActive(false);
+    }
+
+    public void ToggleSheet()
+    {
+        if (!IsSessionActive || _pn == null) return;
+        SetSheetVisible(!_pn.activeSelf);
+    }
+
+    public void SetSheetVisible(bool show)
+    {
+        if (_pn == null) return;
+        if (show && !IsSessionActive) return;
+
+        _pn.SetActive(show);
+        if (_charSheetTab != null)
+            _charSheetTab.SetActive(IsSessionActive && !show);
+        if (show) RefreshDisplay();
     }
 
     // ══════════════════════════════  Сборка  ══════════════════════════════
@@ -110,7 +158,8 @@ public class CharacterSheetUI : MonoBehaviour
         var cgo = GO("CharCanvas", typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
         cgo.transform.SetParent(transform, false);
         _cv = cgo.GetComponent<Canvas>();
-        _cv.renderMode = RenderMode.ScreenSpaceOverlay; _cv.sortingOrder = 15;
+        _cv.renderMode = RenderMode.ScreenSpaceOverlay;
+        _cv.sortingOrder = 25;
         var sc = cgo.GetComponent<CanvasScaler>();
         sc.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
         sc.referenceResolution = new Vector2(1920, 1080);
@@ -172,10 +221,7 @@ public class CharacterSheetUI : MonoBehaviour
             img.raycastTarget = true;
 
             Button btn = _charSheetTab.AddComponent<Button>();
-            btn.onClick.AddListener(() => {
-                _pn.SetActive(true);
-                _charSheetTab.SetActive(false);
-            });
+            btn.onClick.AddListener(ToggleSheet);
 
             RectTransform rt = _charSheetTab.GetComponent<RectTransform>();
             rt.anchorMin = rt.anchorMax = new Vector2(1f, 1f);
@@ -537,10 +583,7 @@ public class CharacterSheetUI : MonoBehaviour
             img.raycastTarget = true;
 
             Button btn = btnGO.AddComponent<Button>();
-            btn.onClick.AddListener(() => {
-                _pn.SetActive(false);
-                if (_charSheetTab != null) _charSheetTab.SetActive(true);
-            });
+            btn.onClick.AddListener(() => SetSheetVisible(false));
 
             RectTransform rt = btnGO.GetComponent<RectTransform>();
             rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(1f, 1f);
@@ -1119,6 +1162,12 @@ public class CharacterSheetUI : MonoBehaviour
         ifc.text = text;
         ifc.onValueChanged.AddListener(cb);
         return ifc;
+    }
+
+    void OnDestroy()
+    {
+        if (Instance == this)
+            Instance = null;
     }
 
     void EvSys()
