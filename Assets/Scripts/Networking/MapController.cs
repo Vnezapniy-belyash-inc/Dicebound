@@ -38,6 +38,7 @@ public class MapController : NetworkBehaviour
     private bool _scaleInputReady;
 
     public static MapController Instance { get; private set; }
+    public float CurrentScale => _netScale.Value;
 
     private void Awake()
     {
@@ -157,34 +158,42 @@ public class MapController : NetworkBehaviour
     public void ApplyImage(byte[] pngData)
     {
         if (!IsHost) return;
-        ApplyImageInternal(pngData);
+        if (pngData == null || pngData.Length == 0 || pngData.Length > MapSync.MaxMapBytes)
+        {
+            Debug.LogError("[Map] Image exceeds the 16 MB network limit");
+            DiceUI.Instance?.ShowToolNotice("Карта слишком большая для передачи (максимум 16 МБ).");
+            return;
+        }
+        if (!ApplyImageInternal(pngData)) return;
         MapSync.Instance?.SendMapToAll(pngData);
     }
 
     /// <summary>Клиент получает картинку от хоста.</summary>
-    public void ApplyImageLocal(byte[] pngData)
+    public bool ApplyImageLocal(byte[] pngData)
     {
-        ApplyImageInternal(pngData);
+        return ApplyImageInternal(pngData);
     }
 
-    private void ApplyImageInternal(byte[] pngData)
+    private bool ApplyImageInternal(byte[] pngData)
     {
+        if (pngData == null || pngData.Length == 0) return false;
         Texture2D tex = new Texture2D(2, 2);
         if (!tex.LoadImage(pngData))
         {
             Debug.LogError("[Map] Failed to load image");
             Destroy(tex);
-            return;
+            return false;
         }
-
-        _currentTexture = tex;
 
         if (_mapMaterial == null)
         {
             Debug.LogError("[Map] _mapMaterial is null! GameBoard needs MeshRenderer.");
-            return;
+            Destroy(tex);
+            return false;
         }
 
+        if (_currentTexture != null) Destroy(_currentTexture);
+        _currentTexture = tex;
         ApplyTextureToMapMaterial(tex);
 
         // Скрываем GameBoard (теперь карта на MapPlane)
@@ -195,6 +204,7 @@ public class MapController : NetworkBehaviour
         RebuildGrid();
 
         Debug.Log($"[Map] Loaded: {tex.width}x{tex.height}");
+        return true;
     }
 
     // ═══ Масштаб ═══
@@ -204,15 +214,24 @@ public class MapController : NetworkBehaviour
         if (!IsHost) return;
         if (float.TryParse(text, System.Globalization.NumberStyles.Float,
             System.Globalization.CultureInfo.InvariantCulture, out float scale))
-        {
-            scale = Mathf.Clamp(scale, minScale, maxScale);
-            if (IsServer)
-                _netScale.Value = scale;
-            else
-                RequestScaleServerRpc(scale);
-        }
+            SetScale(scale);
         if (_scaleInputField != null)
             _scaleInputField.text = _netScale.Value.ToString("F2");
+    }
+
+    public void SetScale(float scale)
+    {
+        if (!IsHost) return;
+        scale = Mathf.Clamp(scale, minScale, maxScale);
+        if (IsServer) _netScale.Value = scale;
+        else RequestScaleServerRpc(scale);
+    }
+
+    public void Rotate90()
+    {
+        if (!IsHost) return;
+        transform.Rotate(Vector3.up, 90f);
+        RebuildGrid();
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
@@ -269,8 +288,7 @@ public class MapController : NetworkBehaviour
 
         if (k.rKey.wasPressedThisFrame && !k.shiftKey.isPressed && !k.ctrlKey.isPressed)
         {
-            transform.Rotate(Vector3.up, 90f);
-            RebuildGrid();
+            Rotate90();
         }
     }
 
@@ -279,12 +297,17 @@ public class MapController : NetworkBehaviour
     public void ResetMap()
     {
         if (!IsHost || mapPlane == null) return;
-        _baseScale = mapPlane.transform.localScale; // сохраняем текущий
-        transform.position = Vector3.zero;
-        transform.rotation = Quaternion.identity;
-        mapPlane.transform.localScale = _baseScale;
+        ResetMapPosition();
         _netScale.Value = defaultScale;
         ApplyScale(defaultScale);
+    }
+
+    public void ResetMapPosition()
+    {
+        if (!IsHost || mapPlane == null) return;
+        transform.position = Vector3.zero;
+        transform.rotation = Quaternion.identity;
+        RebuildGrid();
     }
 
     // ═══ Утилиты ═══
@@ -365,14 +388,14 @@ public class MapController : NetworkBehaviour
         // localScale уже учитывает _baseScale × scale, не умножаем повторно
         float w = 10f * mapPlane.transform.localScale.x;
         float h = 10f * mapPlane.transform.localScale.z;
-        return new Bounds(transform.position, new Vector3(w, 0.1f, h));
+        return new Bounds(mapPlane.transform.position, new Vector3(w, 0.1f, h));
     }
 
     private void RebuildGrid()
     {
         var gm = FindAnyObjectByType<GridManager>();
         if (gm != null)
-            gm.SetBounds(GetMapBounds());
+            gm.SetBounds(GetMapBounds(), mapPlane != null ? mapPlane.transform.rotation : Quaternion.identity);
     }
 
     public byte[] GetCurrentPngData()

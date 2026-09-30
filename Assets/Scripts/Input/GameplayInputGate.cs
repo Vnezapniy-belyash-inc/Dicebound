@@ -10,6 +10,8 @@ using UnityEngine.UI;
 /// </summary>
 public static class GameplayInputGate
 {
+    public static int LastToolExitFrame { get; private set; } = -1;
+    public static void MarkToolExit() => LastToolExitFrame = Time.frameCount;
     /// <summary>True while a legacy or TMP text/numeric field has keyboard focus.</summary>
     public static bool IsTextInputFocused
     {
@@ -39,13 +41,15 @@ public static class GameplayInputGate
         HostSceneCurtain.IsBlockingLocalPlayer;
 
     /// <summary>IMGUI overlays (measurement labels, token menus) — blocked for blinded clients.</summary>
-    public static bool AllowsImGuiOverlays => !IsHostCurtainBlocking;
+    public static bool AllowsImGuiOverlays => !IsHostCurtainBlocking &&
+        !(DiceUI.Instance != null && DiceUI.Instance.IsConfirmationOpen);
 
     /// <summary>
     /// Keyboard shortcuts: panel toggles, map rotate, camera movement keys, debug keys, etc.
     /// </summary>
     public static bool AllowsKeyboardHotkeys =>
-        !IsTextInputFocused && !IsHostCurtainBlocking;
+        !IsTextInputFocused && !IsHostCurtainBlocking &&
+        !(DiceUI.Instance != null && DiceUI.Instance.IsConfirmationOpen);
 
     /// <summary>
     /// Mouse actions on the game world: dice drag, map pan, measurement, pings, token menus.

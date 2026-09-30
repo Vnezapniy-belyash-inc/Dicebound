@@ -1,11 +1,10 @@
 using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
-using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 /// <summary>
-/// Host-only scene curtain: press H to hide the table from all clients while the host prepares.
+/// Host-only scene curtain: the GM panel hides the table from all clients while the host prepares.
 /// Clients see an opaque full-screen panel and cannot interact with or view the scene.
 /// Sync uses CustomMessagingManager (no runtime NetworkObject spawn).
 /// </summary>
@@ -125,18 +124,7 @@ public class HostSceneCurtain : MonoBehaviour
         }
     }
 
-    private void Update()
-    {
-        var nm = NetworkManager.Singleton;
-        if (nm == null || !nm.IsHost || !nm.IsListening) return;
-        if (!GameplayInputGate.AllowsKeyboardHotkeys) return;
-
-        var k = Keyboard.current;
-        if (k != null && k.hKey.wasPressedThisFrame)
-            ToggleCurtainOnHost();
-    }
-
-    private void ToggleCurtainOnHost()
+    public void ToggleCurtainOnHost()
     {
         if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer) return;
 
@@ -330,11 +318,11 @@ public class HostSceneCurtain : MonoBehaviour
         bg.raycastTarget = false;
 
         var rt = _hostIndicatorRoot.GetComponent<RectTransform>();
-        rt.anchorMin = new Vector2(1f, 1f);
-        rt.anchorMax = new Vector2(1f, 1f);
-        rt.pivot = new Vector2(1f, 1f);
+        rt.anchorMin = new Vector2(0f, 0f);
+        rt.anchorMax = new Vector2(0f, 0f);
+        rt.pivot = new Vector2(0f, 0f);
         rt.sizeDelta = new Vector2(320f, 42f);
-        rt.anchoredPosition = new Vector2(-12f, -12f);
+        rt.anchoredPosition = new Vector2(14f, 14f);
 
         var labelGo = new GameObject("Label");
         labelGo.transform.SetParent(_hostIndicatorRoot.transform, false);
@@ -344,7 +332,7 @@ public class HostSceneCurtain : MonoBehaviour
         label.fontStyle = FontStyle.Bold;
         label.alignment = TextAnchor.MiddleCenter;
         label.color = new Color(0.95f, 0.78f, 0.35f, 1f);
-        label.text = "Экран игроков скрыт (H — показать)";
+        label.text = "Экран игроков скрыт · откройте панель GM";
         label.raycastTarget = false;
 
         var lrt = label.GetComponent<RectTransform>();

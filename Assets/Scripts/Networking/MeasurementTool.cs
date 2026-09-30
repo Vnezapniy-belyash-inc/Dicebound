@@ -11,6 +11,8 @@ using UnityEngine.InputSystem;
 public class MeasurementTool : NetworkBehaviour
 {
     public enum Mode { Ruler, Circle, Square, Cone }
+    private const int MaxAreaCells = 2000;
+    private const int MarkersPerFrame = 16;
 
     [Header("Visual")]
     public float lineWidth = 0.06f;
@@ -29,6 +31,7 @@ public class MeasurementTool : NetworkBehaviour
     private readonly Dictionary<ulong, MeasurementSessionVisual> _visuals = new();
     private MeasurementSnapshot _localSession;
     private bool _isDragging;
+    private bool _pendingDeactivate;
     private float _lastSyncTime;
     private Camera _cam;
 
@@ -40,7 +43,8 @@ public class MeasurementTool : NetworkBehaviour
         get
         {
             var nm = NetworkManager.Singleton;
-            return nm != null && _localSession.Active && _localSession.ClientId == nm.LocalClientId;
+            return !_pendingDeactivate && nm != null && _localSession.Active &&
+                _localSession.ClientId == nm.LocalClientId;
         }
     }
 
@@ -89,6 +93,8 @@ public class MeasurementTool : NetworkBehaviour
 
     public void Activate(int mode)
     {
+        EffectPaintTool.Instance?.Deactivate();
+        _pendingDeactivate = false;
         EnsureSpawned();
         if (!IsSpawned) return;
 
@@ -132,7 +138,11 @@ public class MeasurementTool : NetworkBehaviour
 
     public void Deactivate()
     {
-        if (!IsSpawned) return;
+        if (!IsSpawned || !IsLocalActive) return;
+        GameplayInputGate.MarkToolExit();
+        _pendingDeactivate = true;
+        _localSession = default;
+        _isDragging = false;
         if (IsServer)
             DeactivateInternal(NetworkManager.Singleton.LocalClientId);
         else
@@ -182,6 +192,7 @@ public class MeasurementTool : NetworkBehaviour
     public bool TryGetLocalSnapshot(out MeasurementSnapshot snap)
     {
         snap = default;
+        if (_pendingDeactivate) return false;
         var nm = NetworkManager.Singleton;
         if (nm == null) return false;
 
@@ -232,13 +243,23 @@ public class MeasurementTool : NetworkBehaviour
     private void Update()
     {
         if (!IsLocalActive) return;
-        if (!GameplayInputGate.AllowsWorldPointerInput) return;
+        if (GameplayInputGate.AllowsKeyboardHotkeys &&
+            Keyboard.current?.escapeKey.wasPressedThisFrame == true)
+        {
+            Deactivate();
+            return;
+        }
+        if (!GameplayInputGate.AllowsWorldPointerInput)
+        {
+            if (_isDragging && Mouse.current?.leftButton.wasReleasedThisFrame == true)
+                _isDragging = false;
+            return;
+        }
 
         var mouse = Mouse.current;
         if (mouse == null) return;
 
-        if (Keyboard.current?.escapeKey.wasPressedThisFrame == true ||
-            mouse.rightButton.wasPressedThisFrame)
+        if (mouse.rightButton.wasPressedThisFrame)
         {
             Deactivate();
             _isDragging = false;
@@ -394,12 +415,16 @@ public class MeasurementTool : NetworkBehaviour
             case NetworkListEvent<MeasurementSnapshot>.EventType.RemoveAt:
                 RemoveVisual(changeEvent.Value.ClientId);
                 if (isLocal)
+                {
                     _localSession = default;
+                    _pendingDeactivate = false;
+                }
                 break;
 
             case NetworkListEvent<MeasurementSnapshot>.EventType.Clear:
                 ClearAllVisuals();
                 _localSession = default;
+                _pendingDeactivate = false;
                 break;
 
             case NetworkListEvent<MeasurementSnapshot>.EventType.Full:
@@ -603,10 +628,8 @@ public class MeasurementTool : NetworkBehaviour
         var cells = new List<Vector2Int>();
         if (radius < 0.01f) return cells;
 
-        Vector2Int min = gm.GetGridPosition(center - new Vector3(radius, 0, radius));
-        Vector2Int max = gm.GetGridPosition(center + new Vector3(radius, 0, radius));
-        min.x = Mathf.Max(min.x, 0); min.y = Mathf.Max(min.y, 0);
-        max.x = Mathf.Min(max.x, gm.Width - 1); max.y = Mathf.Min(max.y, gm.Height - 1);
+        gm.GetCellRange(center - new Vector3(radius, 0, radius),
+            center + new Vector3(radius, 0, radius), out Vector2Int min, out Vector2Int max);
 
         for (int x = min.x; x <= max.x; x++)
         {
@@ -629,10 +652,8 @@ public class MeasurementTool : NetworkBehaviour
         float minZ = Mathf.Min(corner.z, opposite.z);
         float maxZ = Mathf.Max(corner.z, opposite.z);
 
-        Vector2Int min = gm.GetGridPosition(new Vector3(minX, 0, minZ));
-        Vector2Int max = gm.GetGridPosition(new Vector3(maxX, 0, maxZ));
-        min.x = Mathf.Max(min.x, 0); min.y = Mathf.Max(min.y, 0);
-        max.x = Mathf.Min(max.x, gm.Width - 1); max.y = Mathf.Min(max.y, gm.Height - 1);
+        gm.GetCellRange(new Vector3(minX, 0, minZ), new Vector3(maxX, 0, maxZ),
+            out Vector2Int min, out Vector2Int max);
 
         for (int x = min.x; x <= max.x; x++)
             for (int y = min.y; y <= max.y; y++)
@@ -652,10 +673,8 @@ public class MeasurementTool : NetworkBehaviour
         Vector2 perp = new Vector2(-dir.y, dir.x);
         Vector2 o2 = new Vector2(origin.x, origin.z);
 
-        Vector2Int min = gm.GetGridPosition(origin - new Vector3(length, 0, length));
-        Vector2Int max = gm.GetGridPosition(origin + new Vector3(length, 0, length));
-        min.x = Mathf.Max(min.x, 0); min.y = Mathf.Max(min.y, 0);
-        max.x = Mathf.Min(max.x, gm.Width - 1); max.y = Mathf.Min(max.y, gm.Height - 1);
+        gm.GetCellRange(origin - new Vector3(length, 0, length),
+            origin + new Vector3(length, 0, length), out Vector2Int min, out Vector2Int max);
 
         for (int x = min.x; x <= max.x; x++)
         {
@@ -679,55 +698,59 @@ public class MeasurementTool : NetworkBehaviour
     {
         if (!IsLocalActive) return;
 
+        if (!TryGetLocalSnapshot(out var snap)) return;
         var cells = GetCellsInArea();
         if (cells.Count == 0) return;
+        if (cells.Count > MaxAreaCells)
+        {
+            DiceUI.Instance?.ShowToolNotice("Слишком большая область (максимум 2000 клеток).");
+            return;
+        }
 
         if (IsServer)
             SpawnMarkers(cells, textureIndex, NetworkManager.Singleton.LocalClientId);
         else
-            RequestApplyAreaServerRpc(SerializeCells(cells), textureIndex);
+            RequestApplyAreaServerRpc(snap.PointA, snap.PointB, textureIndex);
 
         Deactivate();
     }
 
     [Rpc(SendTo.Server)]
-    private void RequestApplyAreaServerRpc(string cellData, int textureIndex, RpcParams rpcParams = default)
+    private void RequestApplyAreaServerRpc(Vector3 pointA, Vector3 pointB, int textureIndex,
+        RpcParams rpcParams = default)
     {
-        var cells = DeserializeCells(cellData);
+        int index = FindSessionIndex(rpcParams.Receive.SenderClientId);
+        if (index < 0 || !_sessions[index].Active || !_sessions[index].HasPoints
+            || !Finite(pointA) || !Finite(pointB)) return;
+        var snap = _sessions[index];
+        snap.PointA = pointA;
+        snap.PointB = pointB;
+        var cells = GetCellsForSnapshot(snap);
+        if (cells.Count == 0 || cells.Count > MaxAreaCells) return;
         SpawnMarkers(cells, textureIndex, rpcParams.Receive.SenderClientId);
     }
 
+    private static bool Finite(Vector3 value) =>
+        !float.IsNaN(value.x) && !float.IsInfinity(value.x)
+        && !float.IsNaN(value.y) && !float.IsInfinity(value.y)
+        && !float.IsNaN(value.z) && !float.IsInfinity(value.z);
+
     private void SpawnMarkers(List<Vector2Int> cells, int textureIndex, ulong spawnerClientId)
     {
+        if (!IsServer || textureIndex < 0 || textureIndex >= CellMarker.TextureColors.Length) return;
+        StartCoroutine(SpawnMarkersRoutine(cells, textureIndex, spawnerClientId));
+    }
+
+    private System.Collections.IEnumerator SpawnMarkersRoutine(
+        List<Vector2Int> cells, int textureIndex, ulong spawnerClientId)
+    {
+        int sent = 0;
         foreach (var cell in cells)
         {
-            var gm = FindAnyObjectByType<GridManager>();
-            if (gm == null) continue;
-            Vector3 pos = gm.GetCellCenter(cell.x, cell.y, 0.015f);
-            CellMarker.Spawn(pos, textureIndex, spawnerClientId);
+            if (!IsServer) yield break;
+            CellMarker.ServerApplyCell(cell, textureIndex, spawnerClientId);
+            if (++sent % MarkersPerFrame == 0) yield return null;
         }
-    }
-
-    private static string SerializeCells(List<Vector2Int> cells)
-    {
-        var sb = new System.Text.StringBuilder();
-        foreach (var c in cells)
-            sb.Append($"{c.x},{c.y};");
-        return sb.ToString();
-    }
-
-    private static List<Vector2Int> DeserializeCells(string data)
-    {
-        var list = new List<Vector2Int>();
-        if (string.IsNullOrEmpty(data)) return list;
-        foreach (var pair in data.Split(';', System.StringSplitOptions.RemoveEmptyEntries))
-        {
-            var parts = pair.Split(',');
-            if (parts.Length == 2 && int.TryParse(parts[0], out int x) && int.TryParse(parts[1], out int y))
-                list.Add(new Vector2Int(x, y));
-        }
-
-        return list;
     }
 
     private new void OnDestroy()

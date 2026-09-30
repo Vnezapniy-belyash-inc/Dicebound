@@ -1,5 +1,4 @@
 using UnityEngine;
-using UnityEngine.InputSystem;
 using UnityEngine.UI;
 using System.IO;
 #if UNITY_EDITOR
@@ -8,7 +7,7 @@ using UnityEditor;
 
 /// <summary>
 /// Чарник D&D в стиле референса: блоки статов, навыки с кружками, пассивные чувства.
-/// C или таб ◀ — только после подключения к сессии (Host/Join).
+/// Вкладка ◀ или кнопка интерфейса — только после подключения к сессии (Host/Join).
 /// </summary>
 public class CharacterSheetUI : MonoBehaviour
 {
@@ -28,7 +27,6 @@ public class CharacterSheetUI : MonoBehaviour
 
     Canvas _cv;
     GameObject _pn;
-    GameObject _charSheetTab; // таб раскрытия
     CharacterData _cd;
 
     // Статы
@@ -94,14 +92,6 @@ public class CharacterSheetUI : MonoBehaviour
     void Update()
     {
         SyncSessionAccess();
-
-        var k = Keyboard.current;
-        if (k == null) return;
-
-        if (!GameplayInputGate.AllowsKeyboardHotkeys) return;
-
-        if (k.cKey.wasPressedThisFrame && IsSessionActive)
-            ToggleSheet();
     }
 
     /// <summary>Вызывается при входе/выходе из сессии.</summary>
@@ -111,13 +101,9 @@ public class CharacterSheetUI : MonoBehaviour
         {
             if (_pn != null && _pn.activeSelf)
                 SetSheetVisible(false);
-            if (_charSheetTab != null)
-                _charSheetTab.SetActive(false);
             return;
         }
 
-        if (_charSheetTab != null && (_pn == null || !_pn.activeSelf))
-            _charSheetTab.SetActive(true);
     }
 
     void SyncSessionAccess()
@@ -138,8 +124,6 @@ public class CharacterSheetUI : MonoBehaviour
         if (show && !IsSessionActive) return;
 
         _pn.SetActive(show);
-        if (_charSheetTab != null)
-            _charSheetTab.SetActive(IsSessionActive && !show);
         if (show) RefreshDisplay();
     }
 
@@ -210,36 +194,6 @@ public class CharacterSheetUI : MonoBehaviour
         _page3.SetActive(_currentPage == 3);
         _page4.SetActive(_currentPage == 4);
 
-        // Таб раскрытия чарника (правый край, на высоте середины панели)
-        {
-            Font f2 = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-            _charSheetTab = new GameObject("CharSheetTab");
-            _charSheetTab.transform.SetParent(cgo.transform, false);
-
-            Image img = _charSheetTab.AddComponent<Image>();
-            img.color = new Color(0.05f, 0.1f, 0.25f, 0.8f);
-            img.raycastTarget = true;
-
-            Button btn = _charSheetTab.AddComponent<Button>();
-            btn.onClick.AddListener(ToggleSheet);
-
-            RectTransform rt = _charSheetTab.GetComponent<RectTransform>();
-            rt.anchorMin = rt.anchorMax = new Vector2(1f, 1f);
-            rt.pivot = new Vector2(1f, 0.5f);
-            rt.sizeDelta = new Vector2(24f, 60f);
-            rt.anchoredPosition = new Vector2(0f, -12f - th / 2f);
-
-            GameObject lbl = new GameObject("Arrow");
-            lbl.transform.SetParent(_charSheetTab.transform, false);
-            Text txt = lbl.AddComponent<Text>();
-            txt.text = "◀"; txt.font = f2; txt.fontSize = 16;
-            txt.fontStyle = FontStyle.Bold;
-            txt.color = new Color(0.7f, 0.75f, 0.85f);
-            txt.alignment = TextAnchor.MiddleCenter;
-            RectTransform lrt = txt.GetComponent<RectTransform>();
-            lrt.anchorMin = Vector2.zero; lrt.anchorMax = Vector2.one;
-            lrt.sizeDelta = Vector2.zero;
-        }
     }
 
     float BuildTabs(float y, Font f)

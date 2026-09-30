@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
+using Unity.Netcode;
 
 /// <summary>
 /// Управление камерой — два режима, переключение по F1:
@@ -19,6 +20,7 @@ using UnityEngine.UI;
 [RequireComponent(typeof(Camera))]
 public class CameraMovement : MonoBehaviour
 {
+    public bool IsFreeMode => _freeMode;
     [Header("Normal режим")]
     public float moveSpeed = 10f;
     public float scrollSpeed = 2f;
@@ -34,12 +36,19 @@ public class CameraMovement : MonoBehaviour
     private float _freeYaw;
     private float _freePitch;
     private bool _wasRmbDown;
+    private bool _panning;
+    private bool _suppressRightLook;
+    private Vector3 _panAnchor;
+    private Quaternion _normalRotation;
 
     private Camera _cam;
 
     private void Awake()
     {
         _cam = GetComponent<Camera>();
+        _cam.clearFlags = CameraClearFlags.SolidColor;
+        _cam.backgroundColor = new Color(0.035f, 0.05f, 0.07f, 1f);
+        _normalRotation = transform.rotation;
         // Запоминаем текущий поворот для free-режима
         Vector3 euler = transform.rotation.eulerAngles;
         _freeYaw = euler.y;
@@ -49,28 +58,36 @@ public class CameraMovement : MonoBehaviour
     private void Update()
     {
         if (!GameplayInputGate.AllowsWorldPointerInput)
+        {
+            _panning = false;
             return;
+        }
 
         Keyboard k = Keyboard.current;
         Mouse m = Mouse.current;
 
         // ── Toggle режима (F1) ──
         if (k != null && k.f1Key.wasPressedThisFrame)
-        {
-            _freeMode = !_freeMode;
-            // При входе в free — синхронизируем углы с текущим поворотом
-            if (_freeMode)
-            {
-                Vector3 e = transform.rotation.eulerAngles;
-                _freeYaw = e.y;
-                _freePitch = e.x;
-            }
-        }
+            ToggleMode();
 
         if (_freeMode)
             HandleFreeMode(k, m);
         else
             HandleNormalMode(k, m);
+    }
+
+    public void ToggleMode()
+    {
+        _freeMode = !_freeMode;
+        if (_freeMode)
+        {
+            _normalRotation = transform.rotation;
+            Vector3 e = transform.rotation.eulerAngles;
+            _freeYaw = e.y;
+            _freePitch = e.x;
+        }
+        else
+            transform.rotation = _normalRotation;
     }
 
     // ══════════════════════════════════════════════
@@ -79,8 +96,38 @@ public class CameraMovement : MonoBehaviour
 
     void HandleNormalMode(Keyboard k, Mouse m)
     {
+        HandleMousePan(m);
         HandleNormalHorizontal(k);
         HandleNormalScroll(m);
+    }
+
+    void HandleMousePan(Mouse m)
+    {
+        // GM moves the map with the middle button; players pan their own view.
+        if (m == null || NetworkManager.Singleton == null ||
+            !NetworkManager.Singleton.IsConnectedClient || NetworkManager.Singleton.IsHost)
+            return;
+        if (m.middleButton.wasPressedThisFrame)
+        {
+            _panning = TryGetMapPlanePoint(m, out _panAnchor);
+        }
+        if (m.middleButton.wasReleasedThisFrame)
+            _panning = false;
+        if (_panning && m.middleButton.isPressed && TryGetMapPlanePoint(m, out Vector3 current))
+            transform.position += _panAnchor - current;
+    }
+
+    bool TryGetMapPlanePoint(Mouse m, out Vector3 point)
+    {
+        var ray = _cam.ScreenPointToRay(m.position.ReadValue());
+        var plane = new Plane(Vector3.up, Vector3.zero);
+        if (plane.Raycast(ray, out float distance))
+        {
+            point = ray.GetPoint(distance);
+            return true;
+        }
+        point = Vector3.zero;
+        return false;
     }
 
     void HandleNormalHorizontal(Keyboard k)
@@ -126,7 +173,11 @@ public class CameraMovement : MonoBehaviour
         if (m == null) return;
 
         bool rmb = m.rightButton.isPressed;
-        if (rmb)
+        if (GameplayInputGate.LastToolExitFrame == Time.frameCount)
+            _suppressRightLook = true;
+        if (!rmb)
+            _suppressRightLook = false;
+        if (rmb && !_suppressRightLook)
         {
             Vector2 delta = m.delta.ReadValue();
             _freeYaw   += delta.x * freeLookSensitivity * 0.1f;

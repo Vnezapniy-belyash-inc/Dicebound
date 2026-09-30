@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -10,16 +11,26 @@ public static class PlayerColors
     private static readonly Dictionary<ulong, string> _clientNicks = new();
     private static readonly Dictionary<ulong, Color> _clientColors = new();
 
+    public static event Action Changed;
+
     public static void SetPlayer(ulong clientId, string nickname, Color color)
     {
+        if (_clientNicks.TryGetValue(clientId, out string oldNickname)
+            && oldNickname == nickname
+            && _clientColors.TryGetValue(clientId, out Color oldColor)
+            && oldColor == color)
+            return;
+
         _clientNicks[clientId] = nickname;
         _clientColors[clientId] = color;
+        Changed?.Invoke();
     }
 
     public static void RemoveClient(ulong clientId)
     {
-        _clientNicks.Remove(clientId);
-        _clientColors.Remove(clientId);
+        bool changed = _clientNicks.Remove(clientId);
+        changed |= _clientColors.Remove(clientId);
+        if (changed) Changed?.Invoke();
     }
 
     public static Color GetColor(ulong clientId)
@@ -38,5 +49,6 @@ public static class PlayerColors
     {
         _clientNicks.Clear();
         _clientColors.Clear();
+        Changed?.Invoke();
     }
 }

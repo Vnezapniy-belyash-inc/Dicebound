@@ -1,9 +1,10 @@
 using System;
 using Unity.Netcode;
+using Unity.Netcode.Components;
 using UnityEngine;
 
 /// <summary>
-/// Сетевой кубик. Права: IsSpawner — удаление; IsOwner — бросок и физика (любой игрок).
+/// Сетевой кубик. Создатель отвечает за удаление, сервер — за перетаскивание и физику.
 /// Тип: InitClientRpc + NetworkVariable для late-join.
 /// </summary>
 [RequireComponent(typeof(Rigidbody))]
@@ -57,6 +58,11 @@ public class NetworkDice : NetworkBehaviour, IDice
     private Camera _cam;
     private float _settleTimer;
     private bool _didInit;
+    public bool IsReady => IsSpawned && _didInit;
+    private ulong _dragController = ulong.MaxValue;
+    private int _dragGesture;
+    private float _dragLeaseUntil;
+    private ulong _lastThrower;
 
     public void StartRoll()
     {
@@ -141,21 +147,10 @@ public class NetworkDice : NetworkBehaviour, IDice
         InitializeMesh((DieType)typeInt);
     }
 
-    public override void OnGainedOwnership()
-    {
-        UpdatePhysicsAuthority();
-    }
-
-    public override void OnLostOwnership()
-    {
-        UpdatePhysicsAuthority();
-        IsRolling = false;
-    }
-
     private void UpdatePhysicsAuthority()
     {
         if (_rb == null) _rb = GetComponent<Rigidbody>();
-        if (_rb != null) _rb.isKinematic = !IsOwner;
+        if (_rb != null) _rb.isKinematic = !IsServer;
     }
 
     private void ApplyDiceColor(Vector3 rgb)
@@ -271,22 +266,124 @@ public class NetworkDice : NetworkBehaviour, IDice
         }
     }
 
-    public void RequestOwnership()
+    public void BeginDrag(int gesture)
     {
-        if (IsOwner) return;
-        RequestOwnershipServerRpc();
+        if (!IsSpawned) return;
+        if (IsServer) BeginDragOnServer(NetworkManager.LocalClientId, gesture);
+        else BeginDragServerRpc(gesture);
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    private void RequestOwnershipServerRpc(RpcParams rpcParams = default)
+    private void BeginDragServerRpc(int gesture, RpcParams rpcParams = default) =>
+        BeginDragOnServer(rpcParams.Receive.SenderClientId, gesture);
+
+    private void BeginDragOnServer(ulong clientId, int gesture)
     {
-        GetComponent<NetworkObject>().ChangeOwnership(rpcParams.Receive.SenderClientId);
+        if (_dragController != ulong.MaxValue && _dragController != clientId
+            && Time.unscaledTime < _dragLeaseUntil) return;
+        _dragController = clientId;
+        _dragGesture = gesture;
+        _dragLeaseUntil = Time.unscaledTime + 2f;
+        IsRolling = false;
+        _rb.linearVelocity = Vector3.zero;
+        _rb.angularVelocity = Vector3.zero;
+        _rb.isKinematic = true;
     }
+
+    public void MoveDrag(int gesture, Vector3 position)
+    {
+        if (!IsSpawned) return;
+        if (IsServer) MoveDragOnServer(NetworkManager.LocalClientId, gesture, position);
+        else MoveDragServerRpc(gesture, position);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone,
+        Delivery = RpcDelivery.Unreliable)]
+    private void MoveDragServerRpc(int gesture, Vector3 position, RpcParams rpcParams = default) =>
+        MoveDragOnServer(rpcParams.Receive.SenderClientId, gesture, position);
+
+    private void MoveDragOnServer(ulong clientId, int gesture, Vector3 position)
+    {
+        if (!CanControlDrag(clientId, gesture) || !ValidDragPosition(position)) return;
+        _dragLeaseUntil = Time.unscaledTime + 2f;
+        transform.position = position;
+    }
+
+    public void ThrowDrag(int gesture, Vector3 position, Vector3 velocity, Vector3 spin)
+    {
+        if (!IsSpawned) return;
+        if (IsServer) ThrowDragOnServer(NetworkManager.LocalClientId, gesture, position, velocity, spin);
+        else ThrowDragServerRpc(gesture, position, velocity, spin);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void ThrowDragServerRpc(int gesture, Vector3 position, Vector3 velocity,
+        Vector3 spin, RpcParams rpcParams = default) =>
+        ThrowDragOnServer(rpcParams.Receive.SenderClientId, gesture, position, velocity, spin);
+
+    private void ThrowDragOnServer(ulong clientId, int gesture, Vector3 position,
+        Vector3 velocity, Vector3 spin)
+    {
+        if (!CanControlDrag(clientId, gesture) || !ValidDragPosition(position)
+            || !ValidDragPosition(velocity) || !ValidDragPosition(spin)) return;
+        _dragController = ulong.MaxValue;
+        _lastThrower = clientId;
+        transform.position = position;
+        StartRoll();
+        _rb.isKinematic = false;
+        _rb.linearVelocity = Vector3.ClampMagnitude(velocity, 30f);
+        _rb.angularVelocity = Vector3.ClampMagnitude(spin, 20f);
+    }
+
+    public void CancelDrag(int gesture, Vector3 position)
+    {
+        if (!IsSpawned) return;
+        if (IsServer) CancelDragOnServer(NetworkManager.LocalClientId, gesture, position);
+        else CancelDragServerRpc(gesture, position);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void CancelDragServerRpc(int gesture, Vector3 position, RpcParams rpcParams = default) =>
+        CancelDragOnServer(rpcParams.Receive.SenderClientId, gesture, position);
+
+    private void CancelDragOnServer(ulong clientId, int gesture, Vector3 position)
+    {
+        if (!CanControlDrag(clientId, gesture) || !ValidDragPosition(position)) return;
+        _dragController = ulong.MaxValue;
+        transform.position = position;
+        IsRolling = false;
+        _rb.isKinematic = false;
+    }
+
+    private bool CanControlDrag(ulong clientId, int gesture) =>
+        IsServer && _dragController == clientId && _dragGesture == gesture
+        && Time.unscaledTime <= _dragLeaseUntil;
+
+    private static bool ValidDragPosition(Vector3 position) =>
+        !float.IsNaN(position.x) && !float.IsNaN(position.y) && !float.IsNaN(position.z)
+        && Mathf.Abs(position.x) < 10000f && Mathf.Abs(position.y) < 10000f
+        && Mathf.Abs(position.z) < 10000f;
 
     public void Roll()
     {
-        if (!IsOwner || !_didInit) return;
+        if (!IsSpawned) return;
+        if (!IsServer) { RollServerRpc(); return; }
+        RollOnServer(NetworkManager.LocalClientId);
+    }
 
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void RollServerRpc(RpcParams rpcParams = default) =>
+        RollOnServer(rpcParams.Receive.SenderClientId);
+
+    private void RollOnServer(ulong clientId)
+    {
+        if (!_didInit) return;
+        if (_dragController != ulong.MaxValue && _dragController != clientId
+            && Time.unscaledTime < _dragLeaseUntil) return;
+        _dragController = ulong.MaxValue;
+        _lastThrower = clientId;
+
+        _rb.isKinematic = false;
         _rb.linearVelocity = Vector3.zero;
         _rb.angularVelocity = Vector3.zero;
         IsRolling = true;
@@ -306,7 +403,14 @@ public class NetworkDice : NetworkBehaviour, IDice
     {
         DiceLabelSetup.UpdateBackFaceVisibility(_faceRenderers, _faces, transform, _cam);
 
-        if (!IsOwner || !_didInit || !IsRolling || HasResult) return;
+        if (IsServer && _dragController != ulong.MaxValue && Time.unscaledTime > _dragLeaseUntil)
+        {
+            _dragController = ulong.MaxValue;
+            _rb.isKinematic = false;
+            IsRolling = false;
+        }
+
+        if (!IsServer || !_didInit || !IsRolling || HasResult) return;
 
         bool isSettled = _rb.linearVelocity.magnitude < stopThreshold
                       && _rb.angularVelocity.magnitude < stopThreshold;
@@ -355,14 +459,9 @@ public class NetworkDice : NetworkBehaviour, IDice
         HasResult = true;
         IsRolling = false;
 
-        ReportResultServerRpc(Result, LobbyUI.LocalNickname);
+        string nickname = PlayerColors.GetNickname(_lastThrower);
+        BroadcastResultClientRpc(DieType.ToString(), Result, _lastThrower, nickname);
         OnResultReady?.Invoke(this);
-    }
-
-    [Rpc(SendTo.Server)]
-    private void ReportResultServerRpc(int result, string ownerNickname)
-    {
-        BroadcastResultClientRpc(DieType.ToString(), result, OwnerClientId, ownerNickname);
     }
 
     [Rpc(SendTo.Everyone)]

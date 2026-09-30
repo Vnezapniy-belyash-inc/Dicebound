@@ -11,6 +11,8 @@ public class NetworkPlayerManager : MonoBehaviour
 
     private PlayerRegistry _registry;
     private bool _subscribed;
+    private bool _handledLocalConnection;
+    private ulong _handledLocalClientId;
 
     private void Awake()
     {
@@ -37,6 +39,19 @@ public class NetworkPlayerManager : MonoBehaviour
         TrySubscribe();
     }
 
+    private void Update()
+    {
+        TrySubscribe();
+        var nm = NetworkManager.Singleton;
+        if (nm == null || !nm.IsConnectedClient)
+        {
+            _handledLocalConnection = false;
+            return;
+        }
+        if (!_handledLocalConnection || _handledLocalClientId != nm.LocalClientId)
+            OnClientConnected(nm.LocalClientId);
+    }
+
     private void TrySubscribe()
     {
         if (_subscribed || NetworkManager.Singleton == null) return;
@@ -48,11 +63,20 @@ public class NetworkPlayerManager : MonoBehaviour
 
     private void OnClientConnected(ulong clientId)
     {
+        var nm = NetworkManager.Singleton;
+        if (nm != null && clientId == nm.LocalClientId)
+        {
+            if (_handledLocalConnection && _handledLocalClientId == clientId) return;
+            _handledLocalConnection = true;
+            _handledLocalClientId = clientId;
+        }
         _registry?.OnLocalClientConnected(clientId);
     }
 
     private void OnClientDisconnected(ulong clientId)
     {
+        if (_handledLocalConnection && clientId == _handledLocalClientId)
+            _handledLocalConnection = false;
         _registry?.OnClientDisconnected(clientId);
         LateJoinSync.Instance?.OnClientLeft(clientId);
     }

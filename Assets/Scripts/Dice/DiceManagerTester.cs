@@ -11,6 +11,8 @@ public class DiceManagerTester : MonoBehaviour
 {
     void Update()
     {
+        // Debug keys must never run inside a real VTT session.
+        if (GameNetworkManager.Instance != null && GameNetworkManager.Instance.IsConnected) return;
         if (DiceManager.Instance == null) return;
         Keyboard k = Keyboard.current;
         if (k == null) return;

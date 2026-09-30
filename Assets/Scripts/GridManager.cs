@@ -36,6 +36,7 @@ public class GridManager : MonoBehaviour
     private List<GameObject> _hLines = new();
     private List<GameObject> _vLines = new();
     private Bounds _mapBounds;
+    private Quaternion _mapRotation = Quaternion.identity;
     private bool _gridCreated;
 
     // Реестр занятых клеток (для предотвращения наложения токенов)
@@ -48,10 +49,19 @@ public class GridManager : MonoBehaviour
     }
 
     /// <summary>Обновляет границы карты — сетка и невидимые стены следуют за картой.</summary>
-    public void SetBounds(Bounds mapBounds)
+    public void SetBounds(Bounds mapBounds) => SetBounds(mapBounds, Quaternion.identity);
+
+    public void SetBounds(Bounds mapBounds, Quaternion mapRotation)
     {
+        if (_gridCreated && _gridLinesParent != null && Approximately(_mapBounds.center, mapBounds.center)
+            && Approximately(_mapBounds.size, mapBounds.size)
+            && Quaternion.Angle(_mapRotation, mapRotation) < 0.01f)
+            return;
         _mapBounds = mapBounds;
+        _mapRotation = mapRotation;
         if (!_gridCreated) GenerateFullGrid();
+        _gridLinesParent.transform.position = _mapBounds.center + Vector3.up * yOffset;
+        _gridLinesParent.transform.rotation = _mapRotation;
         UpdateVisibleCells();
         UpdateWalls(mapBounds);
     }
@@ -69,7 +79,10 @@ public class GridManager : MonoBehaviour
 
         _gridLinesParent = new GameObject("GridLines");
         _gridLinesParent.transform.SetParent(transform);
-        _gridLinesParent.transform.localPosition = new Vector3(0, yOffset, 0);
+        _gridLinesParent.transform.position = _mapBounds.center + Vector3.up * yOffset;
+        _gridLinesParent.transform.rotation = _mapRotation;
+        _hLines.Clear();
+        _vLines.Clear();
 
         float halfW = gridWidth * cellSize / 2f;
         float halfH = gridHeight * cellSize / 2f;
@@ -139,10 +152,10 @@ public class GridManager : MonoBehaviour
     {
         float halfW = gridWidth * cellSize / 2f;
         float halfH = gridHeight * cellSize / 2f;
-        float mapMinX = _mapBounds.min.x;
-        float mapMaxX = _mapBounds.max.x;
-        float mapMinZ = _mapBounds.min.z;
-        float mapMaxZ = _mapBounds.max.z;
+        float mapMinX = -_mapBounds.size.x * 0.5f;
+        float mapMaxX = _mapBounds.size.x * 0.5f;
+        float mapMinZ = -_mapBounds.size.z * 0.5f;
+        float mapMaxZ = _mapBounds.size.z * 0.5f;
 
         for (int z = 0; z <= gridHeight; z++)
         {
@@ -208,6 +221,7 @@ public class GridManager : MonoBehaviour
         }
 
         _wallsParent.transform.position = center;
+        _wallsParent.transform.rotation = _mapRotation;
 
         if (!Approximately(size, _cachedWallSize))
         {
@@ -290,22 +304,24 @@ public class GridManager : MonoBehaviour
     {
         float halfW = gridWidth * cellSize / 2f;
         float halfH = gridHeight * cellSize / 2f;
-        float x = Mathf.Round(position.x / cellSize - 0.5f) * cellSize + cellSize / 2f;
-        float z = Mathf.Round(position.z / cellSize - 0.5f) * cellSize + cellSize / 2f;
+        Vector3 local = WorldToGridLocal(position);
+        float x = Mathf.Round(local.x / cellSize - 0.5f) * cellSize + cellSize / 2f;
+        float z = Mathf.Round(local.z / cellSize - 0.5f) * cellSize + cellSize / 2f;
         x = Mathf.Clamp(x, -halfW + cellSize / 2f, halfW - cellSize / 2f);
         z = Mathf.Clamp(z, -halfH + cellSize / 2f, halfH - cellSize / 2f);
-        return new Vector3(x, position.y, z);
+        return GridLocalToWorld(new Vector3(x, 0, z), position.y);
     }
 
     public Vector2Int GetGridPosition(Vector3 worldPosition)
     {
         float halfW = gridWidth * cellSize / 2f;
         float halfH = gridHeight * cellSize / 2f;
-        if (worldPosition.x < -halfW || worldPosition.x > halfW ||
-            worldPosition.z < -halfH || worldPosition.z > halfH)
+        Vector3 local = WorldToGridLocal(worldPosition);
+        if (local.x < -halfW || local.x > halfW ||
+            local.z < -halfH || local.z > halfH)
             return new Vector2Int(-1, -1);
-        int col = Mathf.Clamp(Mathf.FloorToInt((worldPosition.x + halfW) / cellSize), 0, gridWidth - 1);
-        int row = Mathf.Clamp(Mathf.FloorToInt((worldPosition.z + halfH) / cellSize), 0, gridHeight - 1);
+        int col = Mathf.Clamp(Mathf.FloorToInt((local.x + halfW) / cellSize), 0, gridWidth - 1);
+        int row = Mathf.Clamp(Mathf.FloorToInt((local.z + halfH) / cellSize), 0, gridHeight - 1);
         return new Vector2Int(col, row);
     }
 
@@ -314,7 +330,51 @@ public class GridManager : MonoBehaviour
         if (col < 0 || col >= gridWidth || row < 0 || row >= gridHeight) return Vector3.zero;
         float halfW = gridWidth * cellSize / 2f;
         float halfH = gridHeight * cellSize / 2f;
-        return new Vector3(-halfW + (col + 0.5f) * cellSize, y, -halfH + (row + 0.5f) * cellSize);
+        return GridLocalToWorld(new Vector3(-halfW + (col + 0.5f) * cellSize, 0,
+            -halfH + (row + 0.5f) * cellSize), y);
+    }
+
+    private Vector3 WorldToGridLocal(Vector3 world) =>
+        Quaternion.Inverse(_mapRotation) * (world - _mapBounds.center);
+
+    public bool IsPointOnMap(Vector3 world)
+    {
+        Vector3 local = WorldToGridLocal(world);
+        return Mathf.Abs(local.x) <= _mapBounds.size.x * 0.5f &&
+            Mathf.Abs(local.z) <= _mapBounds.size.z * 0.5f;
+    }
+
+    private Vector3 GridLocalToWorld(Vector3 local, float worldY)
+    {
+        Vector3 world = _mapBounds.center + _mapRotation * local;
+        world.y = worldY;
+        return world;
+    }
+
+    public void GetCellRange(Vector3 worldMin, Vector3 worldMax, out Vector2Int min, out Vector2Int max)
+    {
+        float minX = float.PositiveInfinity, minZ = float.PositiveInfinity;
+        float maxX = float.NegativeInfinity, maxZ = float.NegativeInfinity;
+        for (int x = 0; x < 2; x++)
+        for (int z = 0; z < 2; z++)
+        {
+            Vector3 local = WorldToGridLocal(new Vector3(x == 0 ? worldMin.x : worldMax.x,
+                0, z == 0 ? worldMin.z : worldMax.z));
+            minX = Mathf.Min(minX, local.x); maxX = Mathf.Max(maxX, local.x);
+            minZ = Mathf.Min(minZ, local.z); maxZ = Mathf.Max(maxZ, local.z);
+        }
+        float halfW = gridWidth * cellSize * 0.5f;
+        float halfH = gridHeight * cellSize * 0.5f;
+        if (maxX < -halfW || minX > halfW || maxZ < -halfH || minZ > halfH)
+        {
+            min = new Vector2Int(0, 0);
+            max = new Vector2Int(-1, -1);
+            return;
+        }
+        min = new Vector2Int(Mathf.Clamp(Mathf.FloorToInt((minX + halfW) / cellSize), 0, gridWidth - 1),
+            Mathf.Clamp(Mathf.FloorToInt((minZ + halfH) / cellSize), 0, gridHeight - 1));
+        max = new Vector2Int(Mathf.Clamp(Mathf.FloorToInt((maxX + halfW) / cellSize), 0, gridWidth - 1),
+            Mathf.Clamp(Mathf.FloorToInt((maxZ + halfH) / cellSize), 0, gridHeight - 1));
     }
 
     public enum SphereSnapKind { CellCenter, Intersection }
@@ -333,9 +393,11 @@ public class GridManager : MonoBehaviour
         Vector2Int cell = GetGridPosition(worldPos);
         Vector3 center = cell.x >= 0 ? GetCellCenter(cell.x, cell.y, y) : worldPos;
 
-        int ix = Mathf.Clamp(Mathf.RoundToInt((worldPos.x + halfW) / cellSize), 0, gridWidth);
-        int iz = Mathf.Clamp(Mathf.RoundToInt((worldPos.z + halfH) / cellSize), 0, gridHeight);
-        Vector3 intersection = new Vector3(-halfW + ix * cellSize, y, -halfH + iz * cellSize);
+        Vector3 local = WorldToGridLocal(worldPos);
+        int ix = Mathf.Clamp(Mathf.RoundToInt((local.x + halfW) / cellSize), 0, gridWidth);
+        int iz = Mathf.Clamp(Mathf.RoundToInt((local.z + halfH) / cellSize), 0, gridHeight);
+        Vector3 intersection = GridLocalToWorld(new Vector3(-halfW + ix * cellSize, 0,
+            -halfH + iz * cellSize), y);
 
         float distCenter = HorizontalDistance(worldPos, center);
         float distIntersection = HorizontalDistance(worldPos, intersection);
@@ -384,8 +446,9 @@ public class GridManager : MonoBehaviour
 
         float halfW = gm.gridWidth * gm.cellSize / 2f;
         float halfH = gm.gridHeight * gm.cellSize / 2f;
-        float relX = (position.x + halfW) / gm.cellSize;
-        float relZ = (position.z + halfH) / gm.cellSize;
+        Vector3 local = gm.WorldToGridLocal(position);
+        float relX = (local.x + halfW) / gm.cellSize;
+        float relZ = (local.z + halfH) / gm.cellSize;
         const float eps = 0.001f;
 
         return Mathf.Abs(relX - Mathf.Round(relX)) < eps
@@ -411,6 +474,8 @@ public class GridManager : MonoBehaviour
     }
 
     public void ReleaseCell(Vector2Int cell) => _occupiedCells.Remove(cell);
+
+    public void ClearOccupiedCells() => _occupiedCells.Clear();
 
     /// <summary>Ищет ближайшую свободную клетку по спирали (радиус до maxRadius).</summary>
     public Vector2Int FindNearestFreeCell(Vector2Int desired, int maxRadius = 3)

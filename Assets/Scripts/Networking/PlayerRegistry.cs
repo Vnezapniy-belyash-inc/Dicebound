@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.Text;
 using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
@@ -84,6 +85,8 @@ public class PlayerRegistry : MonoBehaviour
         if (NetworkManager.Singleton == null) return;
         if (clientId != NetworkManager.Singleton.LocalClientId) return;
 
+        if (NetworkManager.Singleton.IsServer) RegisterServerHandlers();
+
         CellMarker.EnsureRegistered();
         TokenImageSync.EnsureInstance();
         LateJoinSync.EnsureInstance();
@@ -93,21 +96,45 @@ public class PlayerRegistry : MonoBehaviour
 
     private IEnumerator RegisterLocalPlayerWhenReady()
     {
-        for (int i = 0; i < 20; i++)
+        for (int i = 0; i < 80; i++)
         {
             TryRegisterClientHandlers();
-            if (NetworkManager.Singleton?.CustomMessagingManager != null)
+            if (NetworkManager.Singleton != null
+                && NetworkManager.Singleton.IsConnectedClient
+                && NetworkManager.Singleton.CustomMessagingManager != null)
                 break;
             yield return new WaitForSeconds(0.1f);
         }
 
-        if (NetworkManager.Singleton == null) yield break;
+        var nm = NetworkManager.Singleton;
+        if (nm == null || !nm.IsConnectedClient || nm.CustomMessagingManager == null)
+        {
+            Debug.LogWarning("[PlayerRegistry] Registration skipped: connection was not ready");
+            yield break;
+        }
 
         string nickname = NormalizeNickname(LobbyUI.LocalNickname);
-        if (NetworkManager.Singleton.IsServer)
-            RegisterPlayerOnServer(NetworkManager.Singleton.LocalClientId, nickname);
-        else
+        if (nm.IsServer)
+        {
+            RegisterPlayerOnServer(nm.LocalClientId, nickname);
+            yield break;
+        }
+
+        const int maxAttempts = 3;
+        for (int attempt = 1; attempt <= maxAttempts && nm.IsConnectedClient; attempt++)
+        {
             SendRegisterRequest(nickname);
+            for (int tick = 0; tick < 20; tick++)
+            {
+                if (PlayerColors.GetNickname(nm.LocalClientId) != null)
+                    yield break;
+                yield return new WaitForSeconds(0.1f);
+            }
+            Debug.LogWarning($"[PlayerRegistry] Registration response missing ({attempt}/{maxAttempts})");
+        }
+
+        if (nm.IsConnectedClient && PlayerColors.GetNickname(nm.LocalClientId) == null)
+            Debug.LogError("[PlayerRegistry] Registration failed after 3 attempts");
     }
 
     public void OnClientDisconnected(ulong clientId)
@@ -171,7 +198,7 @@ public class PlayerRegistry : MonoBehaviour
         if (NetworkManager.Singleton?.CustomMessagingManager == null) return;
 
         var cmm = NetworkManager.Singleton.CustomMessagingManager;
-        if (NetworkManager.Singleton.IsServer)
+        if (_handlersRegistered)
             cmm.UnregisterNamedMessageHandler(MSG_REGISTER);
 
         cmm.UnregisterNamedMessageHandler(MSG_SYNC);
@@ -194,6 +221,13 @@ public class PlayerRegistry : MonoBehaviour
         string nickname = ResolveActiveNickname(requestedNickname, clientId);
         Color color = GetOrAssignColor(nickname);
 
+        if (_activePlayers.TryGetValue(clientId, out PlayerEntry current)
+            && current.Nickname == nickname && current.Color == color)
+        {
+            SendSyncAll(clientId);
+            return;
+        }
+
         ulong oldClientId = FindDisconnectedClientId(normalized, nickname);
 
         _activePlayers[clientId] = new PlayerEntry
@@ -204,6 +238,7 @@ public class PlayerRegistry : MonoBehaviour
         };
 
         ApplyLocalPlayer(clientId, nickname, color);
+        RefreshPlayerObjects(clientId);
         BroadcastSync(clientId, nickname, color);
         SendSyncAll(clientId);
 
@@ -215,6 +250,25 @@ public class PlayerRegistry : MonoBehaviour
 
         Debug.Log($"[PlayerRegistry] Registered {nickname} ({clientId}) color={color}"
             + (oldClientId != 0 && oldClientId != clientId ? $" [reconnect from {oldClientId}]" : ""));
+    }
+
+    private static void RefreshPlayerObjects(ulong clientId)
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm?.SpawnManager == null) return;
+
+        foreach (var netObj in nm.SpawnManager.SpawnedObjectsList)
+        {
+            if (netObj == null || !netObj.IsSpawned) continue;
+
+            var token = netObj.GetComponent<TokenController>();
+            if (token != null && token.SpawnerClientId == clientId)
+                token.ServerRefreshPlayerColor();
+
+            var dice = netObj.GetComponent<NetworkDice>();
+            if (dice != null && dice.SpawnerClientId == clientId)
+                dice.ServerRefreshPlayerColor();
+        }
     }
 
     private ulong FindDisconnectedClientId(string normalizedRequest, string resolvedNickname)
@@ -239,7 +293,11 @@ public class PlayerRegistry : MonoBehaviour
     private static string NormalizeNickname(string nickname)
     {
         string nick = string.IsNullOrWhiteSpace(nickname) ? "Player" : nickname.Trim();
-        return nick.Length > 48 ? nick.Substring(0, 48) : nick;
+        while (Encoding.UTF8.GetByteCount(nick) > 48)
+            nick = nick.Substring(0, nick.Length - 1);
+        if (nick.Length > 0 && char.IsHighSurrogate(nick[nick.Length - 1]))
+            nick = nick.Substring(0, nick.Length - 1);
+        return nick.Length > 0 ? nick : "Player";
     }
 
     private string ResolveActiveNickname(string requested, ulong clientId)
@@ -317,7 +375,7 @@ public class PlayerRegistry : MonoBehaviour
         var cmm = NetworkManager.Singleton?.CustomMessagingManager;
         if (cmm == null) return;
 
-        using var writer = new FastBufferWriter(256, Allocator.Temp);
+        using var writer = new FastBufferWriter(sizeof(int) + _activePlayers.Count * 96, Allocator.Temp);
         writer.WriteValueSafe(_activePlayers.Count);
 
         foreach (var entry in _activePlayers.Values)

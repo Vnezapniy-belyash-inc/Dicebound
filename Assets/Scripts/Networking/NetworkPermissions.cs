@@ -3,7 +3,7 @@ using UnityEngine;
 
 /// <summary>
 /// Rights checks based on IsHost (session) and IsSpawner (per object).
-/// IsOwner is intentionally not used here — it is for control/physics only.
+/// NetworkObject ownership does not grant movement rights; server handles all drags.
 /// </summary>
 public static class NetworkPermissions
 {

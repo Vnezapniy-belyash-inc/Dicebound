@@ -112,6 +112,8 @@ public class CellMarker : NetworkBehaviour
 
         var gm = Object.FindAnyObjectByType<GridManager>();
         if (gm == null) return;
+        if (cell.y < 0 || cell.x >= gm.Width || cell.y >= gm.Height) return;
+        if (!gm.IsPointOnMap(gm.GetCellCenter(cell.x, cell.y))) return;
 
         if (textureIndex == EraseToolIndex)
         {
@@ -126,13 +128,12 @@ public class CellMarker : NetworkBehaviour
 
         if (textureIndex < 0 || textureIndex >= TextureColors.Length) return;
 
-        foreach (var marker in FindAtCell(cell, gm))
-        {
+        var previous = FindAtCell(cell, gm);
+        foreach (var marker in previous)
             if (!NetworkPermissions.CanRemoveSingleCellMarker(senderId, marker))
                 return;
-
+        foreach (var marker in previous)
             marker.GetComponent<NetworkObject>().Despawn();
-        }
 
         Vector3 pos = gm.GetCellCenter(cell.x, cell.y, 0.015f);
         Spawn(pos, textureIndex, senderId);
@@ -180,11 +181,16 @@ public class CellMarker : NetworkBehaviour
         var go = Object.Instantiate(GetTemplate(), position, Quaternion.identity);
         go.SetActive(true);
         var netObj = go.GetComponent<NetworkObject>();
+        netObj.SpawnWithObservers = false;
         netObj.Spawn();
 
         var marker = go.GetComponent<CellMarker>();
         marker._netSpawnerClientId.Value = spawnerClientId;
         marker._netTexIndex.Value = textureIndex;
+        if (LateJoinSync.Instance != null) LateJoinSync.Instance.QueueWorldObject(netObj);
+        else
+            foreach (ulong clientId in NetworkManager.Singleton.ConnectedClientsIds)
+                if (clientId != NetworkManager.ServerClientId) netObj.NetworkShow(clientId);
     }
 
     private static GameObject CreateTemplate()
@@ -265,21 +271,19 @@ public class CellMarker : NetworkBehaviour
     }
 
     /// <summary>
-    /// Clear effects button: own spawner markers; host without own markers clears all.
+    /// Remove only the local player's marks. GM-wide deletion is a separate action.
     /// </summary>
     public static void ClearAllMyMarkers()
     {
         var nm = NetworkManager.Singleton;
         if (nm == null) return;
 
-        bool isHost = nm.IsHost;
         ulong localClientId = nm.LocalClientId;
-        bool hostHasOwnMarkers = isHost && NetworkPermissions.HostHasSpawnedCellMarkers(localClientId);
 
         var markers = FindObjectsByType<CellMarker>(FindObjectsInactive.Exclude);
         foreach (var m in markers)
         {
-            if (!NetworkPermissions.ShouldDeleteCellMarkerInClearAll(m, localClientId, isHost, hostHasOwnMarkers))
+            if (m == null || !m.IsSpawned || m.SpawnerClientId != localClientId)
                 continue;
 
             if (nm.IsServer)
@@ -287,6 +291,15 @@ public class CellMarker : NetworkBehaviour
             else
                 m.RequestRemove();
         }
+    }
+
+    public static void ClearAllMarkersAsHost()
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm == null || !nm.IsHost || !nm.IsServer) return;
+        foreach (var marker in FindObjectsByType<CellMarker>(FindObjectsInactive.Exclude))
+            if (marker != null && marker.IsSpawned)
+                marker.GetComponent<NetworkObject>().Despawn();
     }
 }
 

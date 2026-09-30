@@ -15,6 +15,8 @@ public class EffectPaintTool : MonoBehaviour
     public bool IsEraseMode => SelectedTextureIndex == CellMarker.EraseToolIndex;
 
     private Camera _cam;
+    private bool _strokeStartedOnMap;
+    private Vector2Int _lastStrokeCell = new(-2, -2);
 
     private void Awake()
     {
@@ -36,7 +38,21 @@ public class EffectPaintTool : MonoBehaviour
     {
         if (!IsActive) return;
         if (!IsInGame()) return;
-        if (!GameplayInputGate.AllowsWorldPointerInput) return;
+        if (GameplayInputGate.AllowsKeyboardHotkeys &&
+            Keyboard.current?.escapeKey.wasPressedThisFrame == true)
+        {
+            Deactivate();
+            return;
+        }
+        if (!GameplayInputGate.AllowsWorldPointerInput)
+        {
+            if (Mouse.current?.leftButton.isPressed != true)
+            {
+                _strokeStartedOnMap = false;
+                _lastStrokeCell = new Vector2Int(-2, -2);
+            }
+            return;
+        }
 
         var mt = MeasurementTool.Instance;
         if (mt != null && mt.IsLocalActive && mt.CurrentMode != MeasurementTool.Mode.Ruler)
@@ -45,6 +61,12 @@ public class EffectPaintTool : MonoBehaviour
         var mouse = Mouse.current;
         if (mouse == null) return;
 
+        if (mouse.leftButton.wasReleasedThisFrame)
+        {
+            _strokeStartedOnMap = false;
+            _lastStrokeCell = new Vector2Int(-2, -2);
+        }
+
         if (mouse.rightButton.wasPressedThisFrame)
         {
             Deactivate();
@@ -52,18 +74,25 @@ public class EffectPaintTool : MonoBehaviour
         }
 
         if (mouse.leftButton.wasPressedThisFrame)
+            _strokeStartedOnMap = true;
+        if (_strokeStartedOnMap && mouse.leftButton.isPressed)
             TryPaintAt(mouse);
     }
 
     public void Activate(int textureIndex)
     {
+        MeasurementTool.Instance?.Deactivate();
         SelectedTextureIndex = textureIndex;
         IsActive = true;
+        _strokeStartedOnMap = false;
+        _lastStrokeCell = new Vector2Int(-2, -2);
     }
 
     public void Deactivate()
     {
+        if (IsActive) GameplayInputGate.MarkToolExit();
         IsActive = false;
+        _strokeStartedOnMap = false;
     }
 
     private static bool IsInGame()
@@ -74,10 +103,33 @@ public class EffectPaintTool : MonoBehaviour
     private void TryPaintAt(Mouse mouse)
     {
         Vector2Int cell = RaycastToCell(mouse);
-        if (cell.x < 0) return;
+        if (cell == _lastStrokeCell) return;
+        _lastStrokeCell = cell;
+        if (cell.x < 0)
+        {
+            DiceUI.Instance?.ShowToolNotice("Выберите клетку внутри карты.");
+            return;
+        }
 
         var nm = NetworkManager.Singleton;
         if (nm == null) return;
+
+        var gm = FindAnyObjectByType<GridManager>();
+        var existing = CellMarker.FindAtCell(cell, gm);
+        if (IsEraseMode && existing.Count == 0)
+        {
+            DiceUI.Instance?.ShowToolNotice("На этой клетке нет отметки для стирания.");
+            return;
+        }
+        if (!nm.IsHost)
+        {
+            foreach (var marker in existing)
+                if (marker.SpawnerClientId != nm.LocalClientId)
+                {
+                    DiceUI.Instance?.ShowToolNotice("Отметку другого игрока может изменить только GM.");
+                    return;
+                }
+        }
 
         if (nm.IsServer)
             CellMarker.ServerApplyCell(cell, SelectedTextureIndex, nm.LocalClientId);
@@ -96,8 +148,8 @@ public class EffectPaintTool : MonoBehaviour
 
         var gm = FindAnyObjectByType<GridManager>();
         if (gm == null) return new Vector2Int(-1, -1);
-
-        return gm.GetGridPosition(ray.GetPoint(dist));
+        Vector3 point = ray.GetPoint(dist);
+        return gm.IsPointOnMap(point) ? gm.GetGridPosition(point) : new Vector2Int(-1, -1);
     }
 
     private void OnDestroy()

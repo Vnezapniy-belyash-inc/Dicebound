@@ -17,25 +17,29 @@ public static class PlayerOwnershipReassigner
         foreach (var netObj in nm.SpawnManager.SpawnedObjectsList)
         {
             if (netObj == null || !netObj.IsSpawned) continue;
-            if (netObj.OwnerClientId != oldClientId) continue;
-
-            bool isPlayerObject = netObj.GetComponent<NetworkDice>() != null
-                               || netObj.GetComponent<TokenController>() != null;
-            if (!isPlayerObject) continue;
+            var dice = netObj.GetComponent<NetworkDice>();
+            var token = netObj.GetComponent<TokenController>();
+            if (dice == null && token == null) continue;
+            bool createdByPlayer = dice != null && dice.SpawnerClientId == oldClientId
+                || token != null && token.SpawnerClientId == oldClientId;
+            bool stillOwnedByPlayer = netObj.OwnerClientId == oldClientId;
+            if (!createdByPlayer && !stillOwnedByPlayer) continue;
 
             try
             {
-                netObj.ChangeOwnership(newClientId);
+                // NGO gives persistent objects back to the server on disconnect.
+                // Restore movement ownership only when no other player owns the object.
+                if (netObj.OwnerClientId == oldClientId
+                    || createdByPlayer && netObj.OwnerClientId == NetworkManager.ServerClientId)
+                    netObj.ChangeOwnership(newClientId);
 
-                var dice = netObj.GetComponent<NetworkDice>();
-                if (dice != null)
+                if (dice != null && dice.SpawnerClientId == oldClientId)
                 {
                     dice.ServerUpdateSpawnerClientId(newClientId);
                     dice.ServerRefreshPlayerColor();
                 }
 
-                var token = netObj.GetComponent<TokenController>();
-                if (token != null)
+                if (token != null && token.SpawnerClientId == oldClientId)
                 {
                     token.ServerUpdateSpawnerClientId(newClientId);
                     token.ServerRefreshPlayerColor();

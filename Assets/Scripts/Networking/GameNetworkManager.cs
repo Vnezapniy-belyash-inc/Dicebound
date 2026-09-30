@@ -19,9 +19,30 @@ public class GameNetworkManager : MonoBehaviour
         _networkManager = GetComponent<NetworkManager>();
     }
 
-    public void StartHost() => _networkManager.StartHost();
-    public void StartClient() => _networkManager.StartClient();
-    public void Shutdown() => _networkManager.Shutdown();
+    public bool ShutdownRequested { get; private set; }
+    public bool LastStartedAsHost { get; private set; }
+
+    public bool StartHost()
+    {
+        ShutdownRequested = false;
+        bool started = _networkManager != null && _networkManager.StartHost();
+        if (started) LastStartedAsHost = true;
+        return started;
+    }
+
+    public bool StartClient()
+    {
+        ShutdownRequested = false;
+        bool started = _networkManager != null && _networkManager.StartClient();
+        if (started) LastStartedAsHost = false;
+        return started;
+    }
+
+    public void Shutdown()
+    {
+        ShutdownRequested = true;
+        _networkManager.Shutdown();
+    }
 
     public bool IsHost => _networkManager.IsHost;
     public bool IsClient => _networkManager.IsClient;
@@ -34,22 +55,16 @@ public class GameNetworkManager : MonoBehaviour
     public async System.Threading.Tasks.Task ShutdownAndReset()
     {
         if (_networkManager == null) return;
+        ShutdownRequested = true;
 
-        if (_networkManager.IsListening)
+        if (_networkManager.IsListening || _networkManager.ShutdownInProgress)
         {
-            var tcs = new System.Threading.Tasks.TaskCompletionSource<bool>();
-            System.Action<ulong> onDisconnect = null;
-            onDisconnect = (id) =>
-            {
-                _networkManager.OnClientDisconnectCallback -= onDisconnect;
-                tcs.TrySetResult(true);
-            };
-
-            _networkManager.OnClientDisconnectCallback += onDisconnect;
-            _networkManager.Shutdown();
-
-            var timeout = System.Threading.Tasks.Task.Delay(3000);
-            await System.Threading.Tasks.Task.WhenAny(tcs.Task, timeout);
+            if (_networkManager.IsListening) _networkManager.Shutdown();
+            for (int tick = 0; tick < 30
+                && (_networkManager.IsListening || _networkManager.ShutdownInProgress); tick++)
+                await System.Threading.Tasks.Task.Delay(100);
+            if (_networkManager.IsListening || _networkManager.ShutdownInProgress)
+                throw new System.TimeoutException("NetworkManager did not finish shutting down.");
         }
 
         ResetTransport();

@@ -9,7 +9,7 @@ using UnityEditor;
 
 /// <summary>
 /// Сетевой токен. Права: IsSpawner — свои; IsHost — любые (картинка, удаление, копирование).
-/// IsOwner — перемещение (любой игрок через RequestOwnership).
+/// Перемещение проходит через сервер; создатель и хост управляют меню.
 /// </summary>
 [RequireComponent(typeof(NetworkObject))]
 public class TokenController : NetworkBehaviour
@@ -25,6 +25,9 @@ public class TokenController : NetworkBehaviour
     private Texture2D _portraitTexture;
     private bool _isDragging;
     private Vector2Int _currentCell = new(-1, -1);
+    private ulong _dragController = ulong.MaxValue;
+    private int _dragGesture;
+    private float _dragLeaseUntil;
 
     private NetworkVariable<Vector3> _netColor = new(Vector3.one,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
@@ -75,6 +78,32 @@ public class TokenController : NetworkBehaviour
 
         TokenImageSync.EnsureInstance();
         TokenImageSync.TryApplyPending(this);
+        StartCoroutine(RegisterCellAfterSpawn());
+    }
+
+    private System.Collections.IEnumerator RegisterCellAfterSpawn()
+    {
+        // NetworkTransform's initial position is available after the spawn frame.
+        yield return null;
+        if (!IsSpawned || _currentCell.x >= 0) yield break;
+        var gm = FindAnyObjectByType<GridManager>();
+        if (gm == null) yield break;
+        Vector2Int cell = gm.GetGridPosition(transform.position);
+        if (gm.TryOccupyCell(cell)) _currentCell = cell;
+    }
+
+    /// <summary>Rebuild local snap occupancy after the map changes its grid bounds.</summary>
+    public static void RebuildCellOccupancy()
+    {
+        var gm = FindAnyObjectByType<GridManager>();
+        if (gm == null) return;
+        gm.ClearOccupiedCells();
+        foreach (var token in FindObjectsByType<TokenController>(FindObjectsInactive.Exclude))
+        {
+            if (token == null || !token.IsSpawned) continue;
+            Vector2Int cell = gm.GetGridPosition(token.transform.position);
+            token._currentCell = gm.TryOccupyCell(cell) ? cell : new Vector2Int(-1, -1);
+        }
     }
 
     /// <summary>Server: update spawner after reconnect ownership transfer.</summary>
@@ -109,25 +138,84 @@ public class TokenController : NetworkBehaviour
             _portraitMaterial.color = new Color(rgb.x, rgb.y, rgb.z, 1f);
     }
 
-    /// <summary>Клиент запрашивает владение чтобы двигать токен.</summary>
-    public void RequestOwnership()
+    public void BeginDrag(int gesture)
     {
-        if (IsOwner) return;
-        RequestOwnershipServerRpc();
+        if (!IsSpawned) return;
+        if (IsServer) BeginDragOnServer(NetworkManager.LocalClientId, gesture);
+        else BeginDragServerRpc(gesture);
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    private void RequestOwnershipServerRpc(RpcParams rpcParams = default)
+    private void BeginDragServerRpc(int gesture, RpcParams rpcParams = default) =>
+        BeginDragOnServer(rpcParams.Receive.SenderClientId, gesture);
+
+    private void BeginDragOnServer(ulong clientId, int gesture)
     {
-        GetComponent<NetworkObject>().ChangeOwnership(rpcParams.Receive.SenderClientId);
+        if (_dragController != ulong.MaxValue && _dragController != clientId
+            && Time.unscaledTime < _dragLeaseUntil) return;
+        _dragController = clientId;
+        _dragGesture = gesture;
+        _dragLeaseUntil = Time.unscaledTime + 2f;
     }
+
+    public void MoveDrag(int gesture, Vector3 position)
+    {
+        if (!IsSpawned) return;
+        if (IsServer) MoveDragOnServer(NetworkManager.LocalClientId, gesture, position);
+        else MoveDragServerRpc(gesture, position);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone,
+        Delivery = RpcDelivery.Unreliable)]
+    private void MoveDragServerRpc(int gesture, Vector3 position, RpcParams rpcParams = default) =>
+        MoveDragOnServer(rpcParams.Receive.SenderClientId, gesture, position);
+
+    private void MoveDragOnServer(ulong clientId, int gesture, Vector3 position)
+    {
+        if (!CanControlDrag(clientId, gesture) || !ValidDragPosition(position)) return;
+        _dragLeaseUntil = Time.unscaledTime + 2f;
+        transform.position = position;
+    }
+
+    public void EndDrag(int gesture, Vector3 position)
+    {
+        if (!IsSpawned) return;
+        if (IsServer) EndDragOnServer(NetworkManager.LocalClientId, gesture, position);
+        else EndDragServerRpc(gesture, position);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void EndDragServerRpc(int gesture, Vector3 position, RpcParams rpcParams = default) =>
+        EndDragOnServer(rpcParams.Receive.SenderClientId, gesture, position);
+
+    private void EndDragOnServer(ulong clientId, int gesture, Vector3 position)
+    {
+        if (!CanControlDrag(clientId, gesture) || !ValidDragPosition(position)) return;
+        transform.position = position;
+        _dragController = ulong.MaxValue;
+        SnapAuthoritative();
+    }
+
+    private bool CanControlDrag(ulong clientId, int gesture) =>
+        IsServer && _dragController == clientId && _dragGesture == gesture
+        && Time.unscaledTime <= _dragLeaseUntil;
+
+    private static bool ValidDragPosition(Vector3 position) =>
+        !float.IsNaN(position.x) && !float.IsNaN(position.y) && !float.IsNaN(position.z)
+        && Mathf.Abs(position.x) < 10000f && Mathf.Abs(position.y) < 10000f
+        && Mathf.Abs(position.z) < 10000f;
 
     /// <summary>Загружает картинку на токен (создатель или хост).</summary>
     public void LoadImage(byte[] jpgData)
     {
         if ((!IsSpawner && !IsHost) || jpgData == null || jpgData.Length == 0) return;
+        if (jpgData.Length > TokenImageSync.MaxPortraitBytes)
+        {
+            DiceUI.Instance?.ShowToolNotice("Изображение токена слишком большое (максимум 2 МБ).");
+            return;
+        }
 
-        ApplyImageLocal(jpgData);
+        if (!ApplyImageLocal(jpgData)) return;
         if (!IsSpawned) return;
 
         TokenImageSync.EnsureInstance();
@@ -135,7 +223,6 @@ public class TokenController : NetworkBehaviour
 
         if (IsServer)
         {
-            TokenImageSync.CachePortrait(netId, jpgData);
             TokenImageSync.BroadcastImage(netId, jpgData);
         }
         else
@@ -143,16 +230,16 @@ public class TokenController : NetworkBehaviour
     }
 
     /// <summary>Клиент получает картинку от создателя.</summary>
-    public void ApplyImageLocal(byte[] pngData)
+    public bool ApplyImageLocal(byte[] pngData)
     {
-        if (pngData == null || pngData.Length == 0) return;
+        if (pngData == null || pngData.Length == 0) return false;
 
         Texture2D tex = new Texture2D(2, 2);
         if (!tex.LoadImage(pngData))
         {
             Destroy(tex);
             Debug.LogError("[Token] Failed to load image");
-            return;
+            return false;
         }
 
         if (_portraitTexture != null)
@@ -165,40 +252,15 @@ public class TokenController : NetworkBehaviour
             _portraitMaterial.color = Color.white;
             Debug.Log($"[Token] Image applied: {tex.width}x{tex.height}");
         }
+        return true;
     }
 
     // ═══ Снап к сетке ═══
 
-    /// <summary>Снап с проверкой занятости (локально сразу + серверная валидация).</summary>
+    /// <summary>Снап при создании токена на сервере.</summary>
     public void SnapToGrid()
     {
-        var gm = FindAnyObjectByType<GridManager>();
-        if (gm == null) return;
-
-        Vector2Int desired = gm.GetGridPosition(transform.position);
-        if (desired.x < 0) return;
-
-        // Полная проверка занятости локально — мгновенный отклик без телепортаций
-        gm.ReleaseCell(_currentCell);
-        Vector2Int target = gm.FindNearestFreeCell(desired, maxRadius: 3);
-        gm.TryOccupyCell(target);
-        _currentCell = target;
-
-        Vector3 snapped = gm.GetCellCenter(target.x, target.y, transform.position.y);
-        transform.position = snapped;
-
-        // Сервер перепроверяет (на случай рассинхрона HashSet)
-        if (IsServer)
-            SnapAuthoritative();
-        else if (IsSpawned)
-            RequestSnapServerRpc(transform.position);
-    }
-
-    [Rpc(SendTo.Server)]
-    private void RequestSnapServerRpc(Vector3 worldPos)
-    {
-        transform.position = worldPos;
-        SnapAuthoritative();
+        if (IsServer) SnapAuthoritative();
     }
 
     private void SnapAuthoritative()
@@ -250,14 +312,13 @@ public class TokenController : NetworkBehaviour
     private void RequestDespawnServerRpc(RpcParams rpcParams = default)
     {
         ulong sender = rpcParams.Receive.SenderClientId;
-        if (sender == _netSpawnerClientId.Value || IsHost)
+        if (NetworkPermissions.CanUploadTokenPortrait(sender, this))
             GetComponent<NetworkObject>().Despawn();
     }
 
     public override void OnNetworkDespawn()
     {
-        if (IsServer)
-            TokenImageSync.RemovePortrait(NetworkObjectId);
+        TokenImageSync.RemovePortrait(NetworkObjectId);
 
         var gm = FindAnyObjectByType<GridManager>();
         if (gm != null && _currentCell.x >= 0)
@@ -313,11 +374,14 @@ public class TokenController : NetworkBehaviour
     private void OnMouseOver()
     {
         if (!IsSpawner && !IsHost) return;
+        if (MeasurementTool.Instance != null && MeasurementTool.Instance.IsLocalActive) return;
+        if (EffectPaintTool.Instance != null && EffectPaintTool.Instance.IsActive) return;
 
         if (!GameplayInputGate.AllowsWorldPointerInput) return;
 
         var mouse = Mouse.current;
-        if (mouse != null && mouse.rightButton.wasPressedThisFrame)
+        if (mouse != null && mouse.rightButton.wasPressedThisFrame &&
+            GameplayInputGate.LastToolExitFrame != Time.frameCount)
         {
             // Закрыть предыдущее меню
             if (_activeMenuToken != null && _activeMenuToken != this)
@@ -326,7 +390,10 @@ public class TokenController : NetworkBehaviour
 
             _showMenu = true;
             Vector2 mousePos = mouse.position.ReadValue();
-            _menuRect = new Rect(mousePos.x, Screen.height - mousePos.y - 108, 160, 108);
+            _menuRect = new Rect(
+                Mathf.Clamp(mousePos.x, 4, Screen.width - 204),
+                Mathf.Clamp(Screen.height - mousePos.y, 4, Screen.height - 160),
+                200, 156);
         }
     }
 
@@ -395,6 +462,12 @@ public class TokenController : NetworkBehaviour
     private void OnGUI()
     {
         if (!GameplayInputGate.AllowsImGuiOverlays) return;
+        if (MeasurementTool.Instance != null && MeasurementTool.Instance.IsLocalActive ||
+            EffectPaintTool.Instance != null && EffectPaintTool.Instance.IsActive)
+        {
+            _showMenu = false;
+            return;
+        }
         if (!_showMenu) return;
 
         bool canLoad = IsSpawner || IsHost;
@@ -406,22 +479,33 @@ public class TokenController : NetworkBehaviour
             return;
         }
 
-        GUI.Box(_menuRect, "");
+        GUI.Box(_menuRect, "", VttUiSkin.ImGuiPanel);
+        var titleStyle = new GUIStyle(GUI.skin.label)
+        {
+            fontSize = 13,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleLeft
+        };
+        titleStyle.normal.textColor = VttUiSkin.Muted;
+        GUI.Label(new Rect(_menuRect.x + 12, _menuRect.y + 8, 175, 25),
+            "ДЕЙСТВИЯ С ТОКЕНОМ", titleStyle);
 
-        float y = _menuRect.y + 4f;
+        float y = _menuRect.y + 38f;
         if (canLoad)
         {
-            if (GUI.Button(new Rect(_menuRect.x + 4, y, 152, 28), "Загрузить изображение"))
+            if (GUI.Button(new Rect(_menuRect.x + 10, y, 180, 30),
+                "Загрузить изображение", VttUiSkin.ImGuiButton))
             {
                 LoadImageDialog();
                 _showMenu = false;
                 return;
             }
 
-            y += 34f;
+            y += 36f;
         }
 
-        if (canCopy && GUI.Button(new Rect(_menuRect.x + 4, y, 152, 28), "Копировать"))
+        if (canCopy && GUI.Button(new Rect(_menuRect.x + 10, y, 180, 30),
+            "Копировать", VttUiSkin.ImGuiButton))
         {
             RequestCopy();
             _showMenu = false;
@@ -429,12 +513,15 @@ public class TokenController : NetworkBehaviour
         }
 
         if (canCopy)
-            y += 34f;
+            y += 36f;
 
-        if (canDelete && GUI.Button(new Rect(_menuRect.x + 4, y, 152, 28), "Удалить токен"))
+        if (canDelete && GUI.Button(new Rect(_menuRect.x + 10, y, 180, 30),
+            "Удалить токен", VttUiSkin.ImGuiDangerButton))
         {
-            RequestDespawn();
             _showMenu = false;
+            DiceUI.Instance?.ConfirmAction("Удалить токен?",
+                "Токен исчезнет у всех участников сессии. Отменить удаление нельзя.",
+                RequestDespawn);
         }
 
         if (Event.current.type == EventType.MouseDown && !_menuRect.Contains(Event.current.mousePosition))

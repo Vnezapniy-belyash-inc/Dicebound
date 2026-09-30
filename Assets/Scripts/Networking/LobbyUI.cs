@@ -1,6 +1,5 @@
 using Unity.Netcode;
 using UnityEngine;
-using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 /// <summary>
@@ -19,8 +18,12 @@ public class LobbyUI : MonoBehaviour
 
     /// <summary>Никнейм текущего игрока (доступен всем после входа в лобби).</summary>
     public static string LocalNickname { get; private set; } = "Player";
+    private static string _pendingReconnectCode;
 
     private bool _isConnecting;
+    private bool _ignoreDisconnect;
+    private bool _hasSessionClientId;
+    private ulong _sessionClientId;
 
     private void Start()
     {
@@ -40,6 +43,14 @@ public class LobbyUI : MonoBehaviour
         statusText.text = "";
 
         InvokeRepeating(nameof(TrySubscribeDisconnect), 0.2f, 0.5f);
+        if (!string.IsNullOrEmpty(_pendingReconnectCode))
+        {
+            string code = _pendingReconnectCode;
+            _pendingReconnectCode = null;
+            joinCodeInput.text = code;
+            SaveNickname();
+            _ = JoinSession(code, true);
+        }
     }
 
     void TrySubscribeDisconnect()
@@ -49,21 +60,42 @@ public class LobbyUI : MonoBehaviour
         CancelInvoke(nameof(TrySubscribeDisconnect));
     }
 
+    private void OnDestroy()
+    {
+        CancelInvoke(nameof(TrySubscribeDisconnect));
+        if (NetworkManager.Singleton != null)
+            NetworkManager.Singleton.OnClientDisconnectCallback -= OnDisconnected;
+    }
+
     async void OnDisconnected(ulong clientId)
     {
-        if (NetworkManager.Singleton != null && clientId != NetworkManager.Singleton.LocalClientId)
+        if (_isConnecting || _ignoreDisconnect) return;
+        if (_hasSessionClientId && clientId != _sessionClientId)
             return;
-
-        if (GameNetworkManager.Instance != null)
-            await GameNetworkManager.Instance.ShutdownAndReset();
-        else if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
-            NetworkManager.Singleton.Shutdown();
-
-        CellMarker.ResetRegistration();
-        PlayerColors.Reset();
-        RelayManager.ClearJoinCode();
-        UnityEngine.SceneManagement.SceneManager.LoadScene(
-            UnityEngine.SceneManagement.SceneManager.GetActiveScene().name);
+        _ignoreDisconnect = true;
+        var manager = GameNetworkManager.Instance;
+        if (manager != null && !manager.LastStartedAsHost && !manager.ShutdownRequested
+            && !string.IsNullOrEmpty(RelayManager.CurrentJoinCode))
+            _pendingReconnectCode = RelayManager.CurrentJoinCode;
+        try
+        {
+            if (manager != null)
+                await manager.ShutdownAndReset();
+            else if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
+                NetworkManager.Singleton.Shutdown();
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogWarning($"[Lobby] Disconnect cleanup failed: {ex.Message}");
+        }
+        finally
+        {
+            CellMarker.ResetRegistration();
+            PlayerColors.Reset();
+            RelayManager.ClearJoinCode();
+            UnityEngine.SceneManagement.SceneManager.LoadScene(
+                UnityEngine.SceneManagement.SceneManager.GetActiveScene().name);
+        }
     }
 
     private async void OnHostClicked()
@@ -73,7 +105,7 @@ public class LobbyUI : MonoBehaviour
 
         _isConnecting = true;
         SetInteractable(false);
-        statusText.text = "Creating lobby...";
+        statusText.text = "Создаём сессию…";
 
         try
         {
@@ -86,17 +118,26 @@ public class LobbyUI : MonoBehaviour
 
             string code = await RelayManager.Instance.CreateRelayAllocation(9);
             CellMarker.EnsureRegistered();
-            GameNetworkManager.Instance.StartHost();
+            if (!GameNetworkManager.Instance.StartHost())
+                throw new System.InvalidOperationException("Не удалось запустить хост.");
+            await WaitForPlayerRegistration();
+            _sessionClientId = NetworkManager.Singleton.LocalClientId;
+            _hasSessionClientId = true;
             lobbyPanel.SetActive(false);
             GUIUtility.systemCopyBuffer = code;
-            statusText.text = $"Host started! Code copied: {code}";
+            statusText.text = $"Сессия создана. Код {code} скопирован.";
             ShowGameUI();
             _isConnecting = false;
             Debug.Log($"[Lobby] Host started. Join code: {code}");
         }
         catch (System.Exception ex)
         {
-            statusText.text = $"Error: {ex.Message}";
+            try { await CleanupFailedConnection(); }
+            catch (System.Exception cleanupError)
+            {
+                Debug.LogWarning($"[Lobby] Failed to clean up host attempt: {cleanupError}");
+            }
+            statusText.text = $"Не удалось создать сессию: {ex.Message}";
             Debug.LogError($"[Lobby] Host failed: {ex}");
             _isConnecting = false;
             SetInteractable(true);
@@ -110,40 +151,73 @@ public class LobbyUI : MonoBehaviour
         string code = joinCodeInput.text.Trim();
         if (string.IsNullOrEmpty(code))
         {
-            statusText.text = "Enter join code!";
+            statusText.text = "Введите код сессии.";
             return;
         }
 
         SaveNickname();
+        await JoinSession(code, false);
+    }
 
+    private async System.Threading.Tasks.Task JoinSession(string code, bool automaticReconnect)
+    {
+        if (_isConnecting) return;
         _isConnecting = true;
         SetInteractable(false);
-        statusText.text = "Joining...";
+        int attempts = automaticReconnect ? 3 : 1;
 
-        try
+        for (int attempt = 1; attempt <= attempts; attempt++)
         {
-            if (GameNetworkManager.Instance != null)
-                await GameNetworkManager.Instance.ShutdownAndReset();
-            else if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
-                NetworkManager.Singleton.Shutdown();
+            statusText.text = automaticReconnect
+                ? $"Восстанавливаем соединение ({attempt}/{attempts})…"
+                : "Подключаемся…";
+            try
+            {
+                if (GameNetworkManager.Instance != null)
+                    await GameNetworkManager.Instance.ShutdownAndReset();
+                else if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
+                    NetworkManager.Singleton.Shutdown();
 
-            await System.Threading.Tasks.Task.Delay(200);
-
-            await RelayManager.Instance.JoinRelayAllocation(code);
-            CellMarker.EnsureRegistered();
-            GameNetworkManager.Instance.StartClient();
-            lobbyPanel.SetActive(false);
-            statusText.text = "Connected!";
-            ShowGameUI();
-            _isConnecting = false;
-            Debug.Log("[Lobby] Client connected.");
-        }
-        catch (System.Exception ex)
-        {
-            statusText.text = $"Error: {ex.Message}";
-            Debug.LogError($"[Lobby] Join failed: {ex}");
-            _isConnecting = false;
-            SetInteractable(true);
+                await System.Threading.Tasks.Task.Delay(200);
+                await RelayManager.Instance.JoinRelayAllocation(code);
+                CellMarker.EnsureRegistered();
+                if (!GameNetworkManager.Instance.StartClient())
+                    throw new System.InvalidOperationException("Не удалось запустить клиент.");
+                for (int tick = 0;
+                    tick < 150 && !GameNetworkManager.Instance.IsConnected; tick++)
+                    await System.Threading.Tasks.Task.Delay(100);
+                if (!GameNetworkManager.Instance.IsConnected)
+                    throw new System.TimeoutException("Сервер не ответил в течение 15 секунд.");
+                await WaitForPlayerRegistration();
+                _sessionClientId = NetworkManager.Singleton.LocalClientId;
+                _hasSessionClientId = true;
+                lobbyPanel.SetActive(false);
+                statusText.text = "Подключено.";
+                ShowGameUI();
+                _isConnecting = false;
+                Debug.Log(automaticReconnect
+                    ? "[Lobby] Client reconnected." : "[Lobby] Client connected.");
+                return;
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogWarning($"[Lobby] Join attempt {attempt}/{attempts} failed: {ex}");
+                try { await CleanupFailedConnection(); }
+                catch (System.Exception cleanupError)
+                {
+                    Debug.LogWarning($"[Lobby] Failed to clean up join attempt: {cleanupError}");
+                }
+                if (attempt == attempts)
+                {
+                    statusText.text = automaticReconnect
+                        ? $"Не удалось восстановить соединение: {ex.Message}"
+                        : $"Не удалось подключиться: {ex.Message}";
+                    _isConnecting = false;
+                    SetInteractable(true);
+                    return;
+                }
+                await System.Threading.Tasks.Task.Delay(1000 * attempt);
+            }
         }
     }
 
@@ -156,6 +230,35 @@ public class LobbyUI : MonoBehaviour
         LocalNickname = nick;
         PlayerPrefs.SetString("nickname", nick);
         PlayerPrefs.Save();
+    }
+
+    private static async System.Threading.Tasks.Task WaitForPlayerRegistration()
+    {
+        for (int attempt = 0; attempt < 80; attempt++)
+        {
+            var nm = NetworkManager.Singleton;
+            if (nm != null && nm.IsConnectedClient
+                && PlayerColors.GetNickname(nm.LocalClientId) != null)
+                return;
+            await System.Threading.Tasks.Task.Delay(100);
+        }
+        throw new System.TimeoutException("Не удалось получить данные игрока от сервера.");
+    }
+
+    private async System.Threading.Tasks.Task CleanupFailedConnection()
+    {
+        _ignoreDisconnect = true;
+        try
+        {
+            if (GameNetworkManager.Instance != null)
+                await GameNetworkManager.Instance.ShutdownAndReset();
+        }
+        finally
+        {
+            PlayerColors.Reset();
+            RelayManager.ClearJoinCode();
+            _ignoreDisconnect = false;
+        }
     }
 
     private void ShowGameUI()
@@ -173,14 +276,6 @@ public class LobbyUI : MonoBehaviour
         joinButton.interactable = interactable;
         joinCodeInput.interactable = interactable;
         nicknameInput.interactable = interactable;
-    }
-
-    private void Update()
-    {
-        if (!GameplayInputGate.AllowsKeyboardHotkeys) return;
-
-        if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
-            lobbyPanel.SetActive(!lobbyPanel.activeSelf);
     }
 
     /// <summary>Принудительно показать меню (при выходе из лобби).</summary>
