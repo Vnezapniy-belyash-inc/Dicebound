@@ -26,6 +26,17 @@ public class DmPanelUI : MonoBehaviour
     private float _nextRefresh;
     private InputField _tokenNameInput;
     private InputField _sceneNameInput;
+    private InputField[] _statBlockInputs;
+    private RectTransform _statBlockList;
+    private string _selectedStatBlockId;
+    private string _statBlockSignature;
+    private Text _statBlockHint;
+    private GameObject _mapCatalogPanel;
+    private InputField _mapAssetNameInput;
+    private RectTransform _mapAssetsContent;
+    private string _mapAssetsSignature;
+    private string _selectedMapAssetId;
+    private Text _mapCatalogNotice;
     private Toggle _createHiddenToggle;
     private Text _tokenNotice;
     private Text _tokenCount;
@@ -96,13 +107,13 @@ public class DmPanelUI : MonoBehaviour
         Button(_panel.transform, "×", 32, 30, 362, -14,
             () => _panel.SetActive(false), VttUiSkin.Button);
 
-        _pages = new GameObject[6];
-        _tabs = new Image[6];
-        string[] titles = { "Карта", "Игроки", "Бой", "Токены", "Сцена", "Туман" };
+        _pages = new GameObject[7];
+        _tabs = new Image[7];
+        string[] titles = { "Карта", "Игроки", "Бой", "Токены", "Сцена", "Туман", "Статы" };
         for (int i = 0; i < _pages.Length; i++)
         {
             int pageIndex = i;
-            var tab = Button(_panel.transform, titles[i], 58, 34, 18 + i * 63, -58,
+            var tab = Button(_panel.transform, titles[i], 54, 34, 8 + i * 56, -58,
                 () => ShowPage(pageIndex), VttUiSkin.Button);
             _tabs[i] = tab.GetComponent<Image>();
             _pages[i] = new GameObject(titles[i] + "Page", typeof(RectTransform));
@@ -116,6 +127,7 @@ public class DmPanelUI : MonoBehaviour
         BuildTokensPage(_pages[3].transform);
         BuildScenePage(_pages[4].transform);
         BuildFogPage(_pages[5].transform);
+        BuildStatBlockPage(_pages[6].transform);
         ShowPage(0);
     }
 
@@ -138,6 +150,174 @@ public class DmPanelUI : MonoBehaviour
         Control("Восстановить автосохранение…", -406, () => SceneFileStore.LoadAutosave());
         _fogStatus = Label(parent, "", 12, VttUiSkin.Muted, TextAnchor.UpperLeft,
             new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 56), new Vector2(0, -449));
+    }
+
+    private void BuildStatBlockPage(Transform parent)
+    {
+        Label(parent, "Статблоки кампании", 16, VttUiSkin.Text, TextAnchor.MiddleLeft,
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 26), new Vector2(0, -2), true);
+        Button(parent, "Новый", 64, 26, 286, -2, ClearStatBlockInputs, VttUiSkin.Button);
+        var viewport = Box(parent, "StatBlockViewport", new Color(0, 0, 0, 0.01f), 0, false);
+        Place(viewport, new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 66), new Vector2(0, -30));
+        viewport.AddComponent<RectMask2D>();
+        var rows = new GameObject("StatBlocks", typeof(RectTransform));
+        rows.transform.SetParent(viewport.transform, false);
+        _statBlockList = rows.GetComponent<RectTransform>();
+        _statBlockList.anchorMin = new Vector2(0, 1);
+        _statBlockList.anchorMax = new Vector2(1, 1);
+        _statBlockList.pivot = new Vector2(0.5f, 1);
+        var scroll = viewport.AddComponent<ScrollRect>();
+        scroll.viewport = viewport.GetComponent<RectTransform>();
+        scroll.content = _statBlockList;
+        scroll.horizontal = false;
+        scroll.vertical = true;
+        scroll.scrollSensitivity = 24;
+
+        _statBlockInputs = new InputField[11];
+        _statBlockInputs[0] = CreateInput(parent, "Название статблока", 0, -104, 350, 30);
+        _statBlockInputs[1] = CreateInput(parent, "Тип существа", 0, -138, 170, 30);
+        _statBlockInputs[2] = CreateInput(parent, "Размер", 180, -138, 80, 30);
+        _statBlockInputs[3] = CreateInput(parent, "Мировоззрение", 268, -138, 82, 30);
+        _statBlockInputs[4] = CreateInput(parent, "КД", 0, -172, 64, 30);
+        _statBlockInputs[5] = CreateInput(parent, "ХП", 72, -172, 64, 30);
+        _statBlockInputs[6] = CreateInput(parent, "Скорость", 144, -172, 206, 30);
+        _statBlockInputs[7] = CreateInput(parent, "СИЛ,ЛОВ,ТЕЛ,ИНТ,МДР,ХАР", 0, -206, 260, 30);
+        _statBlockInputs[8] = CreateInput(parent, "Опасность", 268, -206, 82, 30);
+        _statBlockInputs[9] = CreateInput(parent, "Описание", 0, -240, 350, 86, true);
+        _statBlockInputs[10] = CreateInput(parent, "Действия: название: описание", 0, -332, 350, 64, true);
+        Button(parent, "Сохранить статблок", 220, 30, 0, -402, SaveStatBlock, VttUiSkin.Button);
+        Button(parent, "Удалить выбранный", 122, 30, 228, -402, DeleteSelectedStatBlock,
+            new Color(0.28f, 0.11f, 0.14f));
+        _statBlockHint = Label(parent, "", 12, VttUiSkin.Muted, TextAnchor.UpperLeft,
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 52), new Vector2(0, -438));
+    }
+
+    private InputField CreateInput(Transform parent, string placeholderText, float x, float y,
+        float width, float height, bool multiline = false)
+    {
+        var box = Box(parent, "Input " + placeholderText, VttUiSkin.Button, 6, false);
+        Place(box, new Vector2(0, 1), new Vector2(0, 1), new Vector2(width, height), new Vector2(x, y));
+        var input = box.AddComponent<InputField>();
+        input.targetGraphic = box.GetComponent<Image>();
+        input.lineType = multiline ? InputField.LineType.MultiLineNewline : InputField.LineType.SingleLine;
+        input.characterLimit = multiline ? 4000 : 256;
+        input.textComponent = Label(box.transform, "", 12, VttUiSkin.Text, TextAnchor.MiddleLeft,
+            new Vector2(0, 0.5f), new Vector2(0, 0.5f), new Vector2(width - 14, height - 8), new Vector2(7, 0));
+        input.placeholder = Label(box.transform, placeholderText, 11, VttUiSkin.Muted, TextAnchor.MiddleLeft,
+            new Vector2(0, 0.5f), new Vector2(0, 0.5f), new Vector2(width - 14, height - 8), new Vector2(7, 0));
+        return input;
+    }
+
+    private void RefreshStatBlocks(bool force = false)
+    {
+        if (_statBlockList == null) return;
+        var blocks = SceneFileStore.GetStatBlocks();
+        if (!string.IsNullOrEmpty(_selectedStatBlockId)
+            && !Array.Exists(blocks, item => item.id == _selectedStatBlockId)) ClearStatBlockInputs();
+        var signature = new System.Text.StringBuilder();
+        foreach (var block in blocks) signature.Append(block.id).Append(':').Append(block.name).Append(';');
+        string snapshot = signature.ToString();
+        if (!force && _statBlockSignature == snapshot) return;
+        _statBlockSignature = snapshot;
+        foreach (Transform child in _statBlockList) Destroy(child.gameObject);
+        _statBlockList.sizeDelta = new Vector2(0, Mathf.Max(66, blocks.Length * 32));
+        for (int i = 0; i < blocks.Length; i++)
+        {
+            var block = blocks[i];
+            Button(_statBlockList, block.name, 340, 28, 0, -i * 32,
+                () => SelectStatBlock(block), VttUiSkin.Button);
+        }
+        if (string.IsNullOrEmpty(_selectedStatBlockId)) ClearStatBlockInputs();
+    }
+
+    private void SelectStatBlock(StatBlockDefinition block)
+    {
+        if (block == null) return;
+        _selectedStatBlockId = block.id;
+        _statBlockInputs[0].text = block.name;
+        _statBlockInputs[1].text = block.creatureType;
+        _statBlockInputs[2].text = block.size;
+        _statBlockInputs[3].text = block.alignment;
+        _statBlockInputs[4].text = block.armorClass.ToString(CultureInfo.InvariantCulture);
+        _statBlockInputs[5].text = block.hitPoints.ToString(CultureInfo.InvariantCulture);
+        _statBlockInputs[6].text = block.speed;
+        _statBlockInputs[7].text = string.Format(CultureInfo.InvariantCulture, "{0},{1},{2},{3},{4},{5}",
+            block.strength, block.dexterity, block.constitution, block.intelligence, block.wisdom, block.charisma);
+        _statBlockInputs[8].text = block.challengeRating;
+        _statBlockInputs[9].text = block.description;
+        var actions = new System.Text.StringBuilder();
+        foreach (var action in block.actions)
+        {
+            if (actions.Length > 0) actions.Append('\n');
+            actions.Append(action.name).Append(": ").Append(action.description);
+        }
+        _statBlockInputs[10].text = actions.ToString();
+        _statBlockHint.text = "Выбран: " + block.name;
+    }
+
+    private void ClearStatBlockInputs()
+    {
+        if (_statBlockInputs == null) return;
+        _selectedStatBlockId = null;
+        foreach (var input in _statBlockInputs) input.SetTextWithoutNotify(string.Empty);
+        if (_statBlockHint != null) _statBlockHint.text = "Новая запись: заполните поля и сохраните.";
+    }
+
+    private void SaveStatBlock()
+    {
+        try
+        {
+            string abilityText = string.IsNullOrWhiteSpace(_statBlockInputs[7].text)
+                ? "10,10,10,10,10,10" : _statBlockInputs[7].text;
+            string[] abilities = abilityText.Split(',');
+            if (abilities.Length != 6) throw new FormatException("Укажите шесть характеристик через запятую.");
+            var stats = new int[6];
+            for (int i = 0; i < stats.Length; i++)
+                if (!int.TryParse(abilities[i].Trim(), out stats[i])) throw new FormatException("Проверьте шесть характеристик.");
+            var actions = new List<StatBlockAction>();
+            foreach (string line in _statBlockInputs[10].text.Split('\n'))
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                int separator = line.IndexOf(':');
+                if (separator <= 0) throw new FormatException("Действия записываются по одному на строку: Название: описание.");
+                actions.Add(new StatBlockAction { name = line.Substring(0, separator).Trim(), description = line.Substring(separator + 1).Trim() });
+            }
+            var block = new StatBlockDefinition
+            {
+                id = _selectedStatBlockId, name = _statBlockInputs[0].text,
+                creatureType = _statBlockInputs[1].text,
+                size = string.IsNullOrWhiteSpace(_statBlockInputs[2].text) ? "Средний" : _statBlockInputs[2].text,
+                alignment = _statBlockInputs[3].text,
+                armorClass = int.Parse(_statBlockInputs[4].text),
+                hitPoints = int.Parse(_statBlockInputs[5].text), speed = _statBlockInputs[6].text,
+                strength = stats[0], dexterity = stats[1], constitution = stats[2],
+                intelligence = stats[3], wisdom = stats[4], charisma = stats[5],
+                challengeRating = _statBlockInputs[8].text, description = _statBlockInputs[9].text,
+                actions = actions.ToArray()
+            };
+            SceneFileStore.UpsertStatBlock(block);
+            _selectedStatBlockId = block.id;
+            _statBlockHint.text = "Сохранено. Не забудьте сохранить кампанию, чтобы записать каталог в файл.";
+            RefreshStatBlocks(true);
+        }
+        catch (Exception ex) { _statBlockHint.text = ex.Message; }
+    }
+
+    private void DeleteSelectedStatBlock()
+    {
+        if (string.IsNullOrEmpty(_selectedStatBlockId)) return;
+        string id = _selectedStatBlockId;
+        DiceUI.Instance?.ConfirmAction("Удалить статблок?", "Если он назначен токену, сначала снимите назначение.", () =>
+        {
+            try
+            {
+                SceneFileStore.DeleteStatBlock(id);
+                ClearStatBlockInputs();
+                _statBlockHint.text = "Статблок удалён из сессии.";
+                RefreshStatBlocks(true);
+            }
+            catch (Exception ex) { _statBlockHint.text = ex.Message; }
+        });
     }
 
     public void ShowSceneEditor()
@@ -177,9 +357,10 @@ public class DmPanelUI : MonoBehaviour
         Button(parent, "Загрузить JSON", 170, 36, 180, -335, SceneFileStore.LoadDialog, VttUiSkin.Button);
         Button(parent, "Сохранить сессию", 170, 34, 0, -376, SceneFileStore.SaveCampaignDialog, VttUiSkin.Button);
         Button(parent, "Загрузить сессию", 170, 34, 180, -376, SceneFileStore.LoadCampaignDialog, VttUiSkin.Button);
-        Button(parent, "←", 48, 32, 0, -416, () => SceneFileStore.CycleScene(-1), VttUiSkin.Button);
-        Button(parent, "Новая сцена-копия", 244, 32, 53, -416, SceneFileStore.CreateSceneCopy, VttUiSkin.Button);
-        Button(parent, "→", 48, 32, 305, -416, () => SceneFileStore.CycleScene(1), VttUiSkin.Button);
+        Button(parent, "←", 40, 32, 0, -416, () => SceneFileStore.CycleScene(-1), VttUiSkin.Button);
+        Button(parent, "Копировать", 126, 32, 44, -416, SceneFileStore.CreateSceneCopy, VttUiSkin.Button);
+        Button(parent, "Пустая", 126, 32, 176, -416, SceneFileStore.CreateEmptyScene, VttUiSkin.Button);
+        Button(parent, "→", 40, 32, 308, -416, () => SceneFileStore.CycleScene(1), VttUiSkin.Button);
         var sceneNameBox = Box(parent, "SceneName", VttUiSkin.Button, 7);
         Place(sceneNameBox, new Vector2(0, 1), new Vector2(0, 1), new Vector2(150, 30), new Vector2(0, -452));
         var sceneNameText = Label(sceneNameBox.transform, "", 13, VttUiSkin.Text, TextAnchor.MiddleLeft,
@@ -444,6 +625,140 @@ public class DmPanelUI : MonoBehaviour
             () => DiceUI.Instance?.ConfirmAction("Очистить все отметки?",
                 "Будут удалены отметки всех игроков на карте. Отменить удаление нельзя.",
                 CellMarker.ClearAllMarkersAsHost), new Color(0.28f, 0.11f, 0.14f));
+        Button(parent, "Каталог карт сессии…", 350, 34, 0, -494, () =>
+        {
+            _mapCatalogPanel.SetActive(true);
+            RefreshMapCatalog(true);
+        }, VttUiSkin.Button);
+        BuildMapCatalogOverlay(parent);
+    }
+
+    private void BuildMapCatalogOverlay(Transform parent)
+    {
+        _mapCatalogPanel = Box(parent, "MapCatalog", VttUiSkin.Panel, 10);
+        Place(_mapCatalogPanel, new Vector2(0, 1), new Vector2(0, 1), new Vector2(358, 490), new Vector2(0, -6));
+        Label(_mapCatalogPanel.transform, "КАТАЛОГ КАРТ", 15, VttUiSkin.Text, TextAnchor.MiddleLeft,
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(280, 28), new Vector2(12, -4), true);
+        Button(_mapCatalogPanel.transform, "×", 30, 28, 320, -4,
+            () => _mapCatalogPanel.SetActive(false), VttUiSkin.Button);
+        var nameBox = Box(_mapCatalogPanel.transform, "MapAssetName", VttUiSkin.Button, 6, false);
+        Place(nameBox, new Vector2(0, 1), new Vector2(0, 1), new Vector2(334, 32), new Vector2(12, -38));
+        _mapAssetNameInput = nameBox.AddComponent<InputField>();
+        _mapAssetNameInput.textComponent = Label(nameBox.transform, "", 13, VttUiSkin.Text,
+            TextAnchor.MiddleLeft, new Vector2(0, 0.5f), new Vector2(0, 0.5f), new Vector2(316, 28), new Vector2(8, 0));
+        _mapAssetNameInput.placeholder = Label(nameBox.transform, "Название новой карты", 12, VttUiSkin.Muted,
+            TextAnchor.MiddleLeft, new Vector2(0, 0.5f), new Vector2(0, 0.5f), new Vector2(316, 28), new Vector2(8, 0));
+        _mapAssetNameInput.characterLimit = 128;
+        _mapAssetNameInput.lineType = InputField.LineType.SingleLine;
+        _mapAssetNameInput.targetGraphic = nameBox.GetComponent<Image>();
+        Button(_mapCatalogPanel.transform, "Импортировать файл", 162, 32, 12, -76,
+            ImportMapAsset, new Color(0.10f, 0.30f, 0.48f));
+        Button(_mapCatalogPanel.transform, "Добавить текущую", 162, 32, 184, -76,
+            AddCurrentMapAsset, VttUiSkin.Button);
+        var viewport = Box(_mapCatalogPanel.transform, "MapAssetsViewport", new Color(0, 0, 0, 0.01f), 0, false);
+        Place(viewport, new Vector2(0, 1), new Vector2(0, 1), new Vector2(334, 264), new Vector2(12, -116));
+        viewport.AddComponent<RectMask2D>();
+        var rows = new GameObject("MapAssets", typeof(RectTransform));
+        rows.transform.SetParent(viewport.transform, false);
+        _mapAssetsContent = rows.GetComponent<RectTransform>();
+        _mapAssetsContent.anchorMin = new Vector2(0, 1);
+        _mapAssetsContent.anchorMax = new Vector2(1, 1);
+        _mapAssetsContent.pivot = new Vector2(0.5f, 1);
+        var scroll = viewport.AddComponent<ScrollRect>();
+        scroll.viewport = viewport.GetComponent<RectTransform>();
+        scroll.content = _mapAssetsContent;
+        scroll.horizontal = false;
+        scroll.vertical = true;
+        scroll.scrollSensitivity = 28;
+        Button(_mapCatalogPanel.transform, "Применить к активной сцене", 220, 32, 12, -388,
+            ApplySelectedMapAsset, VttUiSkin.Button);
+        Button(_mapCatalogPanel.transform, "Удалить", 104, 32, 242, -388,
+            DeleteSelectedMapAsset, new Color(0.28f, 0.11f, 0.14f));
+        _mapCatalogNotice = Label(_mapCatalogPanel.transform, "", 12, VttUiSkin.Muted,
+            TextAnchor.UpperLeft, new Vector2(0, 1), new Vector2(0, 1), new Vector2(334, 45), new Vector2(12, -428));
+        _mapCatalogPanel.SetActive(false);
+    }
+
+    public void RefreshMapCatalog(bool force = false)
+    {
+        if (_mapAssetsContent == null) return;
+        var maps = SceneFileStore.GetMapAssets();
+        if (!string.IsNullOrEmpty(_selectedMapAssetId)
+            && !Array.Exists(maps, item => item.id == _selectedMapAssetId)) _selectedMapAssetId = null;
+        var signature = new System.Text.StringBuilder();
+        foreach (var map in maps) signature.Append(map.id).Append(':').Append(map.name).Append(';');
+        string snapshot = signature.ToString();
+        if (!force && snapshot == _mapAssetsSignature) return;
+        _mapAssetsSignature = snapshot;
+        foreach (Transform child in _mapAssetsContent) Destroy(child.gameObject);
+        _mapAssetsContent.sizeDelta = new Vector2(0, Mathf.Max(36, maps.Length * 38));
+        for (int i = 0; i < maps.Length; i++)
+        {
+            var map = maps[i];
+            Button(_mapAssetsContent, map.name, 322, 34, 0, -i * 38,
+                () =>
+                {
+                    _selectedMapAssetId = map.id;
+                    _mapCatalogNotice.text = "Выбрана: " + map.name;
+                }, map.id == _selectedMapAssetId ? new Color(0.11f, 0.29f, 0.48f) : VttUiSkin.Button);
+        }
+        if (maps.Length == 0 && _mapCatalogNotice != null)
+            _mapCatalogNotice.text = "Каталог пуст. Импортируйте файл или добавьте текущую карту.";
+    }
+
+    private void ImportMapAsset()
+    {
+        if (string.IsNullOrWhiteSpace(_mapAssetNameInput.text))
+        {
+            _mapCatalogNotice.text = "Сначала введите название карты.";
+            return;
+        }
+        MapController.Instance?.LoadImageToLibrary(_mapAssetNameInput.text);
+    }
+
+    private void AddCurrentMapAsset()
+    {
+        try
+        {
+            SceneFileStore.AddCurrentMapAsset(_mapAssetNameInput.text);
+            _mapCatalogNotice.text = "Текущая карта добавлена. Сохраните сессию, чтобы записать каталог.";
+            _mapAssetNameInput.text = string.Empty;
+            _selectedMapAssetId = null;
+            RefreshMapCatalog(true);
+        }
+        catch (Exception ex) { _mapCatalogNotice.text = ex.Message; }
+    }
+
+    private void ApplySelectedMapAsset()
+    {
+        if (string.IsNullOrEmpty(_selectedMapAssetId))
+        {
+            _mapCatalogNotice.text = "Выберите карту в списке.";
+            return;
+        }
+        try
+        {
+            SceneFileStore.SelectMapAsset(_selectedMapAssetId);
+            _mapCatalogNotice.text = "Карта применена к сцене. Сохраните сессию, чтобы закрепить изменение.";
+        }
+        catch (Exception ex) { _mapCatalogNotice.text = ex.Message; }
+    }
+
+    private void DeleteSelectedMapAsset()
+    {
+        if (string.IsNullOrEmpty(_selectedMapAssetId)) return;
+        string id = _selectedMapAssetId;
+        DiceUI.Instance?.ConfirmAction("Удалить карту из каталога?", "Карту, используемую сценой, удалить нельзя.", () =>
+        {
+            try
+            {
+                SceneFileStore.DeleteMapAsset(id);
+                _selectedMapAssetId = null;
+                _mapCatalogNotice.text = "Карта удалена из сессии.";
+                RefreshMapCatalog(true);
+            }
+            catch (Exception ex) { _mapCatalogNotice.text = ex.Message; }
+        });
     }
 
     private void AdjustScale(float amount)
@@ -609,6 +924,7 @@ public class DmPanelUI : MonoBehaviour
             _fogAutosaveText.text = fog.Autosave ? "Автосохранение: включено (2 минуты)" : "Автосохранение: выключено";
             _fogStatus.text = fog.Status + "\nОтмена: " + GameMasterUndo.NextLabel + "\nИгрок открывает ближайшую видимую дверь клавишей E.";
         }
+        if (_page == 6) RefreshStatBlocks();
     }
 
     private GameObject Box(Transform parent, string name, Color color, int radius, bool outline = true)

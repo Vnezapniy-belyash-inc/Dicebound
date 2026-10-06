@@ -709,6 +709,9 @@ public class TokenController : NetworkDraggable
     private static int _menuClosedFrame = -1;
     private string _masterCurrentHpInput = "0", _masterMaxHpInput = "0", _masterArmorClassInput = "10";
     private string _masterStatBlockInput = "";
+    private bool _statBlockPopup;
+    private Vector2 _statBlockScroll;
+    private Rect _statBlockPopupRect;
     private bool _conditionsPopup;
     private Vector2 _conditionsScroll;
     private Rect _conditionsRect;
@@ -724,7 +727,8 @@ public class TokenController : NetworkDraggable
             Vector2 pointer = Mouse.current.position.ReadValue();
             pointer.y = Screen.height - pointer.y;
             return _activeMenuToken._menuRect.Contains(pointer)
-                || _activeMenuToken._conditionsPopup && _activeMenuToken._conditionsRect.Contains(pointer);
+                || _activeMenuToken._conditionsPopup && _activeMenuToken._conditionsRect.Contains(pointer)
+                || _activeMenuToken._statBlockPopup && _activeMenuToken._statBlockPopupRect.Contains(pointer);
         }
     }
 
@@ -734,6 +738,7 @@ public class TokenController : NetworkDraggable
         _showMenu = false;
         _visionEditing = false;
         _conditionsPopup = false;
+        _statBlockPopup = false;
         if (_activeMenuToken == this) _activeMenuToken = null;
     }
 
@@ -771,6 +776,7 @@ public class TokenController : NetworkDraggable
             _masterArmorClassInput = _masterData.armorClass.ToString();
             _masterStatBlockInput = _masterData.statBlockId ?? "";
             _conditionsPopup = false;
+            _statBlockPopup = false;
             Vector2 mousePos = mouse.position.ReadValue();
             float height = IsHost ? 570 : 196;
             _menuRect = new Rect(
@@ -954,10 +960,16 @@ public class TokenController : NetworkDraggable
             if (GUI.Button(new Rect(_menuRect.x + 10, y, 240, 28), "Состояния…", VttUiSkin.ImGuiButton))
                 _conditionsPopup = !_conditionsPopup;
             y += 32;
-            GUI.Label(new Rect(_menuRect.x + 12, y, 238, 20), "ID статблока", titleStyle);
+            var statBlock = Array.Find(SceneFileStore.GetStatBlocks(), item => item.id == _masterData.statBlockId);
+            GUI.Label(new Rect(_menuRect.x + 12, y, 238, 20),
+                statBlock == null ? "Статблок не назначен" : "Статблок: " + statBlock.name, titleStyle);
             y += 20;
+            GUI.SetNextControlName("TokenStatBlockId");
             _masterStatBlockInput = GUI.TextField(new Rect(_menuRect.x + 10, y, 180, 28), _masterStatBlockInput, 64);
-            if (GUI.Button(new Rect(_menuRect.x + 196, y, 54, 28), "OK", VttUiSkin.ImGuiButton))
+            if (GUI.Button(new Rect(_menuRect.x + 196, y, 54, 28), "Список", VttUiSkin.ImGuiButton))
+                _statBlockPopup = !_statBlockPopup;
+            if (Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Return
+                && GUI.GetNameOfFocusedControl() == "TokenStatBlockId")
                 ApplyStatBlockInput();
         }
         else
@@ -976,9 +988,11 @@ public class TokenController : NetworkDraggable
         }
 
         if (_conditionsPopup) DrawConditionPopup();
+        if (_statBlockPopup) DrawStatBlockPopup();
 
         if (Event.current.type == EventType.MouseDown && !_menuRect.Contains(Event.current.mousePosition)
-            && (!_conditionsPopup || !_conditionsRect.Contains(Event.current.mousePosition)))
+            && (!_conditionsPopup || !_conditionsRect.Contains(Event.current.mousePosition))
+            && (!_statBlockPopup || !_statBlockPopupRect.Contains(Event.current.mousePosition)))
             CloseMenu();
     }
 
@@ -1006,9 +1020,9 @@ public class TokenController : NetworkDraggable
             DiceUI.Instance?.ShowToolNotice("Некорректный ID статблока.");
             return;
         }
-        if (!string.IsNullOrEmpty(id))
+        if (!string.IsNullOrEmpty(id) && !SceneFileStore.HasStatBlock(id))
         {
-            DiceUI.Instance?.ShowToolNotice("В этой сессии пока нет загруженного каталога статблоков; сначала добавьте этот ID в пакет кампании.");
+            DiceUI.Instance?.ShowToolNotice("Такого статблока нет в каталоге кампании.");
             return;
         }
         if (_masterData.statBlockId == id) return;
@@ -1017,6 +1031,40 @@ public class TokenController : NetworkDraggable
         GameMasterUndo.Record("статблок токена", () => FindSceneToken(tokenId)?.ServerSetStatBlock(previous));
         ServerSetStatBlock(id);
         GUI.FocusControl(null);
+    }
+
+    private void DrawStatBlockPopup()
+    {
+        const float width = 280;
+        float height = Mathf.Min(300, Screen.height - 16);
+        float x = _menuRect.xMax + 8;
+        if (x + width > Screen.width) x = Mathf.Max(4, _menuRect.x - width - 8);
+        float y = Mathf.Clamp(_menuRect.y + 330, 4, Mathf.Max(4, Screen.height - height - 4));
+        _statBlockPopupRect = new Rect(x, y, width, height);
+        GUI.Box(_statBlockPopupRect, "Статблоки кампании", VttUiSkin.ImGuiPanel);
+        var blocks = SceneFileStore.GetStatBlocks();
+        float rowHeight = 30;
+        float contentHeight = Mathf.Max(height - 44, (blocks.Length + 1) * rowHeight);
+        var viewport = new Rect(_statBlockPopupRect.x + 8, _statBlockPopupRect.y + 30,
+            width - 16, height - 38);
+        var content = new Rect(0, 0, viewport.width - 16, contentHeight);
+        _statBlockScroll = GUI.BeginScrollView(viewport, _statBlockScroll, content);
+        if (GUI.Button(new Rect(0, 0, content.width, rowHeight), "Снять статблок", VttUiSkin.ImGuiButton))
+        {
+            _masterStatBlockInput = string.Empty;
+            ApplyStatBlockInput();
+            _statBlockPopup = false;
+        }
+        for (int i = 0; i < blocks.Length; i++)
+        {
+            var block = blocks[i];
+            if (!GUI.Button(new Rect(0, (i + 1) * rowHeight, content.width, rowHeight),
+                block.name + $" · КД {block.armorClass}, ХП {block.hitPoints}", VttUiSkin.ImGuiButton)) continue;
+            _masterStatBlockInput = block.id;
+            ApplyStatBlockInput();
+            _statBlockPopup = false;
+        }
+        GUI.EndScrollView();
     }
 
     private void DrawConditionPopup()

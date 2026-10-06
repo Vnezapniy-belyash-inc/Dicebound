@@ -13,7 +13,9 @@ public static class SceneFileStore
 {
     private static string _lastSavedState;
     private static string _currentSceneId = Guid.NewGuid().ToString("N");
+    private static string _currentMapAssetId;
     private static CampaignDefinition _campaign;
+    private static bool _campaignDirty;
 
     public static string ActiveSceneLabel
     {
@@ -28,6 +30,138 @@ public static class SceneFileStore
 
     public static bool HasCampaign => _campaign != null && _campaign.scenes != null && _campaign.scenes.Length > 0;
 
+    public static StatBlockDefinition[] GetStatBlocks() => _campaign?.statBlocks ?? Array.Empty<StatBlockDefinition>();
+
+    public static void UpsertStatBlock(StatBlockDefinition definition)
+    {
+        if (NetworkManager.Singleton?.IsHost != true) throw new InvalidOperationException("Только мастер редактирует статблоки.");
+        if (definition == null) throw new ArgumentNullException(nameof(definition));
+        CaptureCampaign(_campaign?.title ?? "Кампания");
+        definition.id = string.IsNullOrWhiteSpace(definition.id) ? Guid.NewGuid().ToString("N") : definition.id;
+        definition.name = (definition.name ?? string.Empty).Trim();
+        if (definition.name.Length == 0) throw new FormatException("Укажите название статблока.");
+        var previous = _campaign.statBlocks ?? Array.Empty<StatBlockDefinition>();
+        int index = Array.FindIndex(previous, item => item.id == definition.id);
+        var updated = (StatBlockDefinition[])previous.Clone();
+        if (index < 0)
+        {
+            Array.Resize(ref updated, updated.Length + 1);
+            index = updated.Length - 1;
+        }
+        updated[index] = definition;
+        _campaign.statBlocks = updated;
+        try { SceneValidation.Validate(_campaign); }
+        catch { _campaign.statBlocks = previous; throw; }
+        _campaignDirty = true;
+    }
+
+    public static void DeleteStatBlock(string statBlockId)
+    {
+        if (NetworkManager.Singleton?.IsHost != true) throw new InvalidOperationException("Только мастер редактирует статблоки.");
+        if (string.IsNullOrWhiteSpace(statBlockId)) return;
+        CaptureCampaign(_campaign?.title ?? "Кампания");
+        foreach (var scene in _campaign.scenes)
+            foreach (var token in scene.scene.masterData.tokens)
+                if (token.statBlockId == statBlockId)
+                    throw new InvalidOperationException("Сначала отвяжите этот статблок от всех токенов.");
+        int index = Array.FindIndex(_campaign.statBlocks, item => item.id == statBlockId);
+        if (index < 0) return;
+        var updated = new StatBlockDefinition[_campaign.statBlocks.Length - 1];
+        if (index > 0) Array.Copy(_campaign.statBlocks, 0, updated, 0, index);
+        if (index < updated.Length) Array.Copy(_campaign.statBlocks, index + 1, updated, index, updated.Length - index);
+        _campaign.statBlocks = updated;
+        _campaignDirty = true;
+    }
+
+    public static bool HasStatBlock(string statBlockId) => !string.IsNullOrWhiteSpace(statBlockId)
+        && Array.Exists(GetStatBlocks(), item => item != null && item.id == statBlockId);
+
+    public static CampaignMapAsset[] GetMapAssets() => _campaign?.mapAssets ?? Array.Empty<CampaignMapAsset>();
+
+    public static void ResetCurrentMapAssetLink()
+    {
+        if (NetworkManager.Singleton?.IsHost == true) _currentMapAssetId = null;
+    }
+
+    public static string ValidateNewMapAssetName(string name)
+    {
+        name = (name ?? string.Empty).Trim();
+        if (name.Length == 0 || name.Length > 128)
+            throw new FormatException("Название карты должно содержать от 1 до 128 символов.");
+        if (_campaign?.mapAssets != null && Array.Exists(_campaign.mapAssets,
+            item => string.Equals(item.name, name, StringComparison.OrdinalIgnoreCase)))
+            throw new FormatException("В кампании уже есть карта с таким названием.");
+        if (_campaign?.mapAssets != null && _campaign.mapAssets.Length >= 256)
+            throw new FormatException("В каталоге достигнут лимит в 256 карт.");
+        return name;
+    }
+
+    public static void AddCurrentMapAsset(string name)
+    {
+        if (NetworkManager.Singleton?.IsHost != true) throw new InvalidOperationException("Только мастер редактирует каталог карт.");
+        name = ValidateNewMapAssetName(name);
+        var map = MapController.Instance;
+        byte[] bytes = map?.GetCurrentPngData();
+        if (bytes == null || bytes.Length == 0) throw new InvalidOperationException("Сначала загрузите изображение карты.");
+        _currentMapAssetId = null;
+        CaptureCampaign(_campaign?.title ?? "Кампания");
+        var asset = new CampaignMapAsset { id = Guid.NewGuid().ToString("N"), name = name, imageData = Convert.ToBase64String(bytes) };
+        var assets = new CampaignMapAsset[_campaign.mapAssets.Length + 1];
+        Array.Copy(_campaign.mapAssets, assets, _campaign.mapAssets.Length);
+        assets[assets.Length - 1] = asset;
+        var previousAssets = _campaign.mapAssets;
+        _campaign.mapAssets = assets;
+        _currentMapAssetId = asset.id;
+        var scene = Array.Find(_campaign.scenes, item => item.sceneId == _campaign.activeSceneId);
+        if (scene != null) scene.scene.mapAssetId = asset.id;
+        try
+        {
+            SceneValidation.Validate(_campaign);
+            CampaignFileStore.ValidateEmbeddedImageBudget(_campaign);
+        }
+        catch
+        {
+            _campaign.mapAssets = previousAssets;
+            _currentMapAssetId = null;
+            if (scene != null) scene.scene.mapAssetId = null;
+            throw;
+        }
+        _campaignDirty = true;
+    }
+
+    public static void SelectMapAsset(string id)
+    {
+        if (NetworkManager.Singleton?.IsHost != true) throw new InvalidOperationException("Только мастер выбирает карту.");
+        var asset = Array.Find(GetMapAssets(), item => item.id == id);
+        if (asset == null) throw new InvalidOperationException("Карта не найдена в каталоге кампании.");
+        var map = MapController.Instance;
+        if (map == null) throw new InvalidOperationException("Контроллер карты не готов.");
+        CaptureCampaign(_campaign.title);
+        var bytes = Decode(asset.imageData, MapSync.MaxMapBytes);
+        Vector3 position = map.transform.position;
+        Vector3 rotation = map.transform.eulerAngles;
+        float scale = map.CurrentScale;
+        map.RestoreSceneMap(bytes, position, rotation, scale);
+        _currentMapAssetId = asset.id;
+        _campaignDirty = true;
+    }
+
+    public static void DeleteMapAsset(string id)
+    {
+        if (NetworkManager.Singleton?.IsHost != true) throw new InvalidOperationException("Только мастер редактирует каталог карт.");
+        if (string.IsNullOrWhiteSpace(id)) return;
+        CaptureCampaign(_campaign?.title ?? "Кампания");
+        foreach (var scene in _campaign.scenes)
+            if (scene.scene.mapAssetId == id) throw new InvalidOperationException("Сначала отвяжите карту от всех сцен.");
+        int index = Array.FindIndex(_campaign.mapAssets, item => item.id == id);
+        if (index < 0) return;
+        var assets = new CampaignMapAsset[_campaign.mapAssets.Length - 1];
+        if (index > 0) Array.Copy(_campaign.mapAssets, 0, assets, 0, index);
+        if (index < assets.Length) Array.Copy(_campaign.mapAssets, index + 1, assets, index, assets.Length - index);
+        _campaign.mapAssets = assets;
+        _campaignDirty = true;
+    }
+
     public static CampaignDefinition CaptureCampaign(string title = null)
     {
         var scene = Capture(true);
@@ -36,8 +170,17 @@ public static class SceneFileStore
                 string.IsNullOrWhiteSpace(title) ? "Кампания" : title);
         else
         {
-            if (!string.IsNullOrWhiteSpace(title)) _campaign.title = title;
-            UpdateCampaignScene(scene, InitiativeTracker.Instance?.CaptureBattleState());
+            if (!string.IsNullOrWhiteSpace(title) && _campaign.title != title)
+            {
+                _campaign.title = title;
+                _campaignDirty = true;
+            }
+            SceneBattleState battle = InitiativeTracker.Instance?.CaptureBattleState();
+            int index = Array.FindIndex(_campaign.scenes, item => item.sceneId == scene.sceneId);
+            if (index >= 0 && (JsonUtility.ToJson(_campaign.scenes[index].scene) != JsonUtility.ToJson(scene)
+                || battle != null && JsonUtility.ToJson(_campaign.scenes[index].battle) != JsonUtility.ToJson(battle)))
+                _campaignDirty = true;
+            UpdateCampaignScene(scene, battle);
         }
         SceneValidation.Validate(_campaign);
         CampaignFileStore.ValidateEmbeddedImageBudget(_campaign);
@@ -47,6 +190,8 @@ public static class SceneFileStore
     public static void SaveCampaign(string path, string title = null)
     {
         CampaignFileStore.Save(path, CaptureCampaign(title));
+        _lastSavedState = JsonUtility.ToJson(Capture(true));
+        _campaignDirty = false;
         DiceUI.Instance?.ShowToolNotice("Сессия сохранена: " + Path.GetFileName(path));
     }
 
@@ -72,6 +217,51 @@ public static class SceneFileStore
     }
 
     public static void CreateSceneCopy() => Safely(CreateSceneCopyCore);
+
+    public static void CreateEmptyScene() => Safely(CreateEmptySceneCore);
+
+    private static void CreateEmptySceneCore()
+    {
+        if (NetworkManager.Singleton?.IsHost != true) return;
+        CaptureCampaign(_campaign?.title ?? "Кампания");
+        bool previousDirty = _campaignDirty;
+        if (_campaign.scenes.Length >= 128)
+        {
+            DiceUI.Instance?.ShowToolNotice("В кампании достигнут лимит в 128 сцен.");
+            return;
+        }
+        var current = Array.Find(_campaign.scenes, item => item.sceneId == _campaign.activeSceneId);
+        if (current == null) return;
+        string title = $"Сцена {_campaign.scenes.Length + 1}";
+        var scene = JsonUtility.FromJson<SceneDefinition>(JsonUtility.ToJson(current.scene));
+        scene.sceneId = Guid.NewGuid().ToString("N");
+        scene.title = title;
+        scene.tokens = Array.Empty<SceneToken>();
+        scene.masterData = new SceneMasterData();
+        scene.geometry = new SceneGeometry { revealPaused = true };
+        scene.fog = new SavedFog { enabled = current.scene.fog == null || current.scene.fog.enabled };
+        var created = new CampaignScene
+        {
+            sceneId = scene.sceneId,
+            title = title,
+            scene = scene,
+            battle = new SceneBattleState()
+        };
+        var scenes = new CampaignScene[_campaign.scenes.Length + 1];
+        var previousScenes = _campaign.scenes;
+        Array.Copy(_campaign.scenes, scenes, _campaign.scenes.Length);
+        scenes[scenes.Length - 1] = created;
+        _campaign.scenes = scenes;
+        _campaignDirty = true;
+        try { SceneValidation.Validate(_campaign); }
+        catch
+        {
+            _campaign.scenes = previousScenes;
+            _campaignDirty = previousDirty;
+            throw;
+        }
+        SwitchToScene(created.sceneId);
+    }
 
     private static void CreateSceneCopyCore()
     {
@@ -99,6 +289,7 @@ public static class SceneFileStore
         Array.Copy(_campaign.scenes, scenes, _campaign.scenes.Length);
         scenes[scenes.Length - 1] = copy;
         _campaign.scenes = scenes;
+        _campaignDirty = true;
         SwitchToScene(copy.sceneId);
     }
 
@@ -121,6 +312,7 @@ public static class SceneFileStore
         if (target == null) return;
         ApplyScene(target.scene, target.battle);
         _campaign.activeSceneId = sceneId;
+        _campaignDirty = true;
         DiceUI.Instance?.ShowToolNotice($"Активная сцена: {target.title}");
     }
 
@@ -134,6 +326,7 @@ public static class SceneFileStore
         if (index < 0) throw new InvalidOperationException("Активная сцена не найдена.");
         _campaign.scenes[index].title = title;
         _campaign.scenes[index].scene.title = title;
+        _campaignDirty = true;
         DiceUI.Instance?.ShowToolNotice("Сцена переименована: " + title);
     });
 
@@ -154,12 +347,14 @@ public static class SceneFileStore
         int nextIndex = (index + 1) % _campaign.scenes.Length;
         string nextSceneId = _campaign.scenes[nextIndex].sceneId;
         CampaignDefinition previousCampaign = JsonUtility.FromJson<CampaignDefinition>(JsonUtility.ToJson(_campaign));
+        bool previousDirty = _campaignDirty;
         var remaining = new CampaignScene[_campaign.scenes.Length - 1];
         for (int source = 0, destination = 0; source < _campaign.scenes.Length; source++)
             if (source != index) remaining[destination++] = _campaign.scenes[source];
         _campaign.scenes = remaining;
         try { SwitchToScene(nextSceneId); }
-        catch { _campaign = previousCampaign; throw; }
+        catch { _campaign = previousCampaign; _campaignDirty = previousDirty; throw; }
+        _campaignDirty = true;
         DiceUI.Instance?.ShowToolNotice("Сцена удалена.");
     }
 
@@ -171,7 +366,21 @@ public static class SceneFileStore
     public static bool HasUnsavedChanges()
     {
         if (NetworkManager.Singleton?.IsHost != true) return false;
-        try { return JsonUtility.ToJson(Capture(true)) != _lastSavedState; }
+        try
+        {
+            var current = Capture(true);
+            var battle = InitiativeTracker.Instance?.CaptureBattleState();
+            if (_campaign != null)
+            {
+                int index = Array.FindIndex(_campaign.scenes, item => item.sceneId == current.sceneId);
+                if (index >= 0 && (JsonUtility.ToJson(_campaign.scenes[index].scene) != JsonUtility.ToJson(current)
+                    || battle != null && JsonUtility.ToJson(_campaign.scenes[index].battle) != JsonUtility.ToJson(battle)))
+                    _campaignDirty = true;
+            }
+            else if (battle != null && (battle.participants.Length > 0 || battle.round != 1
+                || !string.IsNullOrEmpty(battle.activeParticipantId))) return true;
+            return _campaignDirty || JsonUtility.ToJson(current) != _lastSavedState;
+        }
         catch { return true; }
     }
     public static SceneDefinition Capture(bool history = true)
@@ -187,6 +396,7 @@ public static class SceneFileStore
             sceneId = _currentSceneId,
             title = _campaign == null ? "Сцена" :
                 Array.Find(_campaign.scenes, item => item.sceneId == _currentSceneId)?.title ?? "Сцена",
+            mapAssetId = _currentMapAssetId,
             gridWidth = grid.Width, gridHeight = grid.Height, cellSize = grid.CellSize,
             gridPosition = grid.GridOrigin, gridRotation = grid.GridRotation.eulerAngles,
             mapPosition = map.transform.position, mapRotation = map.transform.eulerAngles, mapScale = map.CurrentScale,
@@ -236,7 +446,9 @@ public static class SceneFileStore
     public static void SaveOptions(string path, bool? history, bool notify)
     {
         SceneEditor.Instance?.Deactivate();
-        string json = JsonUtility.ToJson(Capture(history ?? FogManager.Instance?.SaveWithHistory ?? true), true);
+        var scene = Capture(history ?? FogManager.Instance?.SaveWithHistory ?? true);
+        scene.mapAssetId = null; // Standalone scene files contain their own image bytes.
+        string json = JsonUtility.ToJson(scene, true);
         if (Encoding.UTF8.GetByteCount(json) > SceneValidation.MaxFileBytes) throw new FormatException("Сцена превышает 96 МБ.");
         string temporary = path + ".tmp";
         File.WriteAllText(temporary, json, new UTF8Encoding(false));
@@ -251,7 +463,10 @@ public static class SceneFileStore
         if (new FileInfo(path).Length > SceneValidation.MaxFileBytes) throw new FormatException("Сцена превышает 96 МБ.");
         var scene = SceneSaveMigration.UpgradeScene(
             JsonUtility.FromJson<SceneDefinition>(File.ReadAllText(path)));
+        scene.mapAssetId = null;
         _campaign = null;
+        _campaignDirty = false;
+        _currentMapAssetId = null;
         ApplyScene(scene, null);
     }
 
@@ -262,9 +477,11 @@ public static class SceneFileStore
         CampaignScene active = Array.Find(campaign.scenes, item => item.sceneId == campaign.activeSceneId);
         if (active == null) throw new FormatException("Активная сцена не найдена в сессии.");
         var previousCampaign = _campaign;
+        bool previousDirty = _campaignDirty;
         _campaign = campaign;
         try { ApplyScene(active.scene, active.battle); }
-        catch { _campaign = previousCampaign; throw; }
+        catch { _campaign = previousCampaign; _campaignDirty = previousDirty; throw; }
+        _campaignDirty = false;
         DiceUI.Instance?.ShowToolNotice($"Сессия «{campaign.title}» загружена · сцена «{active.title}».");
     }
 
@@ -309,6 +526,7 @@ public static class SceneFileStore
         }
         finally { if (!curtain && HostSceneCurtain.IsCurtainDown) SceneEditor.Instance.RevealAfterMapTransfer(); }
         _currentSceneId = scene.sceneId;
+        _currentMapAssetId = scene.mapAssetId;
         _lastSavedState = JsonUtility.ToJson(Capture(true));
     }
     private static void Safely(Action action)

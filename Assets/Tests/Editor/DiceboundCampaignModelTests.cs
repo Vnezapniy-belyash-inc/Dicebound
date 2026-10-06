@@ -123,6 +123,27 @@ public class DiceboundCampaignModelTests
             entries.SetValue(entry, index);
         }
         Set(campaign, "scenes", entries);
+        var activeScene = Get<object>(entries.GetValue(1), "scene");
+        Set(activeScene, "mapAssetId", "map-forest");
+        var mapAsset = New("CampaignMapAsset");
+        Set(mapAsset, "id", "map-forest");
+        Set(mapAsset, "name", "Лес");
+        Set(mapAsset, "imageData", Convert.ToBase64String(new byte[] { 1, 2, 3 }));
+        var mapAssets = Array.CreateInstance(TypeOf("CampaignMapAsset"), 1);
+        mapAssets.SetValue(mapAsset, 0);
+        Set(campaign, "mapAssets", mapAssets);
+        var statBlock = New("StatBlockDefinition");
+        Set(statBlock, "id", "goblin-basic");
+        Set(statBlock, "name", "Гоблин");
+        Set(statBlock, "size", "Средний");
+        Set(statBlock, "creatureType", "гуманоид");
+        Set(statBlock, "alignment", "нейтрально-злой");
+        Set(statBlock, "speed", "30 футов");
+        Set(statBlock, "challengeRating", "1/4");
+        Set(statBlock, "description", "");
+        var statBlocks = Array.CreateInstance(TypeOf("StatBlockDefinition"), 1);
+        statBlocks.SetValue(statBlock, 0);
+        Set(campaign, "statBlocks", statBlocks);
 
         string campaignPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".json");
         string scenePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".json");
@@ -133,6 +154,11 @@ public class DiceboundCampaignModelTests
                 .Invoke(null, new object[] { campaignPath });
             Assert.That(Get<Array>(restored, "scenes").Length, Is.EqualTo(2));
             Assert.That(Get<string>(restored, "activeSceneId"), Is.EqualTo("scene-b"));
+            Assert.That(Get<Array>(restored, "statBlocks").Length, Is.EqualTo(1));
+            Assert.That(Get<string>(Get<Array>(restored, "statBlocks").GetValue(0), "name"), Is.EqualTo("Гоблин"));
+            Assert.That(Get<Array>(restored, "mapAssets").Length, Is.EqualTo(1));
+            var restoredScene = Get<object>(Get<Array>(restored, "scenes").GetValue(1), "scene");
+            Assert.That(Get<string>(restoredScene, "mapAssetId"), Is.EqualTo("map-forest"));
 
             var legacy = ValidScene("legacy");
             Set(legacy, "version", 1);

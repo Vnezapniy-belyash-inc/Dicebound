@@ -147,6 +147,33 @@ public class MapController : NetworkBehaviour
         });
     }
 
+    public void LoadImageToLibrary(string name)
+    {
+        if (!IsHost) return;
+        try { name = SceneFileStore.ValidateNewMapAssetName(name); }
+        catch (Exception ex) { DiceUI.Instance?.ShowToolNotice("Каталог карт: " + ex.Message); return; }
+        PickImageFile(path =>
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            byte[] data = File.ReadAllBytes(path);
+            if (data.Length == 0 || data.Length > 96 * 1024 * 1024)
+            {
+                DiceUI.Instance?.ShowToolNotice("Исходная карта превышает 96 МБ.");
+                return;
+            }
+            if (!ApplyImageInternal(data)) return;
+            MapSync.Instance?.SendMapToAll(_currentImageBytes);
+            SceneFileStore.ResetCurrentMapAssetLink();
+            try
+            {
+                SceneFileStore.AddCurrentMapAsset(name);
+                DmPanelUI.Instance?.RefreshMapCatalog();
+                DiceUI.Instance?.ShowToolNotice("Карта добавлена в каталог: " + name);
+            }
+            catch (Exception ex) { DiceUI.Instance?.ShowToolNotice("Каталог карт: " + ex.Message); }
+        });
+    }
+
     private static void PickImageFile(Action<string> onPicked)
     {
 #if UNITY_EDITOR
@@ -173,6 +200,7 @@ public class MapController : NetworkBehaviour
         }
         if (!ApplyImageInternal(pngData)) return;
         MapSync.Instance?.SendMapToAll(_currentImageBytes);
+        SceneFileStore.ResetCurrentMapAssetLink();
     }
 
     /// <summary>Клиент получает картинку от хоста.</summary>

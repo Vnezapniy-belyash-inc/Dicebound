@@ -553,7 +553,7 @@ public class DiceUI : MonoBehaviour
         {
             var question = _leaveConfirmDialog.transform.Find("Question").GetComponent<Text>();
             bool unsaved = SceneFileStore.HasUnsavedChanges();
-            question.text = unsaved ? "Выйти из лобби?\nСцена не сохранена в JSON." : "Выйти из лобби?";
+            question.text = unsaved ? "Выйти из лобби?\nСессия не сохранена в JSON." : "Выйти из лобби?";
             question.fontSize = unsaved ? 16 : 20;
             _leaveConfirmDialog.SetActive(true);
         }

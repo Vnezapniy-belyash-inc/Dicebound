@@ -51,6 +51,7 @@ using UnityEngine;
     public int version = 2;
     public string sceneId = "";
     public string title = "Сцена";
+    public string mapAssetId;
     public int gridWidth, gridHeight;
     public float cellSize;
     public Vector3 gridPosition, gridRotation, mapPosition, mapRotation;
@@ -129,6 +130,13 @@ using UnityEngine;
     public StatBlockAction[] actions = Array.Empty<StatBlockAction>();
 }
 
+[Serializable] public sealed class CampaignMapAsset
+{
+    public string id;
+    public string name;
+    public string imageData;
+}
+
 [Serializable] public sealed class ReferenceEntry
 {
     public string id;
@@ -147,6 +155,7 @@ using UnityEngine;
     public string title = "Кампания";
     public string activeSceneId;
     public CampaignScene[] scenes = Array.Empty<CampaignScene>();
+    public CampaignMapAsset[] mapAssets = Array.Empty<CampaignMapAsset>();
     public StatBlockDefinition[] statBlocks = Array.Empty<StatBlockDefinition>();
     public ReferenceEntry[] referenceEntries = Array.Empty<ReferenceEntry>();
 }
@@ -297,6 +306,16 @@ public static class SceneValidation
             if (entry.sceneId == campaign.activeSceneId) activeFound = true;
         }
         Require(activeFound, "Активная сцена отсутствует в кампании.");
+        var mapIds = new HashSet<string>();
+        if (campaign.mapAssets == null) campaign.mapAssets = Array.Empty<CampaignMapAsset>();
+        Require(campaign.mapAssets.Length <= 256, "Слишком много карт в каталоге кампании.");
+        foreach (var map in campaign.mapAssets)
+            Require(map != null && !string.IsNullOrWhiteSpace(map.id) && map.id.Length <= 64
+                && mapIds.Add(map.id) && !string.IsNullOrWhiteSpace(map.name) && map.name.Length <= 128
+                && !string.IsNullOrWhiteSpace(map.imageData), "Некорректная или повторная карта каталога.");
+        foreach (var entry in campaign.scenes)
+            Require(string.IsNullOrEmpty(entry.scene.mapAssetId) || mapIds.Contains(entry.scene.mapAssetId),
+                "Сцена ссылается на отсутствующую карту каталога.");
         Require(campaign.statBlocks != null && campaign.statBlocks.Length <= 4096,
             "Некорректный каталог статблоков.");
         var statBlockIds = new HashSet<string>();

@@ -11,6 +11,17 @@ public static class CampaignFileStore
     public static void ValidateEmbeddedImageBudget(CampaignDefinition campaign)
     {
         long aggregateBytes = 0;
+        if (campaign.mapAssets != null)
+            foreach (var map in campaign.mapAssets)
+            {
+                if (map == null) throw new FormatException("Некорректная карта каталога.");
+                long mapBytes = DecodeBase64Size(map.imageData);
+                if (mapBytes == 0 || mapBytes > MapSync.MaxMapBytes)
+                    throw new FormatException("Карта в каталоге превышает 16 МБ или не содержит данных.");
+                aggregateBytes += mapBytes;
+                if (aggregateBytes > MaxCampaignFileBytes)
+                    throw new FormatException("Суммарный размер данных кампании превышает 384 МБ.");
+            }
         foreach (var entry in campaign.scenes)
         {
             long mapBytes = DecodeBase64Size(entry.scene.mapImage);
@@ -71,6 +82,7 @@ public static class CampaignFileStore
             return campaign;
         }
         var scene = SceneSaveMigration.UpgradeScene(JsonUtility.FromJson<SceneDefinition>(json));
+        scene.mapAssetId = null; // A standalone scene embeds its map instead of referencing a campaign catalog.
         SceneValidation.Validate(scene);
         campaign = SceneSaveMigration.UpgradeSingleScene(scene);
         SceneValidation.Validate(campaign);
@@ -88,6 +100,7 @@ public static class CampaignFileStore
 
         var scene = SceneSaveMigration.UpgradeScene(
             JsonUtility.FromJson<SceneDefinition>(File.ReadAllText(path, Encoding.UTF8)));
+        scene.mapAssetId = null;
         SceneValidation.Validate(scene);
         var campaign = SceneSaveMigration.UpgradeSingleScene(scene);
         SceneValidation.Validate(campaign);
