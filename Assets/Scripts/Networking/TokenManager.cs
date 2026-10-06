@@ -161,11 +161,12 @@ public class TokenManager : MonoBehaviour
             hidden: hidden, requestedName: name);
     }
 
-    public TokenController RestoreSceneToken(SceneToken data, GridManager grid)
+    public TokenController RestoreSceneToken(SceneToken data, GridManager grid,
+        MasterTokenData masterData = null)
     {
         if (NetworkManager.Singleton?.IsHost != true) return null;
         return SpawnTokenForClient(grid.GridCoordinatesToWorld(data.position), NetworkManager.Singleton.LocalClientId,
-            hidden: data.hidden, requestedName: data.name, restored: data);
+            hidden: data.hidden, requestedName: data.name, restored: data, masterData: masterData);
     }
 
     private float _nextAssignmentCheck;
@@ -236,7 +237,8 @@ public class TokenManager : MonoBehaviour
             return null;
 
         TokenController copy = SpawnTokenForClient(GetDefaultSpawnPosition(), copierClientId,
-            isCopy: true, hidden: source.IsHidden, requestedName: source.NameBase);
+            isCopy: true, hidden: source.IsHidden, requestedName: source.NameBase,
+            masterData: source.CaptureMasterData());
         if (copy == null) return null;
 
         byte[] portrait = TokenImageSync.GetPortraitBytesForCopy(source);
@@ -293,7 +295,8 @@ public class TokenManager : MonoBehaviour
         _sessionState.ReassignPlayer(oldClientId, newClientId);
 
     private TokenController SpawnTokenForClient(Vector3 pos, ulong ownerId,
-        bool isCopy = false, bool hidden = false, string requestedName = null, SceneToken restored = null)
+        bool isCopy = false, bool hidden = false, string requestedName = null,
+        SceneToken restored = null, MasterTokenData masterData = null)
     {
         if (tokenPrefab == null) return null;
         if (restored == null) pos.y = spawnHeight;
@@ -321,6 +324,7 @@ public class TokenManager : MonoBehaviour
         netObj.SpawnWithObservers = false;
         netObj.SpawnWithOwnership(ownerId);
         netObj.DontDestroyWithOwner = true;
+        token.ServerApplyMasterData(masterData);
         if (LateJoinSync.Instance != null) LateJoinSync.Instance.QueueWorldObject(netObj);
         else
             foreach (ulong clientId in NetworkManager.Singleton.ConnectedClientsIds)

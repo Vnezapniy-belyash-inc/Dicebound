@@ -174,8 +174,9 @@ public class DmPanelUI : MonoBehaviour
         _sceneMarkupText = markup.GetComponentInChildren<Text>();
         Button(parent, "Сохранить JSON", 170, 36, 0, -335, SceneFileStore.SaveDialog, VttUiSkin.Button);
         Button(parent, "Загрузить JSON", 170, 36, 180, -335, SceneFileStore.LoadDialog, VttUiSkin.Button);
+        Button(parent, "Сохранить сессию", 350, 34, 0, -376, SceneFileStore.SaveCampaignDialog, VttUiSkin.Button);
         _sceneNotice = Label(parent, "", 12, VttUiSkin.Text, TextAnchor.UpperLeft,
-            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 60), new Vector2(0, -385));
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 45), new Vector2(0, -415));
         Label(parent, "Стены — голубые, двери — жёлтые; открытые — зелёные. Игрокам видна разметка в текущем обзоре. JSON содержит карту, всех персонажей и портреты. История и пауза — во вкладке «Туман».",
             12, VttUiSkin.Muted, TextAnchor.UpperLeft, new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 56), new Vector2(0, -449));
     }

@@ -56,6 +56,7 @@ public class DiceboundSceneTests
     private static object Scene()
     {
         var scene = New("SceneDefinition");
+        Set(scene, "sceneId", "test-scene");
         Set(scene, "gridWidth", 10); Set(scene, "gridHeight", 10); Set(scene, "cellSize", 1f);
         Set(scene, "mapImage", "placeholder");
         return scene;
@@ -68,7 +69,7 @@ public class DiceboundSceneTests
     }
 
     [Test] public void UnsupportedVersionIsRejectedBeforeApplication()
-    { var scene = Scene(); Set(scene, "version", 2); Invalid(scene); }
+    { var scene = Scene(); Set(scene, "version", 3); Invalid(scene); }
     [Test] public void NonFiniteGridSizeIsRejected()
     { var scene = Scene(); Set(scene, "cellSize", float.NaN); Invalid(scene); }
 
@@ -107,6 +108,15 @@ public class DiceboundSceneTests
         Set(token, "position", new Vector3(2.5f, 0.25f, 3.5f)); Set(token, "scale", new Vector3(0.9f, 0.15f, 0.9f));
         Set(token, "portrait", "portrait-bytes");
         var tokens = Array.CreateInstance(TypeOf("SceneToken"), 1); tokens.SetValue(token, 0); Set(scene, "tokens", tokens);
+        var masterToken = New("MasterTokenData");
+        Set(masterToken, "tokenId", "stable-token");
+        Set(masterToken, "currentHp", 7); Set(masterToken, "maxHp", 12);
+        Set(masterToken, "armorClass", 15); Set(masterToken, "hideHp", false);
+        Set(masterToken, "hideConditions", false);
+        Set(masterToken, "conditionIds", new[] { "prone", "poisoned" });
+        var masterTokens = Array.CreateInstance(TypeOf("MasterTokenData"), 1);
+        masterTokens.SetValue(masterToken, 0);
+        var masterData = Get<object>(scene, "masterData"); Set(masterData, "tokens", masterTokens);
         Validate(scene);
         var restored = JsonUtility.FromJson(JsonUtility.ToJson(scene), TypeOf("SceneDefinition")); Validate(restored);
         var restoredToken = Get<Array>(restored, "tokens").GetValue(0);
@@ -115,6 +125,13 @@ public class DiceboundSceneTests
         Assert.That(Get<bool>(restoredToken, "hidden"), Is.True);
         Assert.That(Get<int>(restoredToken, "visionFeet"), Is.EqualTo(30));
         Assert.That(Get<string>(restoredToken, "portrait"), Is.EqualTo("portrait-bytes"));
+        var restoredMasterData = Get<object>(restored, "masterData");
+        var restoredMasterToken = Get<Array>(restoredMasterData, "tokens").GetValue(0);
+        Assert.That(Get<int>(restoredMasterToken, "currentHp"), Is.EqualTo(7));
+        Assert.That(Get<int>(restoredMasterToken, "maxHp"), Is.EqualTo(12));
+        Assert.That(Get<int>(restoredMasterToken, "armorClass"), Is.EqualTo(15));
+        Assert.That(Get<bool>(restoredMasterToken, "hideHp"), Is.False);
+        Assert.That(Get<string[]>(restoredMasterToken, "conditionIds"), Is.EqualTo(new[] { "prone", "poisoned" }));
         var geometry = Get<object>(restored, "geometry");
         Assert.That(Get<bool>(Get<Array>(geometry, "edges").GetValue(0), "open"), Is.True);
         Assert.That(Get<float>(Get<Array>(geometry, "obstacles").GetValue(0), "diameter"), Is.EqualTo(0.3f));

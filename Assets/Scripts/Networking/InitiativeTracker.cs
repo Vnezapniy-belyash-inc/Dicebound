@@ -12,6 +12,26 @@ using UnityEngine.UI;
 [RequireComponent(typeof(NetworkObject))]
 public class InitiativeTracker : NetworkBehaviour
 {
+    [Serializable]
+    private sealed class InitiativeNetworkState
+    {
+        public int currentIndex;
+        public int round = 1;
+        public string activeParticipantId;
+        public InitiativeNetworkEntry[] entries = Array.Empty<InitiativeNetworkEntry>();
+    }
+
+    [Serializable]
+    private sealed class InitiativeNetworkEntry
+    {
+        public int id;
+        public string name;
+        public int initiative;
+        public string colorHex;
+        public ulong playerId;
+        public string tokenId;
+    }
+
     private readonly NetworkVariable<FixedString4096Bytes> _netData = new(
         new FixedString4096Bytes(""), NetworkVariableReadPermission.Everyone,
         NetworkVariableWritePermission.Server);
@@ -23,6 +43,7 @@ public class InitiativeTracker : NetworkBehaviour
         public int initiative;
         public string colorHex;
         public ulong playerId;
+        public string tokenId;
     }
 
     private readonly List<Entry> _entries = new();
@@ -32,6 +53,10 @@ public class InitiativeTracker : NetworkBehaviour
     private int _nextEntryId;
     private bool _userVisible;
     private bool _hostControlsVisible;
+    private int _round = 1;
+    private string _activeParticipantId;
+    private string _awaitingInitiativeTokenId;
+    private float _initiativeRollExpiresAt;
     private Canvas _canvas;
     private Font _font;
     private GameObject _panel, _addPanel, _hostButtons, _emptyMessage;
@@ -59,8 +84,47 @@ public class InitiativeTracker : NetworkBehaviour
     {
         _font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         BuildUI();
+        DiceUI.JournalResultRecorded += OnJournalResultRecorded;
         if (NetworkManager.Singleton != null)
             NetworkManager.Singleton.OnServerStarted += OnServerStarted;
+    }
+
+    private void OnJournalResultRecorded(string dieType, int result, ulong throwerId)
+    {
+        if (!IsHost || string.IsNullOrEmpty(_awaitingInitiativeTokenId)) return;
+        if (Time.unscaledTime > _initiativeRollExpiresAt)
+        {
+            _awaitingInitiativeTokenId = null;
+            DiceUI.Instance?.ShowToolNotice("Назначение инициативы истекло. Нажмите 🎲 ещё раз.");
+            return;
+        }
+        if (dieType != "d20") return;
+        if (throwerId != NetworkManager.Singleton.LocalClientId) return;
+
+        string tokenId = _awaitingInitiativeTokenId;
+        _awaitingInitiativeTokenId = null;
+        int index = _entries.FindIndex(entry => entry.tokenId == tokenId);
+        if (index < 0) return;
+        int id = _entries[index].id;
+        int previous = _entries[index].initiative;
+        GameMasterUndo.Record("инициатива", () => SetInitiativeById(id, previous.ToString()));
+        SetInitiativeById(id, result.ToString());
+        DiceUI.Instance?.ShowToolNotice($"Инициатива: {result}");
+    }
+
+    public void ArmInitiativeFromJournal(string tokenId)
+    {
+        if (!IsHost || string.IsNullOrEmpty(tokenId) || !ContainsToken(tokenId)) return;
+        _awaitingInitiativeTokenId = tokenId;
+        _initiativeRollExpiresAt = Time.unscaledTime + 120f;
+        DiceUI.Instance?.ShowToolNotice("Бросьте d20: следующий результат из журнала пойдёт в инициативу.");
+    }
+
+    public void CancelInitiativeFromJournal()
+    {
+        if (!IsHost || string.IsNullOrEmpty(_awaitingInitiativeTokenId)) return;
+        _awaitingInitiativeTokenId = null;
+        DiceUI.Instance?.ShowToolNotice("Назначение броска инициативы отменено.");
     }
 
     private void OnServerStarted()
@@ -152,8 +216,45 @@ public class InitiativeTracker : NetworkBehaviour
     {
         _entries.Clear();
         _currentIndex = 0;
+        _round = 1;
+        _activeParticipantId = null;
         _nextEntryId = 0;
         if (string.IsNullOrEmpty(data)) return;
+        if (data.StartsWith("{", StringComparison.Ordinal))
+        {
+            var state = JsonUtility.FromJson<InitiativeNetworkState>(data);
+            if (state == null || state.entries == null) return;
+            _currentIndex = Mathf.Max(0, state.currentIndex);
+            _round = state.round;
+            _activeParticipantId = state.activeParticipantId;
+            int entryLimit = Mathf.Min(state.entries.Length, 30);
+            for (int index = 0; index < entryLimit; index++)
+            {
+                var item = state.entries[index];
+                if (item == null) continue;
+                _entries.Add(new Entry
+                {
+                    id = item.id,
+                    name = ClampText(item.name, 28, "Участник"),
+                    initiative = Mathf.Clamp(item.initiative, -999, 999),
+                    colorHex = item.colorHex ?? "#FFFFFF",
+                    playerId = item.playerId,
+                    tokenId = item.tokenId
+                });
+                _nextEntryId = Mathf.Max(_nextEntryId, item.id);
+            }
+            if (!string.IsNullOrEmpty(_activeParticipantId))
+            {
+                int active = _entries.FindIndex(entry => entry.id.ToString() == _activeParticipantId);
+                if (active >= 0) _currentIndex = active;
+            }
+            if (_currentIndex >= _entries.Count) _currentIndex = 0;
+            _activeParticipantId = ActiveId < 0 ? null : ActiveId.ToString();
+            if (_round < 1 || _round > 100000) _round = 1;
+            return;
+        }
+
+        // Legacy state: index|name,score,color,playerId[,entryId[,tokenId]]
         var parts = data.Split('|');
         if (int.TryParse(parts[0], out int current)) _currentIndex = current;
         for (int i = 1; i < parts.Length; i++)
@@ -169,21 +270,38 @@ public class InitiativeTracker : NetworkBehaviour
                 initiative = int.TryParse(fields[1], out int score) ? score : 0,
                 colorHex = fields[2],
                 playerId = fields.Length >= 4 && ulong.TryParse(fields[3], out ulong playerId)
-                    ? playerId : ulong.MaxValue
+                    ? playerId : ulong.MaxValue,
+                tokenId = fields.Length >= 6 ? fields[5] : null
             });
         }
         if (_currentIndex >= _entries.Count) _currentIndex = 0;
+        _activeParticipantId = ActiveId < 0 ? null : ActiveId.ToString();
+        _round = 1;
     }
 
     private string SerializeData()
     {
-        var sb = new System.Text.StringBuilder();
-        sb.Append(_currentIndex);
-        foreach (var entry in _entries)
-            sb.Append('|').Append(entry.name).Append(',').Append(entry.initiative)
-                .Append(',').Append(entry.colorHex).Append(',').Append(entry.playerId)
-                .Append(',').Append(entry.id);
-        return sb.ToString();
+        var state = new InitiativeNetworkState
+        {
+            currentIndex = _currentIndex,
+            round = _round,
+            activeParticipantId = ActiveId < 0 ? null : ActiveId.ToString(),
+            entries = new InitiativeNetworkEntry[_entries.Count]
+        };
+        for (int i = 0; i < _entries.Count; i++)
+        {
+            var entry = _entries[i];
+            state.entries[i] = new InitiativeNetworkEntry
+            {
+                id = entry.id,
+                name = entry.name,
+                initiative = entry.initiative,
+                colorHex = entry.colorHex,
+                playerId = entry.playerId,
+                tokenId = entry.tokenId
+            };
+        }
+        return JsonUtility.ToJson(state);
     }
 
     private void Sync()
@@ -191,7 +309,7 @@ public class InitiativeTracker : NetworkBehaviour
         if (!IsHost) return;
         string data = SerializeData();
         if (System.Text.Encoding.UTF8.GetByteCount(data)
-            > FixedString4096Bytes.UTF8MaxLengthInBytes)
+            > 3500)
         {
             Debug.LogError("[Initiative] State exceeds network string capacity");
             DiceUI.Instance?.ShowToolNotice("Список инициативы слишком большой.");
@@ -211,6 +329,7 @@ public class InitiativeTracker : NetworkBehaviour
             return byScore != 0 ? byScore : a.id.CompareTo(b.id);
         });
         _currentIndex = Mathf.Max(0, _entries.FindIndex(e => e.id == activeId));
+        _activeParticipantId = ActiveId < 0 ? null : ActiveId.ToString();
     }
 
     public void AddEntry(string name, int initiative, string colorHex = "#FFFFFF", int hp = 0)
@@ -219,25 +338,24 @@ public class InitiativeTracker : NetworkBehaviour
     }
 
     private void AddEntryInternal(string name, int initiative, string colorHex, ulong playerId,
-        int hp = 0)
+        int hp = 0, string tokenId = null)
     {
         if (!IsHost || _entries.Count >= 30 || string.IsNullOrWhiteSpace(name)) return;
         initiative = Mathf.Clamp(initiative, -999, 999);
-        string cleanName = name.Trim().Replace('|', ' ').Replace(',', ' ');
+        string cleanName = name.Trim();
         if (cleanName.Length > 28) cleanName = cleanName.Substring(0, 28);
-        string nextEntry = $"|{cleanName},{initiative},{colorHex},{playerId},{_nextEntryId + 1}";
-        // Leave room for every score to grow from one digit to -999 later.
-        if (System.Text.Encoding.UTF8.GetByteCount(SerializeData() + nextEntry)
-            + 3 * (_entries.Count + 1) + 2
-            > FixedString4096Bytes.UTF8MaxLengthInBytes)
+        var candidate = new Entry { id = _nextEntryId + 1, name = cleanName,
+            initiative = initiative, colorHex = colorHex, playerId = playerId, tokenId = tokenId };
+        _entries.Add(candidate);
+        if (System.Text.Encoding.UTF8.GetByteCount(SerializeData()) > 3500)
         {
+            _entries.RemoveAt(_entries.Count - 1);
             DiceUI.Instance?.ShowToolNotice("Список инициативы слишком большой.");
             return;
         }
         int activeId = ActiveId;
         int newId = ++_nextEntryId;
-        _entries.Add(new Entry { id = newId, name = cleanName,
-            initiative = initiative, colorHex = colorHex, playerId = playerId });
+        _entries[_entries.Count - 1] = candidate;
         _hpById[newId] = Mathf.Clamp(hp, 0, 99999);
         SortKeepingTurn(activeId);
         Sync();
@@ -254,6 +372,34 @@ public class InitiativeTracker : NetworkBehaviour
         AddEntryInternal(name, 0, color, playerId);
     }
 
+    private static string ClampText(string value, int maxLength, string fallback)
+    {
+        if (string.IsNullOrEmpty(value)) return fallback;
+        return value.Length <= maxLength ? value : value.Substring(0, maxLength);
+    }
+
+    public bool ContainsToken(string sceneId) =>
+        !string.IsNullOrEmpty(sceneId) && _entries.Exists(entry => entry.tokenId == sceneId);
+
+    public void RefreshToken(string sceneId)
+    {
+        if (IsHost && ContainsToken(sceneId)) RebuildRows();
+    }
+
+    public void AddToken(TokenController token)
+    {
+        if (!IsHost || token == null || !token.IsSpawned || ContainsToken(token.SceneId)) return;
+        string color = "#" + ColorUtility.ToHtmlStringRGB(PlayerColors.GetColor(token.SpawnerClientId));
+        AddEntryInternal(token.TokenName, 0, color, ulong.MaxValue, token.VisibleCurrentHp, token.SceneId);
+    }
+
+    public void RemoveToken(string sceneId)
+    {
+        if (!IsHost || string.IsNullOrEmpty(sceneId)) return;
+        int index = _entries.FindIndex(entry => entry.tokenId == sceneId);
+        if (index >= 0) RemoveEntry(index);
+    }
+
     public void RemovePlayer(ulong playerId)
     {
         if (!IsHost) return;
@@ -268,6 +414,7 @@ public class InitiativeTracker : NetworkBehaviour
         _hpById.Remove(_entries[index].id);
         _entries.RemoveAt(index);
         _currentIndex = Mathf.Max(0, _entries.FindIndex(e => e.id == activeId));
+        _activeParticipantId = ActiveId < 0 ? null : ActiveId.ToString();
         Sync();
     }
 
@@ -292,7 +439,20 @@ public class InitiativeTracker : NetworkBehaviour
     {
         if (!IsHost || !_entries.Exists(entry => entry.id == id)) return;
         if (int.TryParse(value, out int hp))
-            _hpById[id] = Mathf.Clamp(hp, 0, 99999);
+        {
+            var entry = _entries.Find(item => item.id == id);
+            if (!string.IsNullOrEmpty(entry.tokenId))
+            {
+                var token = TokenController.FindSceneToken(entry.tokenId);
+                if (token != null)
+                {
+                    int maximum = token.VisibleMaxHp;
+                    if (maximum == 0 && hp > 0) maximum = Mathf.Clamp(hp, 0, 999999);
+                    token.ServerSetHealth(Mathf.Clamp(hp, 0, maximum), maximum);
+                }
+            }
+            else _hpById[id] = Mathf.Clamp(hp, 0, 99999);
+        }
         RebuildRows();
     }
 
@@ -300,6 +460,8 @@ public class InitiativeTracker : NetworkBehaviour
     {
         if (!IsHost || _entries.Count == 0) return;
         _currentIndex = (_currentIndex + 1) % _entries.Count;
+        if (_currentIndex == 0) _round = Mathf.Min(100000, _round + 1);
+        _activeParticipantId = ActiveId.ToString();
         Sync();
     }
 
@@ -309,6 +471,71 @@ public class InitiativeTracker : NetworkBehaviour
         _entries.Clear();
         _hpById.Clear();
         _currentIndex = 0;
+        _round = 1;
+        _activeParticipantId = null;
+        Sync();
+    }
+
+    public SceneBattleState CaptureBattleState()
+    {
+        var participants = new BattleParticipant[_entries.Count];
+        for (int index = 0; index < _entries.Count; index++)
+        {
+            var entry = _entries[index];
+            participants[index] = new BattleParticipant
+            {
+                id = entry.id.ToString(),
+                tokenId = entry.tokenId,
+                playerId = entry.playerId,
+                initiative = entry.initiative
+            };
+        }
+        return new SceneBattleState
+        {
+            round = _round,
+            activeParticipantId = ActiveId < 0 ? null : ActiveId.ToString(),
+            participants = participants
+        };
+    }
+
+    public void RestoreBattleState(SceneBattleState battle)
+    {
+        if (!IsHost || battle == null || battle.participants == null) return;
+        _entries.Clear();
+        _hpById.Clear();
+        _round = Mathf.Clamp(battle.round, 1, 100000);
+        _nextEntryId = 0;
+        foreach (var participant in battle.participants)
+        {
+            int id = int.TryParse(participant.id, out int parsedId) && parsedId > 0
+                ? parsedId : ++_nextEntryId;
+            _nextEntryId = Mathf.Max(_nextEntryId, id);
+            TokenController token = string.IsNullOrEmpty(participant.tokenId)
+                ? null : TokenController.FindSceneToken(participant.tokenId);
+            string name = token != null ? token.TokenName
+                : participant.playerId != ulong.MaxValue
+                    ? PlayerColors.GetNickname(participant.playerId) ?? "Игрок"
+                    : "Участник";
+            string color = "#" + ColorUtility.ToHtmlStringRGB(
+                PlayerColors.GetColor(token != null ? token.SpawnerClientId : participant.playerId));
+            _entries.Add(new Entry
+            {
+                id = id,
+                name = name,
+                initiative = participant.initiative,
+                colorHex = color,
+                playerId = participant.playerId,
+                tokenId = participant.tokenId
+            });
+            if (token != null) _hpById[id] = token.VisibleCurrentHp;
+        }
+        _entries.Sort((a, b) => {
+            int byScore = b.initiative.CompareTo(a.initiative);
+            return byScore != 0 ? byScore : a.id.CompareTo(b.id);
+        });
+        _activeParticipantId = battle.activeParticipantId;
+        _currentIndex = _entries.FindIndex(entry => entry.id.ToString() == _activeParticipantId);
+        if (_currentIndex < 0) _currentIndex = 0;
         Sync();
     }
 
@@ -350,6 +577,8 @@ public class InitiativeTracker : NetworkBehaviour
             new Color(0.10f, 0.28f, 0.47f));
         Button(_hostButtons.transform, "Очистить", 78, 32, 270, 0, RequestClearAll,
             new Color(0.28f, 0.11f, 0.14f));
+        Button(_hostButtons.transform, "Отмена броска", 104, 30, -2, -38,
+            CancelInitiativeFromJournal, new Color(0.28f, 0.20f, 0.12f));
 
         var viewport = Box(_panel.transform, "Viewport", new Color(0, 0, 0, 0.01f), 0, false);
         _viewport = viewport;
@@ -377,6 +606,7 @@ public class InitiativeTracker : NetworkBehaviour
         scroll.vertical = true;
         scroll.movementType = ScrollRect.MovementType.Clamped;
         scroll.scrollSensitivity = 28;
+        viewportRt.offsetMax = new Vector2(-12, -82);
 
         _emptyMessage = new GameObject("EmptyMessage", typeof(RectTransform));
         _emptyMessage.transform.SetParent(viewport.transform, false);
@@ -401,10 +631,10 @@ public class InitiativeTracker : NetworkBehaviour
         _content.sizeDelta = new Vector2(850, rows * CardStepY);
         if (_panel != null)
             _panel.GetComponent<RectTransform>().sizeDelta =
-                new Vector2(880, _entries.Count == 0 ? 52 : Mathf.Min(48 + rows * CardStepY + 12, 48 + 4 * CardStepY + 12));
+                new Vector2(880, _entries.Count == 0 ? 52 : Mathf.Min(82 + rows * CardStepY + 12, 82 + 4 * CardStepY + 12));
         if (_roundText != null)
-            _roundText.text = _entries.Count == 0 ? "НЕТ УЧАСТНИКОВ" :
-                $"{_entries.Count} участников · ход {_currentIndex + 1}";
+            _roundText.text = _entries.Count == 0 ? $"Раунд {_round} · нет участников" :
+                $"Раунд {_round} · {_entries.Count} участников · ход {_currentIndex + 1}";
 
         for (int i = 0; i < _entries.Count; i++)
         {
@@ -419,21 +649,32 @@ public class InitiativeTracker : NetworkBehaviour
                 new Vector2(0, 1), new Vector2(0, 1), new Vector2(28, 24),
                 new Vector2(4, -4), active);
             int maxNameLength = IsHost ? 11 : 14;
-            string displayName = entry.name.Length > maxNameLength
-                ? entry.name.Substring(0, maxNameLength - 1) + "…" : entry.name;
+            string liveName = string.IsNullOrEmpty(entry.tokenId)
+                ? entry.name : TokenController.FindSceneToken(entry.tokenId)?.TokenName ?? entry.name;
+            string displayName = liveName.Length > maxNameLength
+                ? liveName.Substring(0, maxNameLength - 1) + "…" : liveName;
             Label(row.transform, displayName, 13, VttUiSkin.Text, TextAnchor.MiddleLeft,
                 new Vector2(0, 1), new Vector2(0, 1), new Vector2(IsHost ? 100 : 122, 25),
                 new Vector2(32, -3), active);
             if (IsHost)
             {
+                var linkedToken = string.IsNullOrEmpty(entry.tokenId)
+                    ? null : TokenController.FindSceneToken(entry.tokenId);
                 var input = Input(row.transform, entry.initiative.ToString(), 44, 22, 24, -25);
                 input.contentType = InputField.ContentType.IntegerNumber;
                 int id = entry.id;
                 input.onEndEdit.AddListener(value => SetInitiativeById(id, value));
+                if (!string.IsNullOrEmpty(entry.tokenId))
+                {
+                    string tokenId = entry.tokenId;
+                    Button(row.transform, "d20", 28, 20, 75, -25,
+                        () => ArmInitiativeFromJournal(tokenId), new Color(0.12f, 0.26f, 0.38f));
+                }
                 Label(row.transform, "HP", 10, new Color(1f, 0.36f, 0.38f),
                     TextAnchor.MiddleLeft, new Vector2(0, 1), new Vector2(0, 1),
                     new Vector2(18, 22), new Vector2(82, -25), true);
-                var hpInput = Input(row.transform, _hpById.GetValueOrDefault(id).ToString(),
+                int hp = linkedToken != null ? linkedToken.VisibleCurrentHp : _hpById.GetValueOrDefault(id);
+                var hpInput = Input(row.transform, hp.ToString(),
                     58, 22, 100, -25);
                 hpInput.contentType = InputField.ContentType.IntegerNumber;
                 hpInput.textComponent.color = new Color(1f, 0.36f, 0.38f);
@@ -590,6 +831,7 @@ public class InitiativeTracker : NetworkBehaviour
 
     private new void OnDestroy()
     {
+        DiceUI.JournalResultRecorded -= OnJournalResultRecorded;
         if (NetworkManager.Singleton != null)
             NetworkManager.Singleton.OnServerStarted -= OnServerStarted;
         if (Instance == this) Instance = null;

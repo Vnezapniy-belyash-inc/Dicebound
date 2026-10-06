@@ -46,7 +46,10 @@ using UnityEngine;
 }
 [Serializable] public sealed class SceneDefinition
 {
-    public int version = 1;
+    // Version 2 adds a stable scene ID. Version 1 files are upgraded by
+    // SceneSaveMigration before validation or application.
+    public int version = 2;
+    public string sceneId = "";
     public string title = "Сцена";
     public int gridWidth, gridHeight;
     public float cellSize;
@@ -55,8 +58,149 @@ using UnityEngine;
     public string mapImage;
     public SceneGeometry geometry = new();
     public SceneToken[] tokens = Array.Empty<SceneToken>();
+    public SceneMasterData masterData = new();
     public SavedFog fog = new();
     public bool includesPlayers;
+}
+
+/// <summary>Master-only, scene-local token data. Never put this in replicated token state.</summary>
+[Serializable] public sealed class MasterTokenData
+{
+    public string tokenId;
+    public int currentHp;
+    public int maxHp;
+    public int armorClass = 10;
+    public bool hideHp = true;
+    public bool hideConditions = true;
+    public string[] conditionIds = Array.Empty<string>();
+    public string statBlockId;
+}
+
+/// <summary>Master-authored data which must not be replicated to players.</summary>
+[Serializable] public sealed class SceneMasterData
+{
+    public MasterTokenData[] tokens = Array.Empty<MasterTokenData>();
+}
+
+/// <summary>A campaign scene and all data owned by that scene.</summary>
+[Serializable] public sealed class CampaignScene
+{
+    public string sceneId;
+    public string title;
+    public SceneDefinition scene = new();
+    public SceneBattleState battle = new();
+}
+
+[Serializable] public sealed class BattleParticipant
+{
+    public string id;
+    public string tokenId;
+    public ulong playerId = ulong.MaxValue;
+    public int initiative;
+}
+
+[Serializable] public sealed class SceneBattleState
+{
+    public int round = 1;
+    public string activeParticipantId;
+    public BattleParticipant[] participants = Array.Empty<BattleParticipant>();
+}
+
+[Serializable] public sealed class StatBlockAction
+{
+    public string name;
+    public string description;
+}
+
+[Serializable] public sealed class StatBlockDefinition
+{
+    public string id;
+    public string name;
+    public string size;
+    public string creatureType;
+    public string alignment;
+    public int armorClass = 10;
+    public int hitPoints;
+    public string speed;
+    public int strength = 10, dexterity = 10, constitution = 10;
+    public int intelligence = 10, wisdom = 10, charisma = 10;
+    public string challengeRating;
+    public string description;
+    public StatBlockAction[] actions = Array.Empty<StatBlockAction>();
+}
+
+[Serializable] public sealed class ReferenceEntry
+{
+    public string id;
+    public string title;
+    public string category;
+    public string body;
+    public string[] tags = Array.Empty<string>();
+    public bool masterOnly;
+}
+
+/// <summary>Portable campaign container; the active encounter can be stored independently.</summary>
+[Serializable] public sealed class CampaignDefinition
+{
+    public int version = 1;
+    public string campaignId;
+    public string title = "Кампания";
+    public string activeSceneId;
+    public CampaignScene[] scenes = Array.Empty<CampaignScene>();
+    public StatBlockDefinition[] statBlocks = Array.Empty<StatBlockDefinition>();
+    public ReferenceEntry[] referenceEntries = Array.Empty<ReferenceEntry>();
+}
+
+/// <summary>Converts existing single-scene v1 files without changing their authored state.</summary>
+public static class SceneSaveMigration
+{
+    public const int CurrentSceneVersion = 2;
+
+    public static SceneDefinition UpgradeScene(SceneDefinition scene)
+    {
+        if (scene == null) throw new FormatException("Файл сцены пуст.");
+        if (scene.version == 1)
+        {
+            scene.version = CurrentSceneVersion;
+            scene.sceneId = Guid.NewGuid().ToString("N");
+        }
+        else if (scene.version == CurrentSceneVersion)
+        {
+            if (string.IsNullOrWhiteSpace(scene.sceneId))
+                scene.sceneId = Guid.NewGuid().ToString("N");
+        }
+        else throw new FormatException("Неподдерживаемая версия сцены.");
+
+        scene.masterData ??= new SceneMasterData();
+
+        return scene;
+    }
+
+    public static CampaignDefinition UpgradeSingleScene(SceneDefinition scene)
+        => UpgradeSingleScene(scene, scene?.title);
+
+    public static CampaignDefinition UpgradeSingleScene(SceneDefinition scene, string campaignTitle)
+    {
+        scene = UpgradeScene(scene);
+        return new CampaignDefinition
+        {
+            campaignId = Guid.NewGuid().ToString("N"),
+            title = string.IsNullOrWhiteSpace(campaignTitle) ? "Кампания" : campaignTitle,
+            activeSceneId = scene.sceneId,
+            scenes = new[]
+            {
+                new CampaignScene
+                {
+                    sceneId = scene.sceneId,
+                    title = string.IsNullOrWhiteSpace(scene.title) ? "Сцена" : scene.title,
+                    scene = scene,
+                    battle = Unity.Netcode.NetworkManager.Singleton?.IsHost == true
+                        && InitiativeTracker.Instance != null
+                        ? InitiativeTracker.Instance.CaptureBattleState() : new SceneBattleState()
+                }
+            }
+        };
+    }
 }
 
 /// <summary>Validation completes before replacing the current table. No file or network IDs are trusted.</summary>
@@ -93,7 +237,10 @@ public static class SceneValidation
     }
     public static void Validate(SceneDefinition scene)
     {
-        Require(scene != null && scene.version == 1, "Неподдерживаемая версия сцены.");
+        Require(scene != null && scene.version == SceneSaveMigration.CurrentSceneVersion,
+            "Неподдерживаемая версия сцены.");
+        Require(!string.IsNullOrWhiteSpace(scene.sceneId) && scene.sceneId.Length <= 64,
+            "Некорректный ID сцены.");
         Require(!string.IsNullOrEmpty(scene.mapImage), "Сначала загрузите изображение карты.");
         Require(scene.gridWidth > 0 && scene.gridWidth <= 256 && scene.gridHeight > 0 && scene.gridHeight <= 256,
             "Размер сетки должен быть 1–256 клеток.");
@@ -125,6 +272,140 @@ public static class SceneValidation
             Require(token.visionFeet >= 0 && token.visionFeet <= TokenController.MaxVisionFeet, "Некорректное зрение токена.");
             Require(token.ownerNickname == null || token.ownerNickname.Length <= 64, "Слишком длинное имя владельца.");
         }
+        ValidateMasterData(scene.masterData, scene.tokens);
+    }
+
+    public static void Validate(CampaignDefinition campaign)
+    {
+        Require(campaign != null && campaign.version == 1, "Неподдерживаемая версия кампании.");
+        Require(!string.IsNullOrWhiteSpace(campaign.campaignId) && campaign.campaignId.Length <= 64,
+            "Некорректный ID кампании.");
+        Require(!string.IsNullOrWhiteSpace(campaign.title) && campaign.title.Length <= 256,
+            "Некорректное название кампании.");
+        Require(campaign.scenes != null && campaign.scenes.Length > 0 && campaign.scenes.Length <= 128,
+            "В кампании должно быть от 1 до 128 сцен.");
+        var ids = new HashSet<string>();
+        bool activeFound = false;
+        foreach (var entry in campaign.scenes)
+        {
+            Require(entry != null && !string.IsNullOrWhiteSpace(entry.sceneId)
+                && entry.sceneId.Length <= 64 && ids.Add(entry.sceneId), "Некорректный или повторный ID сцены.");
+            Require(entry.scene != null && entry.scene.sceneId == entry.sceneId,
+                "ID контейнера и данных сцены не совпадают.");
+            Validate(entry.scene);
+            ValidateBattle(entry.battle, entry.scene);
+            if (entry.sceneId == campaign.activeSceneId) activeFound = true;
+        }
+        Require(activeFound, "Активная сцена отсутствует в кампании.");
+        Require(campaign.statBlocks != null && campaign.statBlocks.Length <= 4096,
+            "Некорректный каталог статблоков.");
+        var statBlockIds = new HashSet<string>();
+        foreach (var statBlock in campaign.statBlocks)
+        {
+            Require(statBlock != null && !string.IsNullOrWhiteSpace(statBlock.id)
+                && statBlock.id.Length <= 64 && statBlockIds.Add(statBlock.id)
+                && !string.IsNullOrWhiteSpace(statBlock.name) && statBlock.name.Length <= 128,
+                "Некорректная или повторная запись статблока.");
+            Require(statBlock.armorClass >= 0 && statBlock.armorClass <= 999
+                && statBlock.hitPoints >= 0 && statBlock.hitPoints <= 999999,
+                "Некорректные параметры статблока.");
+            Require(statBlock.strength >= 1 && statBlock.strength <= 40
+                && statBlock.dexterity >= 1 && statBlock.dexterity <= 40
+                && statBlock.constitution >= 1 && statBlock.constitution <= 40
+                && statBlock.intelligence >= 1 && statBlock.intelligence <= 40
+                && statBlock.wisdom >= 1 && statBlock.wisdom <= 40
+                && statBlock.charisma >= 1 && statBlock.charisma <= 40,
+                "Некорректные характеристики статблока.");
+            Require(statBlock.actions != null && statBlock.actions.Length <= 256,
+                "Слишком много действий в статблоке.");
+            Require(statBlock.size != null && statBlock.size.Length <= 64
+                && statBlock.creatureType != null && statBlock.creatureType.Length <= 128
+                && statBlock.alignment != null && statBlock.alignment.Length <= 128
+                && statBlock.speed != null && statBlock.speed.Length <= 256
+                && statBlock.challengeRating != null && statBlock.challengeRating.Length <= 64
+                && statBlock.description != null && statBlock.description.Length <= 65536,
+                "Слишком большой или некорректный статблок.");
+            foreach (var action in statBlock.actions)
+                Require(action != null && !string.IsNullOrWhiteSpace(action.name)
+                    && action.name.Length <= 128 && action.description != null
+                    && action.description.Length <= 16384, "Некорректное действие статблока.");
+        }
+        foreach (var entry in campaign.scenes)
+            foreach (var tokenData in entry.scene.masterData.tokens)
+                Require(string.IsNullOrEmpty(tokenData.statBlockId)
+                    || statBlockIds.Contains(tokenData.statBlockId), "Токен ссылается на отсутствующий статблок.");
+        Require(campaign.referenceEntries != null && campaign.referenceEntries.Length <= 10000,
+            "Некорректный справочник кампании.");
+        var referenceIds = new HashSet<string>();
+        foreach (var reference in campaign.referenceEntries)
+        {
+            Require(reference != null && !string.IsNullOrWhiteSpace(reference.id)
+                && reference.id.Length <= 64 && referenceIds.Add(reference.id)
+                && !string.IsNullOrWhiteSpace(reference.title) && reference.title.Length <= 256,
+                "Некорректная или повторная запись справочника.");
+            Require(reference.body != null && reference.body.Length <= 65536
+                && reference.tags != null && reference.tags.Length <= 64,
+                "Некорректное содержимое записи справочника.");
+            Require(reference.category != null && reference.category.Length <= 128,
+                "Некорректная категория справочника.");
+            foreach (string tag in reference.tags)
+                Require(!string.IsNullOrWhiteSpace(tag) && tag.Length <= 64,
+                    "Некорректная метка справочника.");
+        }
+    }
+
+    private static void ValidateMasterData(SceneMasterData masterData, SceneToken[] sceneTokens)
+    {
+        Require(masterData != null && masterData.tokens != null && masterData.tokens.Length <= MaxTokens,
+            "Некорректные мастерские данные сцены.");
+        var ids = new HashSet<string>();
+        foreach (var tokenData in masterData.tokens)
+        {
+            Require(tokenData != null && !string.IsNullOrWhiteSpace(tokenData.tokenId)
+                && ids.Add(tokenData.tokenId), "Некорректная или повторная мастерская запись токена.");
+            Require(Array.Exists(sceneTokens, token => token.id == tokenData.tokenId),
+                "Мастерские данные ссылаются на отсутствующий токен.");
+            Require(tokenData.currentHp >= 0 && tokenData.currentHp <= 999999
+                && tokenData.maxHp >= 0 && tokenData.maxHp <= 999999
+                && tokenData.currentHp <= tokenData.maxHp, "Некорректные HP токена.");
+            Require(tokenData.armorClass >= 0 && tokenData.armorClass <= 999,
+                "Некорректный КД токена.");
+            Require(tokenData.conditionIds != null && tokenData.conditionIds.Length <= 64,
+                "Слишком много состояний у токена.");
+            foreach (string conditionId in tokenData.conditionIds)
+                Require(!string.IsNullOrWhiteSpace(conditionId) && conditionId.Length <= 64
+                    && !conditionId.Contains("|"),
+                    "Некорректный ID состояния.");
+            Require(System.Text.Encoding.UTF8.GetByteCount(string.Join("|", tokenData.conditionIds))
+                <= Unity.Collections.FixedString4096Bytes.UTF8MaxLengthInBytes,
+                "Слишком длинный список состояний.");
+            Require(string.IsNullOrEmpty(tokenData.statBlockId) || tokenData.statBlockId.Length <= 64,
+                "Некорректный ID статблока.");
+        }
+    }
+
+    private static void ValidateBattle(SceneBattleState battle, SceneDefinition scene)
+    {
+        Require(battle != null && battle.round >= 1 && battle.round <= 100000
+            && battle.participants != null && battle.participants.Length <= MaxTokens + 64,
+            "Некорректное состояние боя.");
+        var ids = new HashSet<string>();
+        bool activeFound = string.IsNullOrEmpty(battle.activeParticipantId);
+        foreach (var participant in battle.participants)
+        {
+            Require(participant != null && !string.IsNullOrWhiteSpace(participant.id)
+                && participant.id.Length <= 64 && ids.Add(participant.id),
+                "Некорректная или повторная запись инициативы.");
+            Require(participant.initiative >= -999 && participant.initiative <= 999,
+                "Некорректное значение инициативы.");
+            if (!string.IsNullOrEmpty(participant.tokenId))
+                Require(Array.Exists(scene.tokens, token => token.id == participant.tokenId),
+                    "Инициатива ссылается на отсутствующий токен.");
+            else Require(participant.playerId != ulong.MaxValue,
+                "Запись инициативы не связана ни с токеном, ни с игроком.");
+            if (participant.id == battle.activeParticipantId) activeFound = true;
+        }
+        Require(activeFound, "Активный участник инициативы отсутствует в списке.");
     }
 }
 

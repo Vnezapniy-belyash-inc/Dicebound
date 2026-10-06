@@ -4,7 +4,7 @@ using UnityEngine;
 public static class TokenLabelLayout
 {
     public const float DesignWidth = 160;
-    public const float DesignHeight = 26;
+    public const float DesignHeight = 52;
     public const int DesignFontSize = 18;
 
     public static bool Project(Camera camera, Transform display, Bounds localBounds,

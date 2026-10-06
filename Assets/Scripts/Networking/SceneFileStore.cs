@@ -12,6 +12,19 @@ using UnityEditor;
 public static class SceneFileStore
 {
     private static string _lastSavedState;
+    private static string _currentSceneId = Guid.NewGuid().ToString("N");
+
+    public static CampaignDefinition CaptureCampaign(string title = "Кампания")
+    {
+        var scene = Capture(true);
+        return SceneSaveMigration.UpgradeSingleScene(scene, title);
+    }
+
+    public static void SaveCampaign(string path, string title = "Кампания")
+    {
+        CampaignFileStore.Save(path, CaptureCampaign(title));
+        DiceUI.Instance?.ShowToolNotice("Сессия сохранена: " + Path.GetFileName(path));
+    }
     public static bool HasUnsavedChanges()
     {
         if (NetworkManager.Singleton?.IsHost != true) return false;
@@ -28,6 +41,7 @@ public static class SceneFileStore
         if (mapBytes != null && mapBytes.Length > MapSync.MaxMapBytes)
             throw new FormatException("PNG карты превышает 16 МБ. Уменьшите изображение перед сохранением.");
         var scene = new SceneDefinition {
+            sceneId = _currentSceneId,
             gridWidth = grid.Width, gridHeight = grid.Height, cellSize = grid.CellSize,
             gridPosition = grid.GridOrigin, gridRotation = grid.GridRotation.eulerAngles,
             mapPosition = map.transform.position, mapRotation = map.transform.eulerAngles, mapScale = map.CurrentScale,
@@ -35,13 +49,16 @@ public static class SceneFileStore
             fog = FogManager.Instance?.Capture(history) ?? new SavedFog()
         };
         var tokens = new List<SceneToken>();
+        var masterTokens = new List<MasterTokenData>();
         foreach (var token in UnityEngine.Object.FindObjectsByType<TokenController>(FindObjectsInactive.Exclude))
         {
             if (!token.IsSpawned) continue;
             if (token.IsLocalDragActiveAny()) throw new InvalidOperationException("Закончите перемещение токенов перед сохранением.");
             tokens.Add(CaptureToken(token, grid));
+            masterTokens.Add(token.CaptureMasterData());
         }
         scene.tokens = tokens.ToArray();
+        scene.masterData.tokens = masterTokens.ToArray();
         SceneValidation.Validate(scene);
         return scene;
     }
@@ -87,10 +104,13 @@ public static class SceneFileStore
     {
         if (NetworkManager.Singleton?.IsHost != true) return;
         if (new FileInfo(path).Length > SceneValidation.MaxFileBytes) throw new FormatException("Сцена превышает 96 МБ.");
-        var scene = JsonUtility.FromJson<SceneDefinition>(File.ReadAllText(path));
+        var scene = SceneSaveMigration.UpgradeScene(
+            JsonUtility.FromJson<SceneDefinition>(File.ReadAllText(path)));
         SceneValidation.Validate(scene);
         byte[] map = Decode(scene.mapImage, MapSync.MaxMapBytes);
         var portraits = new Dictionary<string, byte[]>();
+        var masterTokens = new Dictionary<string, MasterTokenData>();
+        foreach (var master in scene.masterData.tokens) masterTokens.Add(master.tokenId, master);
         foreach (var token in scene.tokens) portraits.Add(token.id, Decode(token.portrait, TokenImageSync.MaxPortraitBytes));
         if (MapController.Instance == null || MapSync.Instance == null || TokenManager.Instance?.tokenPrefab == null || SceneEditor.Instance == null)
             throw new InvalidOperationException("Редактор сцены не готов.");
@@ -114,7 +134,8 @@ public static class SceneFileStore
             MapController.Instance.RestoreSceneMap(map, scene.mapPosition, scene.mapRotation, scene.mapScale);
             foreach (var data in scene.tokens)
             {
-                var token = TokenManager.Instance.RestoreSceneToken(data, grid);
+                masterTokens.TryGetValue(data.id, out MasterTokenData masterData);
+                var token = TokenManager.Instance.RestoreSceneToken(data, grid, masterData);
                 if (token == null) throw new InvalidOperationException("Не удалось восстановить токен.");
                 byte[] portrait = portraits[data.id];
                 if (portrait != null) TokenImageSync.BroadcastImage(token.NetworkObjectId, portrait);
@@ -123,6 +144,7 @@ public static class SceneFileStore
         }
         finally { if (!curtain && HostSceneCurtain.IsCurtainDown) SceneEditor.Instance.RevealAfterMapTransfer(); }
         DiceUI.Instance?.ShowToolNotice("Сцена загружена. Раскрытие карты приостановлено.");
+        _currentSceneId = scene.sceneId;
         _lastSavedState = JsonUtility.ToJson(Capture(true));
     }
     private static void Safely(Action action)
@@ -159,6 +181,20 @@ public static class SceneFileStore
 #else
         SimpleFileBrowser.FileBrowser.ShowLoadDialog(paths => { if (paths.Length > 0) Confirm(paths[0]); }, null,
             SimpleFileBrowser.FileBrowser.PickMode.Files, false, null, null, "Загрузить сцену", "Загрузить");
+#endif
+    }
+
+    public static void SaveCampaignDialog()
+    {
+#if UNITY_EDITOR
+        string path = EditorUtility.SaveFilePanel("Сохранить сессию", "", "campaign.json", "json");
+        if (!string.IsNullOrEmpty(path)) Safely(() => SaveCampaign(path));
+#else
+        SimpleFileBrowser.FileBrowser.ShowSaveDialog(paths =>
+        {
+            if (paths.Length > 0) Safely(() => SaveCampaign(paths[0]));
+        }, null, SimpleFileBrowser.FileBrowser.PickMode.Files, false, null,
+            "campaign.json", "Сохранить сессию", "Сохранить");
 #endif
     }
 }
