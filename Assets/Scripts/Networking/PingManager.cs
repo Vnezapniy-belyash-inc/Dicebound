@@ -78,7 +78,7 @@ public class PingManager : NetworkBehaviour
         mr.material.SetInt("_SrcBlend", 5);
         mr.material.SetInt("_DstBlend", 10);
         mr.material.SetInt("_ZWrite", 0);
-        mr.material.renderQueue = 3000;
+        mr.material.renderQueue = 3030; // Placement pings remain above the unexplored-map cover.
         mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         mr.receiveShadows = false;
 
@@ -113,7 +113,7 @@ public class PingManager : NetworkBehaviour
         mr.material.SetInt("_SrcBlend", 5);
         mr.material.SetInt("_DstBlend", 10);
         mr.material.SetInt("_ZWrite", 0);
-        mr.material.renderQueue = 3000;
+        mr.material.renderQueue = 3030;
         mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         mr.receiveShadows = false;
 

@@ -81,6 +81,8 @@ public class EffectPaintTool : MonoBehaviour
 
     public void Activate(int textureIndex)
     {
+        SceneEditor.Instance?.Deactivate();
+        FogManager.Instance?.StopManual();
         MeasurementTool.Instance?.Deactivate();
         SelectedTextureIndex = textureIndex;
         IsActive = true;

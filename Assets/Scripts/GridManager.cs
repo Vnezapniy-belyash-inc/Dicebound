@@ -3,8 +3,7 @@ using System.Collections.Generic;
 
 /// <summary>
 /// Менеджер игрового поля: визуальная сетка, привязка позиций к клеткам.
-/// Базовая сетка 100×100, отображаются только клетки в границах карты.
-/// Невидимые стены-коллайдеры следуют за границами карты (MapController.GetMapBounds).
+/// Сетка и стены закреплены на игровом поле и не зависят от изображения карты.
 /// </summary>
 public class GridManager : MonoBehaviour
 {
@@ -17,6 +16,8 @@ public class GridManager : MonoBehaviour
     public Color gridColor = new Color(0.15f, 0.15f, 0.15f, 0.5f); // 50% прозрачности
     [Range(0.01f, 0.2f)] public float lineWidth = 0.04f;
     public float yOffset = 0.005f;
+    [Tooltip("Сколько клеток оставить между краем карты и невидимой стенкой.")]
+    [Min(0)] public int visibleMarginCells = 3;
 
     [Header("Стены")]
     public bool createWalls = true;
@@ -28,6 +29,28 @@ public class GridManager : MonoBehaviour
     public int Width => gridWidth;
     public int Height => gridHeight;
     public float CellSize => cellSize;
+    public Quaternion GridRotation => _mapRotation;
+    public Vector3 GridOrigin => _mapBounds.center;
+
+    public Vector3 WorldToGridCoordinates(Vector3 world)
+    {
+        Vector3 local = WorldToGridLocal(world);
+        return new Vector3(local.x / cellSize + gridWidth * 0.5f, world.y,
+            local.z / cellSize + gridHeight * 0.5f);
+    }
+
+    public Vector3 GridCoordinatesToWorld(Vector3 coordinates) =>
+        GridLocalToWorld(new Vector3((coordinates.x - gridWidth * 0.5f) * cellSize, 0,
+            (coordinates.z - gridHeight * 0.5f) * cellSize), coordinates.y);
+
+    public void RestoreGrid(int width, int height, float size, Vector3 origin, Quaternion rotation)
+    {
+        gridWidth = width; gridHeight = height; cellSize = size;
+        if (_gridLinesParent != null) { _gridLinesParent.SetActive(false); Destroy(_gridLinesParent); }
+        _hLines.Clear(); _vLines.Clear(); _gridLinesParent = null; _gridCreated = false;
+        _hasVisualBounds = false; ClearOccupiedCells();
+        SetBounds(new Bounds(origin, new Vector3(width * size, 0.1f, height * size)), rotation);
+    }
 
     private GameObject _gridLinesParent;
     private GameObject _wallsParent;
@@ -36,19 +59,26 @@ public class GridManager : MonoBehaviour
     private List<GameObject> _hLines = new();
     private List<GameObject> _vLines = new();
     private Bounds _mapBounds;
+    private Bounds _visualMapBounds;
+    private bool _hasVisualBounds;
+    private int _lastVisualMarginCells = -1;
+    private float _visibleMinX, _visibleMaxX, _visibleMinZ, _visibleMaxZ;
     private Quaternion _mapRotation = Quaternion.identity;
     private bool _gridCreated;
+    private Material _gridMaterial;
 
     // Реестр занятых клеток (для предотвращения наложения токенов)
-    private readonly HashSet<Vector2Int> _occupiedCells = new();
+    private readonly TokenCellOccupancy _occupiedCells = new();
 
     void Start()
     {
         gridColor = new Color(0.15f, 0.15f, 0.15f, 0.5f);
-        GenerateFullGrid();
+        SetBounds(new Bounds(transform.position,
+            new Vector3(gridWidth * cellSize, 0.1f, gridHeight * cellSize)),
+            transform.rotation);
     }
 
-    /// <summary>Обновляет границы карты — сетка и невидимые стены следуют за картой.</summary>
+    /// <summary>Устанавливает неподвижные границы игрового поля.</summary>
     public void SetBounds(Bounds mapBounds) => SetBounds(mapBounds, Quaternion.identity);
 
     public void SetBounds(Bounds mapBounds, Quaternion mapRotation)
@@ -62,8 +92,53 @@ public class GridManager : MonoBehaviour
         if (!_gridCreated) GenerateFullGrid();
         _gridLinesParent.transform.position = _mapBounds.center + Vector3.up * yOffset;
         _gridLinesParent.transform.rotation = _mapRotation;
+        if (!_hasVisualBounds) _visualMapBounds = mapBounds;
+        UpdateVisualBounds();
+    }
+
+    /// <summary>Обрезает сетку по карте, а стенки размещает за её краем.</summary>
+    public void SetVisualBounds(Bounds imageBounds)
+    {
+        if (!_gridCreated) return;
+        if (_hasVisualBounds && _lastVisualMarginCells == visibleMarginCells
+            && Approximately(_visualMapBounds.center, imageBounds.center)
+            && Approximately(_visualMapBounds.size, imageBounds.size)) return;
+        _hasVisualBounds = true;
+        _lastVisualMarginCells = visibleMarginCells;
+        _visualMapBounds = imageBounds;
+        UpdateVisualBounds();
+    }
+
+    private void UpdateVisualBounds()
+    {
+        float minX = float.PositiveInfinity, minZ = float.PositiveInfinity;
+        float maxX = float.NegativeInfinity, maxZ = float.NegativeInfinity;
+        for (int x = 0; x < 2; x++)
+        for (int z = 0; z < 2; z++)
+        {
+            Vector3 local = WorldToGridLocal(new Vector3(
+                x == 0 ? _visualMapBounds.min.x : _visualMapBounds.max.x,
+                _mapBounds.center.y,
+                z == 0 ? _visualMapBounds.min.z : _visualMapBounds.max.z));
+            minX = Mathf.Min(minX, local.x); maxX = Mathf.Max(maxX, local.x);
+            minZ = Mathf.Min(minZ, local.z); maxZ = Mathf.Max(maxZ, local.z);
+        }
+        float margin = Mathf.Max(0, visibleMarginCells) * cellSize;
+        float halfW = gridWidth * cellSize * 0.5f;
+        float halfH = gridHeight * cellSize * 0.5f;
+        // Cover complete cells plus the same margin on all four sides, including beyond the logical board.
+        _visibleMinX = Mathf.Floor((minX + halfW) / cellSize) * cellSize - halfW - margin;
+        _visibleMaxX = Mathf.Ceil((maxX + halfW) / cellSize) * cellSize - halfW + margin;
+        _visibleMinZ = Mathf.Floor((minZ + halfH) / cellSize) * cellSize - halfH - margin;
+        _visibleMaxZ = Mathf.Ceil((maxZ + halfH) / cellSize) * cellSize - halfH + margin;
         UpdateVisibleCells();
-        UpdateWalls(mapBounds);
+        float wallMinX = _visibleMinX, wallMaxX = _visibleMaxX;
+        float wallMinZ = _visibleMinZ, wallMaxZ = _visibleMaxZ;
+        Vector3 wallCenter = GridLocalToWorld(new Vector3(
+            (wallMinX + wallMaxX) * 0.5f, 0f,
+            (wallMinZ + wallMaxZ) * 0.5f), 0f);
+        UpdateWalls(new Bounds(wallCenter, new Vector3(
+            wallMaxX - wallMinX, 0.1f, wallMaxZ - wallMinZ)));
     }
 
     // ═══ Создание полной сетки 100×100 (один раз) ═══
@@ -121,7 +196,8 @@ public class GridManager : MonoBehaviour
         go.transform.SetParent(_gridLinesParent.transform, worldPositionStays: false);
 
         LineRenderer lr = go.AddComponent<LineRenderer>();
-        Material mat = new Material(Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color"));
+        Material mat = _gridMaterial;
+        if (mat == null) _gridMaterial = mat = new Material(Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color"));
         mat.SetFloat("_Surface", 1f); // Transparent
         mat.SetFloat("_Blend", 0f);   // Alpha blending
         mat.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
@@ -129,8 +205,8 @@ public class GridManager : MonoBehaviour
         mat.SetInt("_DstBlend", 10);  // OneMinusSrcAlpha
         mat.SetInt("_ZWrite", 0);     // Off
         mat.color = color;
-        mat.renderQueue = 3000;
-        lr.material = mat;
+        mat.renderQueue = 3005; // After the map (3000), before the unexplored cover (3010).
+        lr.sharedMaterial = mat;
         lr.startColor = color;
         lr.endColor = color;
         lr.startWidth = width;
@@ -144,23 +220,25 @@ public class GridManager : MonoBehaviour
         return go;
     }
 
-    // ═══ Показ только клеток в границах карты ═══
+    // ═══ Показ сетки только внутри изображения карты ═══
 
     private float _lastLogTime;
 
     void UpdateVisibleCells()
     {
-        float halfW = gridWidth * cellSize / 2f;
-        float halfH = gridHeight * cellSize / 2f;
-        float mapMinX = -_mapBounds.size.x * 0.5f;
-        float mapMaxX = _mapBounds.size.x * 0.5f;
-        float mapMinZ = -_mapBounds.size.z * 0.5f;
-        float mapMaxZ = _mapBounds.size.z * 0.5f;
+        float mapMinX = _visibleMinX;
+        float mapMaxX = _visibleMaxX;
+        float mapMinZ = _visibleMinZ;
+        float mapMaxZ = _visibleMaxZ;
 
-        for (int z = 0; z <= gridHeight; z++)
+        int horizontalCount = Mathf.RoundToInt((mapMaxZ - mapMinZ) / cellSize) + 1;
+        int verticalCount = Mathf.RoundToInt((mapMaxX - mapMinX) / cellSize) + 1;
+        while (_hLines.Count < horizontalCount) _hLines.Add(CreateGridLine(Vector3.zero, Vector3.zero, gridColor, lineWidth, "H_" + _hLines.Count));
+        while (_vLines.Count < verticalCount) _vLines.Add(CreateGridLine(Vector3.zero, Vector3.zero, gridColor, lineWidth, "V_" + _vLines.Count));
+        for (int z = 0; z < _hLines.Count; z++)
         {
-            float zPos = -halfH + z * cellSize;
-            bool vis = zPos >= mapMinZ && zPos <= mapMaxZ;
+            float zPos = mapMinZ + z * cellSize;
+            bool vis = mapMaxX > mapMinX && z < horizontalCount;
             GameObject line = _hLines[z];
             line.SetActive(vis);
             if (vis)
@@ -172,10 +250,10 @@ public class GridManager : MonoBehaviour
             }
         }
 
-        for (int x = 0; x <= gridWidth; x++)
+        for (int x = 0; x < _vLines.Count; x++)
         {
-            float xPos = -halfW + x * cellSize;
-            bool vis = xPos >= mapMinX && xPos <= mapMaxX;
+            float xPos = mapMinX + x * cellSize;
+            bool vis = mapMaxZ > mapMinZ && x < verticalCount;
             GameObject line = _vLines[x];
             line.SetActive(vis);
             if (vis)
@@ -245,8 +323,8 @@ public class GridManager : MonoBehaviour
         float halfW = size.x / 2f;
         float halfH = size.z / 2f;
         float thickness = Mathf.Max(wallThickness, 2f);
-        float hw = halfW + thickness;
-        float hh = halfH + thickness;
+        float hw = halfW + thickness * 0.5f;
+        float hh = halfH + thickness * 0.5f;
         float hy = wallHeight / 2f;
         float lenX = size.x + thickness * 2f;
         float lenZ = size.z + thickness * 2f;
@@ -311,6 +389,13 @@ public class GridManager : MonoBehaviour
         z = Mathf.Clamp(z, -halfH + cellSize / 2f, halfH - cellSize / 2f);
         return GridLocalToWorld(new Vector3(x, 0, z), position.y);
     }
+    private void OnDestroy()
+    {
+        if (_gridMaterial != null)
+        {
+            if (Application.isPlaying) Destroy(_gridMaterial); else DestroyImmediate(_gridMaterial);
+        }
+    }
 
     public Vector2Int GetGridPosition(Vector3 worldPosition)
     {
@@ -332,6 +417,20 @@ public class GridManager : MonoBehaviour
         float halfH = gridHeight * cellSize / 2f;
         return GridLocalToWorld(new Vector3(-halfW + (col + 0.5f) * cellSize, 0,
             -halfH + (row + 0.5f) * cellSize), y);
+    }
+
+    public Vector3 GetCellCorner(int col, int row, int corner)
+    {
+        return GetTokenFootprintCorner(GetCellCenter(col, row), corner);
+    }
+
+    /// <summary>Cell-sized footprint centred on the displayed token, without snapping its position.</summary>
+    public Vector3 GetTokenFootprintCorner(Vector3 center, int corner)
+    {
+        center.y = 0;
+        return center + _mapRotation * new Vector3(
+            (corner & 1) == 0 ? -cellSize * 0.5f : cellSize * 0.5f, 0,
+            (corner & 2) == 0 ? -cellSize * 0.5f : cellSize * 0.5f);
     }
 
     private Vector3 WorldToGridLocal(Vector3 world) =>
@@ -464,16 +563,24 @@ public class GridManager : MonoBehaviour
 
     // ═══ Занятость клеток ═══
 
-    public bool IsCellOccupied(Vector2Int cell) => _occupiedCells.Contains(cell);
+    public bool IsCellOccupied(Vector2Int cell) => _occupiedCells.IsOccupied(cell.x, cell.y);
 
     public bool TryOccupyCell(Vector2Int cell)
     {
         if (cell.x < 0 || cell.y < 0 || cell.x >= gridWidth || cell.y >= gridHeight)
             return false;
-        return _occupiedCells.Add(cell);
+        return _occupiedCells.TryOccupy(cell.x, cell.y);
     }
 
-    public void ReleaseCell(Vector2Int cell) => _occupiedCells.Remove(cell);
+    /// <summary>Register a confirmed visible token, including an intentional overlap after reveal.</summary>
+    public bool OccupyCell(Vector2Int cell)
+    {
+        if (cell.x < 0 || cell.y < 0 || cell.x >= gridWidth || cell.y >= gridHeight) return false;
+        _occupiedCells.Add(cell.x, cell.y);
+        return true;
+    }
+
+    public void ReleaseCell(Vector2Int cell) => _occupiedCells.Release(cell.x, cell.y);
 
     public void ClearOccupiedCells() => _occupiedCells.Clear();
 

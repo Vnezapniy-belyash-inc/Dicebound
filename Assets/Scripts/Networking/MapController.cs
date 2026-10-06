@@ -28,12 +28,15 @@ public class MapController : NetworkBehaviour
 
     private Material _mapMaterial;
     private Texture2D _currentTexture;
+    private byte[] _currentImageBytes;
+    private Shader _fogShader;
     private Vector3 _baseScale = new Vector3(2f, 1, 2f); // переопределится при загрузке
     private Vector3 _originalPlaneScale; // чистый размер MapPlane до масштабирования
     private bool _isDragging;
     private Vector3 _dragStartPlanePos;
     private Vector3 _dragStartMouseWorld;
     private Camera _cam;
+    private GridManager _gridManager;
     private InputField _scaleInputField;
     private bool _scaleInputReady;
 
@@ -114,17 +117,21 @@ public class MapController : NetworkBehaviour
     {
         if (IsHost)
         {
-            if (GameplayInputGate.AllowsWorldPointerInput)
+            if (GameplayInputGate.AllowsWorldPointerInput && !SceneEditor.IsEditing && !FogManager.IsManualEditing)
                 HandleDrag();
             else
                 _isDragging = false;
 
-            if (GameplayInputGate.AllowsKeyboardHotkeys)
+            if (GameplayInputGate.AllowsKeyboardHotkeys && !SceneEditor.IsEditing && !FogManager.IsManualEditing)
                 HandleRotate();
         }
-        // Сетка и стены обновляются у всех клиентов из синхронизированных bounds карты
-        // (NetworkTransform — позиция/поворот, NetworkVariable — масштаб, MapSync — текстура).
-        RebuildGrid();
+    }
+
+    private void LateUpdate()
+    {
+        if (_gridManager == null) _gridManager = FindAnyObjectByType<GridManager>();
+        if (_gridManager != null && mapPlane != null)
+            _gridManager.SetVisualBounds(GetMapBounds());
     }
 
     // ═══ Загрузка изображения ═══
@@ -158,14 +165,14 @@ public class MapController : NetworkBehaviour
     public void ApplyImage(byte[] pngData)
     {
         if (!IsHost) return;
-        if (pngData == null || pngData.Length == 0 || pngData.Length > MapSync.MaxMapBytes)
+        if (pngData == null || pngData.Length == 0 || pngData.Length > 96 * 1024 * 1024)
         {
-            Debug.LogError("[Map] Image exceeds the 16 MB network limit");
-            DiceUI.Instance?.ShowToolNotice("Карта слишком большая для передачи (максимум 16 МБ).");
+            Debug.LogError("[Map] Source image exceeds 96 MB");
+            DiceUI.Instance?.ShowToolNotice("Исходная карта превышает 96 МБ.");
             return;
         }
         if (!ApplyImageInternal(pngData)) return;
-        MapSync.Instance?.SendMapToAll(pngData);
+        MapSync.Instance?.SendMapToAll(_currentImageBytes);
     }
 
     /// <summary>Клиент получает картинку от хоста.</summary>
@@ -177,7 +184,7 @@ public class MapController : NetworkBehaviour
     private bool ApplyImageInternal(byte[] pngData)
     {
         if (pngData == null || pngData.Length == 0) return false;
-        Texture2D tex = new Texture2D(2, 2);
+        Texture2D tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
         if (!tex.LoadImage(pngData))
         {
             Debug.LogError("[Map] Failed to load image");
@@ -192,8 +199,30 @@ public class MapController : NetworkBehaviour
             return false;
         }
 
+        bool resized = Mathf.Max(tex.width, tex.height) > MapTextureUtility.MaxDimension;
+        if (resized)
+        {
+            var smaller = MapTextureUtility.Resize(tex);
+            Destroy(tex); tex = smaller;
+        }
+        byte[] stored = resized ? tex.EncodeToPNG() : pngData;
+        while (stored.Length > MapSync.MaxMapBytes)
+        {
+            byte[] jpeg = MapTextureUtility.TryJpegWithinBudget(tex, MapSync.MaxMapBytes);
+            if (jpeg != null)
+            {
+                if (!tex.LoadImage(jpeg)) { Destroy(tex); return false; }
+                stored = jpeg; break;
+            }
+            int next = Mathf.Max(tex.width, tex.height) / 2;
+            if (next < 64) { Destroy(tex); DiceUI.Instance?.ShowToolNotice("Не удалось подготовить карту для передачи."); return false; }
+            var smaller = MapTextureUtility.ResizeTo(tex, next); Destroy(tex); tex = smaller;
+            stored = tex.EncodeToPNG();
+        }
+
         if (_currentTexture != null) Destroy(_currentTexture);
         _currentTexture = tex;
+        _currentImageBytes = stored;
         ApplyTextureToMapMaterial(tex);
 
         // Скрываем GameBoard (теперь карта на MapPlane)
@@ -201,7 +230,6 @@ public class MapController : NetworkBehaviour
 
         FitPlaneToTexture();
         ApplyScale(_netScale.Value);
-        RebuildGrid();
 
         Debug.Log($"[Map] Loaded: {tex.width}x{tex.height}");
         return true;
@@ -231,7 +259,6 @@ public class MapController : NetworkBehaviour
     {
         if (!IsHost) return;
         transform.Rotate(Vector3.up, 90f);
-        RebuildGrid();
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
@@ -249,7 +276,6 @@ public class MapController : NetworkBehaviour
         // Сохраняем пропорции: умножаем baseScale на scale
         mapPlane.transform.localScale = new Vector3(
             _baseScale.x * scale, _baseScale.y, _baseScale.z * scale);
-        RebuildGrid();
     }
 
     // ═══ Drag (средняя кнопка) ═══
@@ -275,7 +301,6 @@ public class MapController : NetworkBehaviour
             Vector3 currentMouse = GetMouseWorldPos(m);
             Vector3 delta = currentMouse - _dragStartMouseWorld;
             transform.position = _dragStartPlanePos + new Vector3(delta.x, 0, delta.z);
-            RebuildGrid();
         }
     }
 
@@ -307,7 +332,6 @@ public class MapController : NetworkBehaviour
         if (!IsHost || mapPlane == null) return;
         transform.position = Vector3.zero;
         transform.rotation = Quaternion.identity;
-        RebuildGrid();
     }
 
     // ═══ Утилиты ═══
@@ -385,23 +409,52 @@ public class MapController : NetworkBehaviour
         if (mapPlane == null)
             return new Bounds(Vector3.zero, Vector3.one * 10);
 
+        var renderer = mapPlane.GetComponent<Renderer>();
+        if (renderer != null) return renderer.bounds;
+
         // localScale уже учитывает _baseScale × scale, не умножаем повторно
         float w = 10f * mapPlane.transform.localScale.x;
         float h = 10f * mapPlane.transform.localScale.z;
         return new Bounds(mapPlane.transform.position, new Vector3(w, 0.1f, h));
     }
 
-    private void RebuildGrid()
-    {
-        var gm = FindAnyObjectByType<GridManager>();
-        if (gm != null)
-            gm.SetBounds(GetMapBounds(), mapPlane != null ? mapPlane.transform.rotation : Quaternion.identity);
-    }
-
     public byte[] GetCurrentPngData()
     {
-        if (_currentTexture == null) return null;
-        return _currentTexture.EncodeToPNG();
+        return _currentImageBytes;
+    }
+
+    public bool HasImage => _currentTexture != null;
+    public void ApplyFog(Texture2D mask, bool enabled, GridManager grid)
+    {
+        if (_mapMaterial == null) return;
+        var shader = _fogShader != null ? _fogShader : _fogShader = Resources.Load<Shader>("DiceboundFog");
+        if (shader == null) return;
+        if (_mapMaterial.shader != shader)
+        {
+            _mapMaterial.shader = shader;
+            _mapMaterial.SetTexture("_BaseMap", _currentTexture);
+            _mapMaterial.SetColor("_BaseColor", _currentTexture != null ? Color.white : Color.clear);
+        }
+        _mapMaterial.SetTexture("_FogMask", mask);
+        _mapMaterial.SetFloat("_FogEnabled", enabled ? 1 : 0);
+        _mapMaterial.SetVector("_GridSize", new Vector4(grid.Width * grid.CellSize, grid.Height * grid.CellSize, 0, 0));
+        _mapMaterial.SetMatrix("_GridWorldToLocal", Matrix4x4.TRS(grid.GridOrigin, grid.GridRotation, Vector3.one).inverse);
+    }
+
+    public void RestoreSceneMap(byte[] data, Vector3 position, Vector3 rotation, float scale)
+    {
+        if (!IsHost) return;
+        transform.SetPositionAndRotation(position, Quaternion.Euler(rotation));
+        _netScale.Value = scale;
+        ApplyScale(scale);
+        if (data != null && data.Length > 0) ApplyImage(data);
+        else
+        {
+            if (_currentTexture != null) Destroy(_currentTexture);
+            _currentTexture = null;
+            _currentImageBytes = null;
+            if (_mapMaterial != null) _mapMaterial.color = new Color(1, 1, 1, 0);
+        }
     }
 
     private new void OnDestroy()

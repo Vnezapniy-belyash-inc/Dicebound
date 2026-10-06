@@ -41,7 +41,7 @@ public class DiceDragHandler : MonoBehaviour
     private readonly Dictionary<IDice, Vector3> _dragStartPositions = new();
     private readonly Dictionary<IDice, Vector3> _dragPreviewPositions = new();
     private readonly Dictionary<NetworkDice, int> _diceDragGestures = new();
-    private int _nextDragGesture;
+    private static int _nextDragGesture;
     private float _nextDiceMoveSend;
     private bool _isDragging;
     private Vector3 _dragOffset;
@@ -68,7 +68,13 @@ public class DiceDragHandler : MonoBehaviour
     {
         Mouse m = Mouse.current;
         Keyboard k = Keyboard.current;
-        if (m == null || _cam == null) return;
+        if (m == null || _cam == null)
+        {
+            CancelActiveDrag();
+            return;
+        }
+
+        RemoveRejectedDrags();
 
         // Блокируем драг только тому, кто сам использует инструмент
         if (MeasurementTool.Instance != null && MeasurementTool.Instance.IsLocalActive)
@@ -84,7 +90,7 @@ public class DiceDragHandler : MonoBehaviour
             return;
         }
 
-        if (!GameplayInputGate.AllowsWorldPointerInput)
+        if (!GameplayInputGate.AllowsWorldPointerInput || SceneEditor.IsEditing || FogManager.IsManualEditing)
         {
             CancelActiveDrag();
             _areaSelectPending = false;
@@ -119,9 +125,16 @@ public class DiceDragHandler : MonoBehaviour
             if (_isAreaSelecting)
                 FinishAreaSelect();
             else if (_isDragging)
+            {
+                // Include pointer movement delivered in the same input frame as button release.
+                DragAll(m, m.delta.ReadValue().sqrMagnitude > 0f);
                 ReleaseAll();
+            }
             else if (_draggedToken != null)
+            {
+                DragToken(m);
                 ReleaseToken();
+            }
             else if (_areaSelectPending)
                 ClearSelection();
         }
@@ -135,7 +148,7 @@ public class DiceDragHandler : MonoBehaviour
     {
         Ray ray = _cam.ScreenPointToRay(m.position.ReadValue());
 
-        if (Physics.Raycast(ray, out RaycastHit hit, Mathf.Infinity, InteractionRaycastMask))
+        if (TryGetPointerHit(ray, out RaycastHit hit))
         {
             // Ищем IDice — сначала Dice, потом NetworkDice
             IDice dice = hit.collider.GetComponentInParent<Dice>();
@@ -197,7 +210,7 @@ public class DiceDragHandler : MonoBehaviour
         {
             foreach (var d in DiceManager.Instance.ActiveDice)
             {
-                if (d == null) continue;
+                if (!IsAlive(d)) continue;
                 Vector3 sp = _cam.WorldToScreenPoint(d.transform.position);
                 if (sp.z > 0 && screenRect.Contains(new Vector2(sp.x, sp.y)))
                     diceToSelect.Add(d);
@@ -207,7 +220,7 @@ public class DiceDragHandler : MonoBehaviour
         // Сетевые дайсы
         foreach (var nd in FindObjectsByType<NetworkDice>())
         {
-            Vector3 sp = _cam.WorldToScreenPoint(nd.transform.position);
+            Vector3 sp = _cam.WorldToScreenPoint(nd.DisplayPosition);
             if (sp.z > 0 && screenRect.Contains(new Vector2(sp.x, sp.y)))
                 diceToSelect.Add(nd);
         }
@@ -292,6 +305,7 @@ public class DiceDragHandler : MonoBehaviour
     {
         if (dice == null) return;
         _selected.Remove(dice);
+        if (dice is UnityEngine.Object obj && obj == null) return;
         if (dice.Rigidbody != null && dice is not NetworkDice)
             dice.Rigidbody.isKinematic = false;
         var hl = dice.gameObject.GetComponent<DiceHighlight>();
@@ -303,7 +317,7 @@ public class DiceDragHandler : MonoBehaviour
         _areaSelectPending = false;
         foreach (var d in _selected)
         {
-            if (d != null && d.Rigidbody != null)
+            if (IsAlive(d) && d.Rigidbody != null)
             {
                 if (d is not NetworkDice) d.Rigidbody.isKinematic = false;
                 var hl = d.gameObject.GetComponent<DiceHighlight>();
@@ -329,20 +343,29 @@ public class DiceDragHandler : MonoBehaviour
 
         foreach (var d in _selected)
         {
-            if (d != null)
+            if (IsAlive(d))
             {
                 if (d is NetworkDice netDice)
                 {
                     int gesture = ++_nextDragGesture;
+                    if (!netDice.IsReady || !netDice.BeginDrag(gesture)) continue;
                     _diceDragGestures[netDice] = gesture;
-                    netDice.BeginDrag(gesture);
                 }
-                _dragStartPositions[d] = d.transform.position;
-                Vector3 pos = d.transform.position;
+                _dragStartPositions[d] = GetDisplayPosition(d);
+                Vector3 pos = GetDisplayPosition(d);
                 pos.y = dragHeight;
-                d.transform.position = pos;
                 _dragPreviewPositions[d] = pos;
+                SetDisplayPosition(d, pos);
             }
+        }
+
+        // Busy/denied dice are excluded; the accepted part of a group continues dragging.
+        for (int i = _selected.Count - 1; i >= 0; i--)
+            if (!_dragPreviewPositions.ContainsKey(_selected[i])) RemoveFromSelection(_selected[i]);
+        if (_selected.Count == 0)
+        {
+            _isDragging = false;
+            return;
         }
 
         Plane p = new Plane(Vector3.up, new Vector3(0, dragHeight, 0));
@@ -358,7 +381,7 @@ public class DiceDragHandler : MonoBehaviour
         }
     }
 
-    void DragAll(Mouse m)
+    void DragAll(Mouse m, bool updateVelocity = true)
     {
         if (_selected.Count == 0) return;
 
@@ -373,15 +396,15 @@ public class DiceDragHandler : MonoBehaviour
 
         foreach (var d in _selected)
         {
-            if (d != null)
+            if (IsAlive(d))
             {
                 if (d is not NetworkDice && d.Rigidbody != null)
                     d.Rigidbody.isKinematic = true;
                 Vector3 pos = _dragPreviewPositions.TryGetValue(d, out Vector3 preview)
-                    ? preview + delta : d.transform.position + delta;
+                    ? preview + delta : GetDisplayPosition(d) + delta;
                 pos.y = dragHeight;
                 _dragPreviewPositions[d] = pos;
-                d.transform.position = pos;
+                SetDisplayPosition(d, pos);
             }
         }
 
@@ -392,17 +415,17 @@ public class DiceDragHandler : MonoBehaviour
             float t = Mathf.Clamp01((shakeSpeed - shakeThreshold) / shakeThreshold) * clusterStrength;
             foreach (var d in _selected)
             {
-                if (d != null)
+                if (IsAlive(d))
                 {
                     Vector3 pos = Vector3.Lerp(_dragPreviewPositions[d], currentMouseWorld, t);
                     pos.y = dragHeight;
                     _dragPreviewPositions[d] = pos;
-                    d.transform.position = pos;
+                    SetDisplayPosition(d, pos);
                 }
             }
             SeparateDice();
             foreach (var d in _selected)
-                if (d != null) _dragPreviewPositions[d] = d.transform.position;
+                if (IsAlive(d)) _dragPreviewPositions[d] = GetDisplayPosition(d);
         }
 
         if (Time.unscaledTime >= _nextDiceMoveSend)
@@ -413,7 +436,7 @@ public class DiceDragHandler : MonoBehaviour
             _nextDiceMoveSend = Time.unscaledTime + 0.05f;
         }
 
-        if (Time.deltaTime > 0.0001f)
+        if (updateVelocity && Time.deltaTime > 0.0001f)
             _velocity = (currentMouseWorld - _prevMouseWorldPos) / Time.deltaTime;
 
         _prevMouseWorldPos = currentMouseWorld;
@@ -433,7 +456,7 @@ public class DiceDragHandler : MonoBehaviour
 
         foreach (var d in _selected)
         {
-            if (d == null) continue;
+            if (!IsAlive(d)) continue;
             if (d is NetworkDice netDice)
             {
                 if (_diceDragGestures.TryGetValue(netDice, out int gesture))
@@ -467,9 +490,9 @@ public class DiceDragHandler : MonoBehaviour
         int count = 0;
         foreach (var d in _selected)
         {
-            if (d != null)
+            if (IsAlive(d))
             {
-                sum += d.transform.position;
+                sum += GetDisplayPosition(d);
                 count++;
             }
         }
@@ -489,21 +512,21 @@ public class DiceDragHandler : MonoBehaviour
         const float minDist = 1.05f;
         for (int i = 0; i < _selected.Count; i++)
         {
-            if (_selected[i] == null)
+            if (!IsAlive(_selected[i]))
                 continue;
             for (int j = i + 1; j < _selected.Count; j++)
             {
-                if (_selected[j] == null)
+                if (!IsAlive(_selected[j]))
                     continue;
-                Vector3 a = _selected[i].transform.position;
-                Vector3 b = _selected[j].transform.position;
+                Vector3 a = GetDisplayPosition(_selected[i]);
+                Vector3 b = GetDisplayPosition(_selected[j]);
                 Vector3 dir = b - a;
                 float dist = dir.magnitude;
                 if (dist < minDist && dist > 0.001f)
                 {
                     Vector3 push = dir.normalized * (minDist - dist) * 0.5f;
-                    _selected[i].transform.position -= push;
-                    _selected[j].transform.position += push;
+                    SetDisplayPosition(_selected[i], a - push);
+                    SetDisplayPosition(_selected[j], b + push);
                 }
             }
         }
@@ -521,19 +544,19 @@ public class DiceDragHandler : MonoBehaviour
     void StartDraggingToken(TokenController token, Ray ray)
     {
         ClearSelection();
-        _tokenDragSequence++;
-        token.BeginDrag(_tokenDragSequence);
+        _tokenDragSequence = ++_nextDragGesture;
+        if (!token.BeginDrag(_tokenDragSequence)) return;
         _draggedToken = token;
-        _tokenStartPos = token.transform.position;
+        _tokenStartPos = token.DisplayPosition;
         _tokenPendingPos = _tokenStartPos;
         _tokenDragOffset = Vector3.zero;
         _nextTokenMoveSend = 0f;
 
-        Plane p = new Plane(Vector3.up, new Vector3(0, token.transform.position.y, 0));
+        Plane p = new Plane(Vector3.up, new Vector3(0, _tokenStartPos.y, 0));
         if (p.Raycast(ray, out float dist))
         {
             Vector3 hitPoint = ray.GetPoint(dist);
-            _tokenDragOffset = token.transform.position - hitPoint;
+            _tokenDragOffset = _tokenStartPos - hitPoint;
         }
     }
 
@@ -547,7 +570,7 @@ public class DiceDragHandler : MonoBehaviour
             Vector3 pos = ray.GetPoint(dist) + _tokenDragOffset;
             pos.y = _tokenStartPos.y;
             _tokenPendingPos = pos;
-            _draggedToken.transform.position = pos;
+            _draggedToken.SetDragPreview(_tokenDragSequence, pos);
             if (Time.unscaledTime >= _nextTokenMoveSend)
             {
                 _draggedToken.MoveDrag(_tokenDragSequence, pos);
@@ -569,7 +592,8 @@ public class DiceDragHandler : MonoBehaviour
     {
         if (_draggedToken != null)
         {
-            _draggedToken.EndDrag(_tokenDragSequence, _tokenStartPos);
+            _draggedToken.SetDragPreview(_tokenDragSequence, _tokenStartPos);
+            _draggedToken.CancelDrag(_tokenDragSequence, _tokenStartPos);
             _tokenDragSequence++;
             _draggedToken = null;
         }
@@ -577,16 +601,94 @@ public class DiceDragHandler : MonoBehaviour
         {
             foreach (var pair in _dragStartPositions)
             {
-                if (pair.Key == null) continue;
+                if (!IsAlive(pair.Key)) continue;
                 if (pair.Key is NetworkDice dice &&
                     _diceDragGestures.TryGetValue(dice, out int gesture))
+                {
+                    dice.SetDragPreview(gesture, pair.Value);
                     dice.CancelDrag(gesture, pair.Value);
-                pair.Key.transform.position = pair.Value;
+                }
+                else if (pair.Key is not NetworkDice)
+                    pair.Key.transform.position = pair.Value;
             }
         }
         if (_selected.Count > 0) ClearSelection();
         _dragStartPositions.Clear();
         _areaSelectPending = false;
         _isAreaSelecting = false;
+    }
+
+    private Vector3 GetDisplayPosition(IDice dice) =>
+        dice is NetworkDice networkDice ? networkDice.DisplayPosition : dice.transform.position;
+
+    private bool TryGetPointerHit(Ray ray, out RaycastHit hit)
+    {
+        Physics.SyncTransforms();
+        hit = default;
+        float nearest = float.PositiveInfinity;
+        bool found = false;
+        foreach (var candidate in Physics.RaycastAll(ray, Mathf.Infinity, InteractionRaycastMask))
+        {
+            var preview = candidate.collider.GetComponentInParent<NetworkDragPreview>();
+            if (preview != null && preview.IsActive) continue; // Its hidden server root is elsewhere.
+            if (candidate.distance >= nearest) continue;
+            hit = candidate;
+            nearest = candidate.distance;
+            found = true;
+        }
+        foreach (var preview in FindObjectsByType<NetworkDragPreview>(FindObjectsInactive.Exclude))
+        {
+            if (!preview.Raycast(ray, InteractionRaycastMask, out RaycastHit candidate) || candidate.distance >= nearest) continue;
+            hit = candidate;
+            nearest = candidate.distance;
+            found = true;
+        }
+        return found;
+    }
+
+    private void SetDisplayPosition(IDice dice, Vector3 position)
+    {
+        if (dice is NetworkDice networkDice)
+        {
+            if (_diceDragGestures.TryGetValue(networkDice, out int gesture))
+                networkDice.SetDragPreview(gesture, position);
+        }
+        else dice.transform.position = position;
+    }
+
+    private void RemoveRejectedDrags()
+    {
+        if (_draggedToken != null && !_draggedToken.IsLocalDragActive(_tokenDragSequence))
+        {
+            _draggedToken = null;
+            DiceUI.Instance?.ShowToolNotice("Токен занят другим участником или захват завершён.");
+        }
+        Vector3 previousCenter = GetDragSelectionCenter();
+        bool removed = false;
+        for (int i = _selected.Count - 1; i >= 0; i--)
+        {
+            var dice = _selected[i];
+            bool destroyed = dice is UnityEngine.Object obj && obj == null;
+            if (!destroyed && (!_isDragging || dice is not NetworkDice nd ||
+                (_diceDragGestures.TryGetValue(nd, out int gesture) && nd.IsLocalDragActive(gesture)))) continue;
+            _dragStartPositions.Remove(dice);
+            _dragPreviewPositions.Remove(dice);
+            if (dice is NetworkDice networkDice) _diceDragGestures.Remove(networkDice);
+            if (destroyed) _selected.RemoveAt(i);
+            else RemoveFromSelection(dice);
+            removed = true;
+        }
+        if (!removed) return;
+        if (_selected.Count == 0) _isDragging = false;
+        else _dragOffset += GetDragSelectionCenter() - previousCenter;
+        DiceUI.Instance?.ShowToolNotice("Часть кубиков занята другим участником или захват завершён.");
+    }
+
+    private void OnDisable() => CancelActiveDrag();
+    private static bool IsAlive(IDice dice) => dice != null &&
+        (dice is not UnityEngine.Object obj || obj != null);
+    private void OnApplicationFocus(bool focused)
+    {
+        if (!focused) CancelActiveDrag();
     }
 }

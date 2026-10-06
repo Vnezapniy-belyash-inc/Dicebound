@@ -1,0 +1,6 @@
+{
+  "name": "DiceboundDragTests",
+  "references": ["Unity.Netcode.Runtime", "Unity.Networking.Transport", "Unity.Collections"],
+  "includePlatforms": ["Editor"],
+  "optionalUnityReferences": ["TestAssemblies"]
+}

@@ -93,6 +93,8 @@ public class MeasurementTool : NetworkBehaviour
 
     public void Activate(int mode)
     {
+        SceneEditor.Instance?.Deactivate();
+        FogManager.Instance?.StopManual();
         EffectPaintTool.Instance?.Deactivate();
         _pendingDeactivate = false;
         EnsureSpawned();

@@ -105,8 +105,9 @@ public static class NetworkPermissions
     public static bool CanUploadTokenPortrait(ulong senderId, TokenController token)
     {
         if (token == null || !token.IsSpawned) return false;
+        if (token.IsHidden && !IsHostClient(senderId)) return false;
 
-        if (senderId == token.SpawnerClientId) return true;
+        if (senderId == token.ControllerClientId) return true;
 
         return IsHostClient(senderId);
     }

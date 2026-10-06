@@ -30,12 +30,16 @@ public class PlayerRegistry : MonoBehaviour
     };
 
     public static PlayerRegistry Instance { get; private set; }
+    public bool IsRegisteredPlayer(ulong clientId) => _activePlayers.ContainsKey(clientId);
 
     private readonly Dictionary<ulong, PlayerEntry> _activePlayers = new();
     private readonly Dictionary<string, Color> _nicknameColors = new();
     private readonly Dictionary<string, ulong> _disconnectedByNickname = new();
     private int _nextColorIndex;
     private bool _handlersRegistered;
+    private bool _clientHandlersRegistered;
+    private NetworkManager _network;
+    private CustomMessagingManager _messaging;
 
     private struct PlayerEntry
     {
@@ -57,21 +61,71 @@ public class PlayerRegistry : MonoBehaviour
 
     private void Start()
     {
-        if (NetworkManager.Singleton != null)
+        if (Instance != this) return;
+        BindNetwork();
+        TryRegisterClientHandlers();
+    }
+
+    private void Update()
+    {
+        if (Instance != this) return;
+        BindNetwork();
+        if (_network == null || !_network.IsListening) return;
+        if (_network.IsServer) RegisterServerHandlers();
+        TryRegisterClientHandlers();
+    }
+
+    private void BindNetwork()
+    {
+        var manager = NetworkManager.Singleton;
+        if (_network == manager) return;
+        UnregisterHandlers();
+        UnsubscribeNetwork();
+        _network = manager;
+        if (_network == null) return;
+        _network.OnServerStarted += OnServerStarted;
+        _network.OnServerStopped += OnNetworkStopped;
+        _network.OnClientStopped += OnNetworkStopped;
+    }
+
+    private void UnsubscribeNetwork()
+    {
+        if (_network == null) return;
+        _network.OnServerStarted -= OnServerStarted;
+        _network.OnServerStopped -= OnNetworkStopped;
+        _network.OnClientStopped -= OnNetworkStopped;
+    }
+
+    private CustomMessagingManager CurrentMessaging()
+    {
+        BindNetwork();
+        var current = _network?.CustomMessagingManager;
+        if (!ReferenceEquals(_messaging, current))
         {
-            NetworkManager.Singleton.OnServerStarted += OnServerStarted;
-            TryRegisterClientHandlers();
+            UnregisterHandlers();
+            _messaging = current;
         }
+        return _messaging;
+    }
+
+    private void OnNetworkStopped(bool wasHost)
+    {
+        StopAllCoroutines();
+        UnregisterHandlers();
+        _activePlayers.Clear();
+        _disconnectedByNickname.Clear();
+        _nicknameColors.Clear();
+        _nextColorIndex = 0;
+        PlayerColors.Reset();
     }
 
     private void OnDestroy()
     {
-        if (NetworkManager.Singleton != null)
-            NetworkManager.Singleton.OnServerStarted -= OnServerStarted;
-
+        // A rejected duplicate never owned these callbacks or message handlers.
+        if (Instance != this) return;
+        UnsubscribeNetwork();
         UnregisterHandlers();
-        if (Instance == this)
-            Instance = null;
+        Instance = null;
     }
 
     private void OnServerStarted()
@@ -168,10 +222,8 @@ public class PlayerRegistry : MonoBehaviour
 
     private void RegisterServerHandlers()
     {
-        if (_handlersRegistered || NetworkManager.Singleton == null) return;
-
-        var cmm = NetworkManager.Singleton.CustomMessagingManager;
-        if (cmm == null) return;
+        var cmm = CurrentMessaging();
+        if (_handlersRegistered || cmm == null || _network.IsServer != true) return;
 
         cmm.RegisterNamedMessageHandler(MSG_REGISTER, OnRegisterRequest);
         _handlersRegistered = true;
@@ -179,32 +231,29 @@ public class PlayerRegistry : MonoBehaviour
 
     private void TryRegisterClientHandlers()
     {
-        if (NetworkManager.Singleton == null) return;
-
-        var cmm = NetworkManager.Singleton.CustomMessagingManager;
-        if (cmm == null) return;
-
-        cmm.UnregisterNamedMessageHandler(MSG_SYNC);
-        cmm.UnregisterNamedMessageHandler(MSG_SYNC_ALL);
-        cmm.UnregisterNamedMessageHandler(MSG_REMOVE);
+        var cmm = CurrentMessaging();
+        if (_clientHandlersRegistered || cmm == null) return;
 
         cmm.RegisterNamedMessageHandler(MSG_SYNC, OnPlayerSync);
         cmm.RegisterNamedMessageHandler(MSG_SYNC_ALL, OnPlayerSyncAll);
         cmm.RegisterNamedMessageHandler(MSG_REMOVE, OnPlayerRemove);
+        _clientHandlersRegistered = true;
     }
 
     private void UnregisterHandlers()
     {
-        if (NetworkManager.Singleton?.CustomMessagingManager == null) return;
-
-        var cmm = NetworkManager.Singleton.CustomMessagingManager;
-        if (_handlersRegistered)
+        var cmm = _messaging;
+        if (cmm != null && _handlersRegistered)
             cmm.UnregisterNamedMessageHandler(MSG_REGISTER);
-
-        cmm.UnregisterNamedMessageHandler(MSG_SYNC);
-        cmm.UnregisterNamedMessageHandler(MSG_SYNC_ALL);
-        cmm.UnregisterNamedMessageHandler(MSG_REMOVE);
+        if (cmm != null && _clientHandlersRegistered)
+        {
+            cmm.UnregisterNamedMessageHandler(MSG_SYNC);
+            cmm.UnregisterNamedMessageHandler(MSG_SYNC_ALL);
+            cmm.UnregisterNamedMessageHandler(MSG_REMOVE);
+        }
         _handlersRegistered = false;
+        _clientHandlersRegistered = false;
+        _messaging = null;
     }
 
     private void OnRegisterRequest(ulong senderId, FastBufferReader reader)

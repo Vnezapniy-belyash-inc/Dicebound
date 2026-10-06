@@ -24,6 +24,7 @@ public class GameNetworkManager : MonoBehaviour
 
     public bool StartHost()
     {
+        ConfigureTransport();
         ShutdownRequested = false;
         bool started = _networkManager != null && _networkManager.StartHost();
         if (started) LastStartedAsHost = true;
@@ -32,6 +33,7 @@ public class GameNetworkManager : MonoBehaviour
 
     public bool StartClient()
     {
+        ConfigureTransport();
         ShutdownRequested = false;
         bool started = _networkManager != null && _networkManager.StartClient();
         if (started) LastStartedAsHost = false;
@@ -75,5 +77,13 @@ public class GameNetworkManager : MonoBehaviour
         var transport = _networkManager.GetComponent<UnityTransport>();
         if (transport != null)
             transport.SetConnectionData("127.0.0.1", 7777);
+    }
+    private void ConfigureTransport()
+    {
+        var transport = _networkManager != null ? _networkManager.GetComponent<UnityTransport>() : null;
+        if (transport == null) return;
+        transport.MaxPacketQueueSize = System.Math.Max(transport.MaxPacketQueueSize, 4096);
+        NetworkTransferBudget.Reset();
+        Application.runInBackground = true;
     }
 }

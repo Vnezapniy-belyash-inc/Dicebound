@@ -12,6 +12,7 @@ public static class PlayerOwnershipReassigner
 
         var nm = NetworkManager.Singleton;
         if (nm == null || !nm.IsServer) return 0;
+        TokenManager.Instance?.ReassignHeroRecord(oldClientId, newClientId);
 
         int count = 0;
         foreach (var netObj in nm.SpawnManager.SpawnedObjectsList)

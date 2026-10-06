@@ -12,7 +12,7 @@ using UnityEngine;
 [RequireComponent(typeof(MeshFilter))]
 [RequireComponent(typeof(MeshRenderer))]
 [RequireComponent(typeof(MeshCollider))]
-public class NetworkDice : NetworkBehaviour, IDice
+public class NetworkDice : NetworkDraggable, IDice
 {
     // IDice
     public Rigidbody Rigidbody => _rb;
@@ -59,9 +59,6 @@ public class NetworkDice : NetworkBehaviour, IDice
     private float _settleTimer;
     private bool _didInit;
     public bool IsReady => IsSpawned && _didInit;
-    private ulong _dragController = ulong.MaxValue;
-    private int _dragGesture;
-    private float _dragLeaseUntil;
     private ulong _lastThrower;
 
     public void StartRoll()
@@ -116,6 +113,7 @@ public class NetworkDice : NetworkBehaviour, IDice
 
     public override void OnNetworkSpawn()
     {
+        base.OnNetworkSpawn();
         _rb = GetComponent<Rigidbody>();
         UpdatePhysicsAuthority();
 
@@ -266,103 +264,42 @@ public class NetworkDice : NetworkBehaviour, IDice
         }
     }
 
-    public void BeginDrag(int gesture)
-    {
-        if (!IsSpawned) return;
-        if (IsServer) BeginDragOnServer(NetworkManager.LocalClientId, gesture);
-        else BeginDragServerRpc(gesture);
-    }
+    protected override bool CanStartServerDrag => _didInit && _rb != null;
 
-    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    private void BeginDragServerRpc(int gesture, RpcParams rpcParams = default) =>
-        BeginDragOnServer(rpcParams.Receive.SenderClientId, gesture);
-
-    private void BeginDragOnServer(ulong clientId, int gesture)
+    protected override void OnServerDragStarted()
     {
-        if (_dragController != ulong.MaxValue && _dragController != clientId
-            && Time.unscaledTime < _dragLeaseUntil) return;
-        _dragController = clientId;
-        _dragGesture = gesture;
-        _dragLeaseUntil = Time.unscaledTime + 2f;
         IsRolling = false;
-        _rb.linearVelocity = Vector3.zero;
-        _rb.angularVelocity = Vector3.zero;
+        if (!_rb.isKinematic)
+        {
+            _rb.linearVelocity = Vector3.zero;
+            _rb.angularVelocity = Vector3.zero;
+        }
         _rb.isKinematic = true;
     }
 
-    public void MoveDrag(int gesture, Vector3 position)
+    protected override void OnServerDragFinished(Vector3 velocity, Vector3 spin, bool cancel)
     {
-        if (!IsSpawned) return;
-        if (IsServer) MoveDragOnServer(NetworkManager.LocalClientId, gesture, position);
-        else MoveDragServerRpc(gesture, position);
-    }
-
-    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone,
-        Delivery = RpcDelivery.Unreliable)]
-    private void MoveDragServerRpc(int gesture, Vector3 position, RpcParams rpcParams = default) =>
-        MoveDragOnServer(rpcParams.Receive.SenderClientId, gesture, position);
-
-    private void MoveDragOnServer(ulong clientId, int gesture, Vector3 position)
-    {
-        if (!CanControlDrag(clientId, gesture) || !ValidDragPosition(position)) return;
-        _dragLeaseUntil = Time.unscaledTime + 2f;
-        transform.position = position;
-    }
-
-    public void ThrowDrag(int gesture, Vector3 position, Vector3 velocity, Vector3 spin)
-    {
-        if (!IsSpawned) return;
-        if (IsServer) ThrowDragOnServer(NetworkManager.LocalClientId, gesture, position, velocity, spin);
-        else ThrowDragServerRpc(gesture, position, velocity, spin);
-    }
-
-    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    private void ThrowDragServerRpc(int gesture, Vector3 position, Vector3 velocity,
-        Vector3 spin, RpcParams rpcParams = default) =>
-        ThrowDragOnServer(rpcParams.Receive.SenderClientId, gesture, position, velocity, spin);
-
-    private void ThrowDragOnServer(ulong clientId, int gesture, Vector3 position,
-        Vector3 velocity, Vector3 spin)
-    {
-        if (!CanControlDrag(clientId, gesture) || !ValidDragPosition(position)
-            || !ValidDragPosition(velocity) || !ValidDragPosition(spin)) return;
-        _dragController = ulong.MaxValue;
-        _lastThrower = clientId;
-        transform.position = position;
-        StartRoll();
         _rb.isKinematic = false;
+        if (cancel)
+        {
+            IsRolling = false;
+            _rb.linearVelocity = Vector3.zero;
+            _rb.angularVelocity = Vector3.zero;
+            return;
+        }
+        _lastThrower = FinishingDragClient;
+        StartRoll();
         _rb.linearVelocity = Vector3.ClampMagnitude(velocity, 30f);
         _rb.angularVelocity = Vector3.ClampMagnitude(spin, 20f);
     }
 
-    public void CancelDrag(int gesture, Vector3 position)
+    protected override void OnServerDragAborted()
     {
-        if (!IsSpawned) return;
-        if (IsServer) CancelDragOnServer(NetworkManager.LocalClientId, gesture, position);
-        else CancelDragServerRpc(gesture, position);
-    }
-
-    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    private void CancelDragServerRpc(int gesture, Vector3 position, RpcParams rpcParams = default) =>
-        CancelDragOnServer(rpcParams.Receive.SenderClientId, gesture, position);
-
-    private void CancelDragOnServer(ulong clientId, int gesture, Vector3 position)
-    {
-        if (!CanControlDrag(clientId, gesture) || !ValidDragPosition(position)) return;
-        _dragController = ulong.MaxValue;
-        transform.position = position;
-        IsRolling = false;
         _rb.isKinematic = false;
+        IsRolling = false;
+        _rb.linearVelocity = Vector3.zero;
+        _rb.angularVelocity = Vector3.zero;
     }
-
-    private bool CanControlDrag(ulong clientId, int gesture) =>
-        IsServer && _dragController == clientId && _dragGesture == gesture
-        && Time.unscaledTime <= _dragLeaseUntil;
-
-    private static bool ValidDragPosition(Vector3 position) =>
-        !float.IsNaN(position.x) && !float.IsNaN(position.y) && !float.IsNaN(position.z)
-        && Mathf.Abs(position.x) < 10000f && Mathf.Abs(position.y) < 10000f
-        && Mathf.Abs(position.z) < 10000f;
 
     public void Roll()
     {
@@ -378,9 +315,9 @@ public class NetworkDice : NetworkBehaviour, IDice
     private void RollOnServer(ulong clientId)
     {
         if (!_didInit) return;
-        if (_dragController != ulong.MaxValue && _dragController != clientId
-            && Time.unscaledTime < _dragLeaseUntil) return;
-        _dragController = ulong.MaxValue;
+        UpdateDragState();
+        if (DragLease.IsHeld && DragLease.Controller != clientId) return;
+        if (DragLease.IsHeld) AbortServerDrag();
         _lastThrower = clientId;
 
         _rb.isKinematic = false;
@@ -401,14 +338,7 @@ public class NetworkDice : NetworkBehaviour, IDice
 
     private void Update()
     {
-        DiceLabelSetup.UpdateBackFaceVisibility(_faceRenderers, _faces, transform, _cam);
-
-        if (IsServer && _dragController != ulong.MaxValue && Time.unscaledTime > _dragLeaseUntil)
-        {
-            _dragController = ulong.MaxValue;
-            _rb.isKinematic = false;
-            IsRolling = false;
-        }
+        UpdateDragState();
 
         if (!IsServer || !_didInit || !IsRolling || HasResult) return;
 
@@ -426,6 +356,9 @@ public class NetworkDice : NetworkBehaviour, IDice
             _settleTimer = 0f;
         }
     }
+
+    private void LateUpdate() =>
+        DiceLabelSetup.UpdateBackFaceVisibility(_faceRenderers, _faces, DisplayTransform, _cam);
 
     private void DetermineResult()
     {

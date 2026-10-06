@@ -1,0 +1,267 @@
+using System;
+using System.Collections;
+using System.Reflection;
+using NUnit.Framework;
+using Unity.Collections;
+using Unity.Netcode;
+using Unity.Netcode.Transports.UTP;
+using UnityEngine;
+using UnityEngine.TestTools;
+using System.Threading.Tasks;
+using System.IO;
+using System.IO.Compression;
+
+public class DiceboundLobbyIntegrationTests
+{
+    private NetworkManager _host, _client;
+    private Component _registry;
+    private string _reply;
+    private GameObject _scene;
+    private Texture2D _mapTexture;
+    private int _transferTotal, _transferReceived, _fogChanges;
+    private byte[] _incomingImage;
+    private bool? _fogEnabled;
+    private static Type RuntimeType(string name) => Type.GetType(name + ", Assembly-CSharp", true);
+    private NetworkManager Manager(string name)
+    {
+        var go = new GameObject(name);
+        var manager = go.AddComponent<NetworkManager>();
+        var transport = go.AddComponent<UnityTransport>();
+        transport.SetConnectionData("127.0.0.1", 17881);
+        manager.NetworkConfig = new NetworkConfig { EnableSceneManagement = false, NetworkTransport = transport };
+        return manager;
+    }
+
+    private IEnumerator RegisterRemote(string nickname)
+    {
+        _reply = null;
+        _client = Manager("Lobby regression client");
+        Assert.That(_client.StartClient(), Is.True);
+        for (int i = 0; i < 100 && !_client.IsConnectedClient; i++) yield return new WaitForSecondsRealtime(0.05f);
+        Assert.That(_client.IsConnectedClient, Is.True, "The local transport must establish an actual client connection.");
+        _client.CustomMessagingManager.RegisterNamedMessageHandler("PlayerSyncAll", (sender, reader) => {
+            reader.ReadValueSafe(out int count);
+            for (int i = 0; i < count; i++)
+            {
+                reader.ReadValueSafe(out ulong id); reader.ReadValueSafe(out FixedString64Bytes name);
+                reader.ReadValueSafe(out float r); reader.ReadValueSafe(out float g); reader.ReadValueSafe(out float b);
+                if (id == _client.LocalClientId) _reply = name.ToString();
+            }
+        });
+        using (var writer = new FastBufferWriter(64, Allocator.Temp))
+        {
+            writer.WriteValueSafe(new FixedString64Bytes(nickname));
+            _client.CustomMessagingManager.SendNamedMessage("PlayerRegister", NetworkManager.ServerClientId, writer);
+        }
+        for (int i = 0; i < 100 && _reply == null; i++) yield return new WaitForSecondsRealtime(0.05f);
+        Assert.That(_reply, Is.EqualTo(nickname), "The host must answer registration through the client's real message channel.");
+        _client.Shutdown();
+        for (int i = 0; i < 100 && _client.ShutdownInProgress; i++) yield return null;
+        UnityEngine.Object.Destroy(_client.gameObject); _client = null;
+        yield return null;
+    }
+
+    [UnityTest]
+    public IEnumerator RemoteRegistrationWorksAfterHostSessionRestart()
+    {
+        yield return new EnterPlayMode();
+        _host = Manager("Lobby regression host");
+        _registry = _host.gameObject.AddComponent(RuntimeType("PlayerRegistry"));
+        yield return null;
+        Assert.That(_host.StartHost(), Is.True);
+        yield return RegisterRemote("Первый вход");
+        var previousChannel = _host.CustomMessagingManager;
+        _host.Shutdown();
+        for (int i = 0; i < 100 && _host.ShutdownInProgress; i++) yield return null;
+        yield return null;
+        Assert.That(_host.StartHost(), Is.True);
+        Assert.That(_host.CustomMessagingManager, Is.Not.SameAs(previousChannel));
+        yield return RegisterRemote("Повторный вход");
+    }
+
+    [UnityTest]
+    public IEnumerator DestroyingDuplicateRegistryDoesNotRemoveSyncHandlers()
+    {
+        yield return new EnterPlayMode();
+        _host = Manager("Lobby duplicate test host");
+        _registry = _host.gameObject.AddComponent(RuntimeType("PlayerRegistry"));
+        yield return null;
+        Assert.That(_host.StartHost(), Is.True);
+        yield return null;
+        var duplicate = new GameObject("Scene-load duplicate registry");
+        duplicate.AddComponent(RuntimeType("PlayerRegistry"));
+        yield return null;
+        UnityEngine.Object.Destroy(duplicate);
+        using (var writer = new FastBufferWriter(96, Allocator.Temp))
+        {
+            writer.WriteValueSafe(42UL); writer.WriteValueSafe(new FixedString64Bytes("Ответ после загрузки сцены"));
+            writer.WriteValueSafe(0.3f); writer.WriteValueSafe(0.6f); writer.WriteValueSafe(0.9f);
+            _host.CustomMessagingManager.SendNamedMessage("PlayerSync", NetworkManager.ServerClientId, writer);
+        }
+        var nickname = RuntimeType("PlayerColors").GetMethod("GetNickname").Invoke(null, new object[] { 42UL });
+        Assert.That(nickname, Is.EqualTo("Ответ после загрузки сцены"));
+    }
+
+    [UnityTest]
+    public IEnumerator MapTransferDoesNotBlockFogTogglesOrDisconnectClient()
+    { return MapAndFog(false); }
+
+    [UnityTest]
+    public IEnumerator HighResolutionMapLoadsAndReachesClient()
+    {
+        if (SystemInfo.maxTextureSize < 10080) Assert.Ignore("The graphics backend cannot create a 10080-pixel source texture.");
+        return MapAndFog(false, true);
+    }
+
+    [UnityTest]
+    public IEnumerator RelayMapAndFogRemainConnected()
+    {
+        if (Environment.GetEnvironmentVariable("DICEBOUND_RELAY_TEST") != "1") Assert.Ignore("Explicit online Relay verification.");
+        return MapAndFog(true);
+    }
+
+    private IEnumerator Await(Task task)
+    {
+        float deadline = Time.realtimeSinceStartup + 45;
+        while (!task.IsCompleted && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(task.IsCompleted, Is.True, "Relay HTTP operation timed out.");
+        if (task.IsFaulted) throw task.Exception;
+    }
+
+    private IEnumerator MapAndFog(bool relay, bool highResolution = false)
+    {
+        yield return new EnterPlayMode();
+        _host = Manager("Map and fog host");
+        _registry = _host.gameObject.AddComponent(RuntimeType("PlayerRegistry"));
+        _scene = new GameObject("Map and fog regression scene");
+        var grid = _scene.AddComponent(RuntimeType("GridManager"));
+        _scene.AddComponent(RuntimeType("SceneEditor"));
+        var fog = _scene.AddComponent(RuntimeType("FogManager"));
+        var mapObject = new GameObject("Map"); mapObject.transform.SetParent(_scene.transform);
+        var netMap = mapObject.AddComponent<NetworkObject>(); netMap.SpawnWithObservers = false;
+        var map = mapObject.AddComponent(RuntimeType("MapController"));
+        var plane = GameObject.CreatePrimitive(PrimitiveType.Plane); plane.transform.SetParent(mapObject.transform);
+        map.GetType().GetField("mapPlane").SetValue(map, plane);
+        var sync = mapObject.AddComponent(RuntimeType("MapSync"));
+        sync.GetType().GetField("mapController").SetValue(sync, map);
+        yield return null;
+        object joined = null;
+        if (relay)
+        {
+            var relayManager = _host.gameObject.AddComponent(RuntimeType("RelayManager"));
+            var allocation = (Task<string>)relayManager.GetType().GetMethod("CreateRelayAllocation").Invoke(relayManager, new object[] { 2 });
+            yield return Await(allocation);
+            var relayType = Type.GetType("Unity.Services.Relay.RelayService, Unity.Services.Relay", true);
+            var service = relayType.GetProperty("Instance").GetValue(null);
+            var join = (Task)service.GetType().GetMethod("JoinAllocationAsync", new[] { typeof(string) }).Invoke(service, new object[] { allocation.Result });
+            yield return Await(join);
+            joined = join.GetType().GetProperty("Result").GetValue(join);
+        }
+        Assert.That(_host.StartHost(), Is.True);
+        _client = Manager("Map and fog client");
+        if (joined != null)
+        {
+            object Read(object obj, string property) => obj.GetType().GetProperty(property).GetValue(obj);
+            var server = Read(joined, "RelayServer");
+            _client.GetComponent<UnityTransport>().SetClientRelayData((string)Read(server, "IpV4"), (ushort)(int)Read(server, "Port"),
+                (byte[])Read(joined, "AllocationIdBytes"), (byte[])Read(joined, "Key"), (byte[])Read(joined, "ConnectionData"), (byte[])Read(joined, "HostConnectionData"));
+        }
+        Assert.That(_client.StartClient(), Is.True);
+        for (int i = 0; i < 200 && !_client.IsConnectedClient; i++) yield return new WaitForSecondsRealtime(0.05f);
+        Assert.That(_client.IsConnectedClient, Is.True);
+        _transferTotal = _transferReceived = _fogChanges = 0; _incomingImage = null; _fogEnabled = null;
+        _client.CustomMessagingManager.RegisterNamedMessageHandler("MapMeta", OnTransferMeta);
+        _client.CustomMessagingManager.RegisterNamedMessageHandler("MapChunk", OnTransferChunk);
+        _client.CustomMessagingManager.RegisterNamedMessageHandler("FogStateV2", OnTransferFog);
+        _mapTexture = new Texture2D(512, 512, TextureFormat.RGB24, false);
+        if (!highResolution)
+        {
+            var pixels = new Color32[512 * 512]; var random = new System.Random(42);
+            for (int i = 0; i < pixels.Length; i++) pixels[i] = new Color32((byte)random.Next(256), (byte)random.Next(256), (byte)random.Next(256), 255);
+            _mapTexture.SetPixels32(pixels);
+        }
+        _mapTexture.Apply();
+        var original = highResolution ? SolidPng(10080, 6720) : _mapTexture.EncodeToPNG();
+        map.GetType().GetMethod("ApplyImage").Invoke(map, new object[] { original });
+        var transmitted = (byte[])map.GetType().GetMethod("GetCurrentPngData").Invoke(map, null);
+        Assert.That(transmitted, Is.Not.Null);
+        fog.GetType().GetMethod("ToggleEnabled").Invoke(fog, null);
+        float deadline = Time.realtimeSinceStartup + 40;
+        while ((_transferReceived < Mathf.Min(32, _transferTotal) || _transferTotal == 0 || _fogEnabled != false) && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(_transferReceived, Is.GreaterThanOrEqualTo(Mathf.Min(32, _transferTotal))); Assert.That(_fogEnabled, Is.False);
+        fog.GetType().GetMethod("ToggleEnabled").Invoke(fog, null);
+        while ((_transferReceived != _transferTotal || _fogEnabled != true) && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(_client.IsConnectedClient, Is.True); Assert.That(_transferReceived, Is.EqualTo(_transferTotal));
+        Assert.That(_incomingImage, Is.EqualTo(transmitted)); Assert.That(_fogEnabled, Is.True); Assert.That(_fogChanges, Is.GreaterThanOrEqualTo(2));
+        Assert.That(map.GetType().GetMethod("GetCurrentPngData").Invoke(map, null), Is.SameAs(map.GetType().GetMethod("GetCurrentPngData").Invoke(map, null)), "Saving must reuse image bytes.");
+    }
+
+    private void OnTransferMeta(ulong sender, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out int revision); reader.ReadValueSafe(out _transferTotal); reader.ReadValueSafe(out int bytes); reader.ReadValueSafe(out uint checksum);
+        _incomingImage = new byte[bytes]; _transferReceived = 0;
+    }
+    private static byte[] SolidPng(int width, int height)
+    {
+        using var result = new MemoryStream();
+        void UInt(uint value) { for (int shift = 24; shift >= 0; shift -= 8) result.WriteByte((byte)(value >> shift)); }
+        void Chunk(string name, byte[] data)
+        {
+            UInt((uint)data.Length); uint crc = uint.MaxValue;
+            foreach (byte value in System.Text.Encoding.ASCII.GetBytes(name)) { result.WriteByte(value); Crc(value); }
+            foreach (byte value in data) { result.WriteByte(value); Crc(value); }
+            UInt(~crc);
+            void Crc(byte value) { crc ^= value; for (int bit = 0; bit < 8; bit++) crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xedb88320u : crc >> 1; }
+        }
+        result.Write(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }, 0, 8);
+        var header = new byte[13];
+        for (int i = 0; i < 4; i++) { header[i] = (byte)(width >> (24 - 8 * i)); header[i + 4] = (byte)(height >> (24 - 8 * i)); }
+        header[8] = 8; header[9] = 2; Chunk("IHDR", header);
+        using var compressed = new MemoryStream(); compressed.WriteByte(0x78); compressed.WriteByte(0x01);
+        var row = new byte[width * 3 + 1];
+        using (var deflate = new DeflateStream(compressed, System.IO.Compression.CompressionLevel.Fastest, true))
+            for (int y = 0; y < height; y++) deflate.Write(row, 0, row.Length);
+        uint adler = ((uint)((long)row.Length * height % 65521) << 16) | 1;
+        for (int shift = 24; shift >= 0; shift -= 8) compressed.WriteByte((byte)(adler >> shift));
+        Chunk("IDAT", compressed.ToArray()); Chunk("IEND", Array.Empty<byte>());
+        return result.ToArray();
+    }
+    private void OnTransferChunk(ulong sender, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out int version); reader.ReadValueSafe(out int index); reader.ReadValueSafe(out int size);
+        var data = new byte[size]; reader.ReadBytesSafe(ref data, size); Buffer.BlockCopy(data, 0, _incomingImage, index * 1000, size); _transferReceived++;
+        if (_transferReceived % 32 == 0 || _transferReceived == _transferTotal)
+        {
+            using var writer = new FastBufferWriter(8, Allocator.Temp); writer.WriteValueSafe(version); writer.WriteValueSafe(_transferReceived);
+            _client.CustomMessagingManager.SendNamedMessage("MapProgress", 0, writer);
+        }
+        if (_transferReceived == _transferTotal)
+        {
+            using var writer = new FastBufferWriter(4, Allocator.Temp); writer.WriteValueSafe(version);
+            _client.CustomMessagingManager.SendNamedMessage("MapAck", 0, writer);
+        }
+    }
+    private void OnTransferFog(ulong sender, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out int revision); reader.ReadValueSafe(out int width); reader.ReadValueSafe(out int height); reader.ReadValueSafe(out bool state);
+        reader.ReadValueSafe(out int bytes); var payload = new byte[bytes]; reader.ReadBytesSafe(ref payload, bytes);
+        var arguments = new object[] { payload, width * height * 16, null, null };
+        RuntimeType("FogStateCodec").GetMethod("Decode").Invoke(null, arguments);
+        Assert.That(((bool[])arguments[2]).Length, Is.EqualTo(width * height * 16));
+        _fogEnabled = state; _fogChanges++;
+    }
+
+    [UnityTearDown]
+    public IEnumerator Cleanup()
+    {
+        if (_client != null) _client.Shutdown();
+        if (_host != null) _host.Shutdown();
+        yield return null;
+        if (_client != null) UnityEngine.Object.Destroy(_client.gameObject);
+        if (_host != null) UnityEngine.Object.Destroy(_host.gameObject);
+        if (_scene != null) UnityEngine.Object.Destroy(_scene);
+        if (_mapTexture != null) UnityEngine.Object.Destroy(_mapTexture);
+        yield return null;
+        if (Application.isPlaying) yield return new ExitPlayMode();
+    }
+}

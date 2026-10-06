@@ -17,6 +17,7 @@ public static class GameplayInputGate
     {
         get
         {
+            if (TokenController.IsMenuTextFocused) return true;
             var es = EventSystem.current;
             if (es == null) return false;
 
@@ -34,6 +35,7 @@ public static class GameplayInputGate
 
     /// <summary>True when the pointer is over any UI element (EventSystem raycast).</summary>
     public static bool IsPointerOverUI =>
+        TokenController.IsPointerOverMenu ||
         EventSystem.current != null && EventSystem.current.IsPointerOverGameObject();
 
     /// <summary>True while the host has the client curtain down (clients only).</summary>

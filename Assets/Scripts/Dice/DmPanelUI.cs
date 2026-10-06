@@ -24,6 +24,14 @@ public class DmPanelUI : MonoBehaviour
     private Text _initiativeHint;
     private string _playerSignature;
     private float _nextRefresh;
+    private InputField _tokenNameInput;
+    private Toggle _createHiddenToggle;
+    private Text _tokenNotice;
+    private Text _tokenCount;
+    private RectTransform _tokensContent;
+    private string _tokenSignature;
+    private Text _sceneNotice, _sceneMarkupText, _sceneDiameterText;
+    private Text _fogEnabledText, _fogPauseText, _fogPreviewText, _fogSourceText, _fogHistoryText, _fogAutosaveText, _fogStatus;
 
     private static bool IsLocalHost =>
         NetworkManager.Singleton != null && NetworkManager.Singleton.IsHost;
@@ -56,6 +64,14 @@ public class DmPanelUI : MonoBehaviour
         if (_panel.activeSelf) Refresh();
     }
 
+    public void ShowTokenCreation()
+    {
+        if (!IsLocalHost || _panel == null) return;
+        _panel.SetActive(true);
+        ShowPage(3);
+        _tokenNameInput?.ActivateInputField();
+    }
+
     private void BuildUI()
     {
         var root = new GameObject("DmCanvas", typeof(RectTransform), typeof(Canvas),
@@ -79,13 +95,13 @@ public class DmPanelUI : MonoBehaviour
         Button(_panel.transform, "×", 32, 30, 362, -14,
             () => _panel.SetActive(false), VttUiSkin.Button);
 
-        _pages = new GameObject[3];
-        _tabs = new Image[3];
-        string[] titles = { "Карта", "Игроки", "Инициатива" };
-        for (int i = 0; i < 3; i++)
+        _pages = new GameObject[6];
+        _tabs = new Image[6];
+        string[] titles = { "Карта", "Игроки", "Бой", "Токены", "Сцена", "Туман" };
+        for (int i = 0; i < _pages.Length; i++)
         {
             int pageIndex = i;
-            var tab = Button(_panel.transform, titles[i], 120, 34, 18 + i * 127, -58,
+            var tab = Button(_panel.transform, titles[i], 58, 34, 18 + i * 63, -58,
                 () => ShowPage(pageIndex), VttUiSkin.Button);
             _tabs[i] = tab.GetComponent<Image>();
             _pages[i] = new GameObject(titles[i] + "Page", typeof(RectTransform));
@@ -96,7 +112,255 @@ public class DmPanelUI : MonoBehaviour
         BuildMapPage(_pages[0].transform);
         BuildPlayersPage(_pages[1].transform);
         BuildInitiativePage(_pages[2].transform);
+        BuildTokensPage(_pages[3].transform);
+        BuildScenePage(_pages[4].transform);
+        BuildFogPage(_pages[5].transform);
         ShowPage(0);
+    }
+
+    private void BuildFogPage(Transform parent)
+    {
+        Text Control(string title, float y, Action action) => Button(parent, title, 350, 34, 0, y,
+            () => { action(); Refresh(); }, VttUiSkin.Button).GetComponentInChildren<Text>();
+        _fogEnabledText = Control("Туман включён", -4, () => FogManager.Instance?.ToggleEnabled());
+        _fogPauseText = Control("Продолжить раскрытие", -46, () => FogManager.Instance?.TogglePause());
+        _fogPreviewText = Control("Посмотреть глазами игроков", -88, () => FogManager.Instance?.TogglePreview());
+        _fogSourceText = Control("Обзор всей группы", -130, () => FogManager.Instance?.CyclePreviewSource());
+        Control("Сбросить исследование…", -170, () => DiceUI.Instance?.ConfirmAction("Сбросить исследование?",
+            "Карта станет неисследованной, раскрытие будет приостановлено. Действие можно отменить.", () => FogManager.Instance?.ResetHistory()));
+        Button(parent, "Раскрыть кистью", 170, 30, 0, -210, () => FogManager.Instance?.SetManual(1), VttUiSkin.Button);
+        Button(parent, "Закрыть кистью", 170, 30, 180, -210, () => FogManager.Instance?.SetManual(2), VttUiSkin.Button);
+        Control("Завершить ручную кисть", -246, () => FogManager.Instance?.StopManual());
+        Control("Отменить последнее действие", -286, GameMasterUndo.Undo);
+        _fogHistoryText = Control("Экспорт с историей", -326, () => { if (FogManager.Instance != null) FogManager.Instance.SaveWithHistory = !FogManager.Instance.SaveWithHistory; });
+        _fogAutosaveText = Control("Автосохранение включено", -366, () => { if (FogManager.Instance != null) FogManager.Instance.Autosave = !FogManager.Instance.Autosave; });
+        Control("Восстановить автосохранение…", -406, () => SceneFileStore.LoadAutosave());
+        _fogStatus = Label(parent, "", 12, VttUiSkin.Muted, TextAnchor.UpperLeft,
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 56), new Vector2(0, -449));
+    }
+
+    public void ShowSceneEditor()
+    {
+        if (!IsLocalHost || _panel == null) return;
+        _panel.SetActive(true); ShowPage(4);
+    }
+
+    private void BuildScenePage(Transform parent)
+    {
+        Label(parent, "Разметка и файл сцены", 16, VttUiSkin.Text, TextAnchor.MiddleLeft,
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 30), new Vector2(0, -4), true);
+        Button(parent, "Кисть стен", 170, 34, 0, -44,
+            () => SceneEditor.Instance?.Activate(SceneEditor.Tool.Wall), VttUiSkin.Button);
+        Button(parent, "Стереть ребро", 170, 34, 180, -44,
+            () => SceneEditor.Instance?.Activate(SceneEditor.Tool.EraseEdge), VttUiSkin.Button);
+        Button(parent, "Поставить дверь", 170, 34, 0, -87,
+            () => SceneEditor.Instance?.Activate(SceneEditor.Tool.Door), VttUiSkin.Button);
+        Button(parent, "Открыть / закрыть", 170, 34, 180, -87,
+            () => SceneEditor.Instance?.Activate(SceneEditor.Tool.ToggleDoor), VttUiSkin.Button);
+        Button(parent, "Квадрат", 170, 34, 0, -130,
+            () => SceneEditor.Instance?.Activate(SceneEditor.Tool.Square), VttUiSkin.Button);
+        Button(parent, "Колонна", 170, 34, 180, -130,
+            () => SceneEditor.Instance?.Activate(SceneEditor.Tool.Column), VttUiSkin.Button);
+        Button(parent, "−", 36, 30, 0, -173, () => AdjustColumn(-0.1f), VttUiSkin.Button);
+        _sceneDiameterText = Label(parent, "Диаметр: 0.5 клетки", 13, VttUiSkin.Text, TextAnchor.MiddleCenter,
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(260, 30), new Vector2(44, -173));
+        Button(parent, "+", 36, 30, 314, -173, () => AdjustColumn(0.1f), VttUiSkin.Button);
+        Button(parent, "Удалить препятствие", 350, 32, 0, -212,
+            () => SceneEditor.Instance?.Activate(SceneEditor.Tool.EraseObstacle), VttUiSkin.Button);
+        Button(parent, "Отменить действие", 170, 32, 0, -253, () => SceneEditor.Instance?.Undo(), VttUiSkin.Button);
+        Button(parent, "Завершить разметку", 170, 32, 180, -253, () => SceneEditor.Instance?.Deactivate(), VttUiSkin.Button);
+        var markup = Button(parent, "Скрыть разметку", 350, 32, 0, -294,
+            () => { SceneEditor.Instance?.ToggleMarkup(); Refresh(); }, VttUiSkin.Button);
+        _sceneMarkupText = markup.GetComponentInChildren<Text>();
+        Button(parent, "Сохранить JSON", 170, 36, 0, -335, SceneFileStore.SaveDialog, VttUiSkin.Button);
+        Button(parent, "Загрузить JSON", 170, 36, 180, -335, SceneFileStore.LoadDialog, VttUiSkin.Button);
+        _sceneNotice = Label(parent, "", 12, VttUiSkin.Text, TextAnchor.UpperLeft,
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 60), new Vector2(0, -385));
+        Label(parent, "Стены — голубые, двери — жёлтые; открытые — зелёные. Игрокам видна разметка в текущем обзоре. JSON содержит карту, всех персонажей и портреты. История и пауза — во вкладке «Туман».",
+            12, VttUiSkin.Muted, TextAnchor.UpperLeft, new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 56), new Vector2(0, -449));
+    }
+
+    private void AdjustColumn(float delta)
+    {
+        var editor = SceneEditor.Instance;
+        if (editor == null) return;
+        editor.ColumnDiameter = Mathf.Clamp(Mathf.Round((editor.ColumnDiameter + delta) * 10) / 10, 0.1f, 0.9f);
+        Refresh();
+    }
+
+    private void BuildTokensPage(Transform parent)
+    {
+        Label(parent, "Создать токен", 16, VttUiSkin.Text, TextAnchor.MiddleLeft,
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(340, 30),
+            new Vector2(0, -4), true);
+
+        var nameBox = Box(parent, "TokenName", VttUiSkin.Button, 7);
+        Place(nameBox, new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 36), new Vector2(0, -40));
+        var nameText = Label(nameBox.transform, "", 14, VttUiSkin.Text, TextAnchor.MiddleLeft,
+            new Vector2(0, 0.5f), new Vector2(0, 0.5f), new Vector2(326, 30), new Vector2(12, 0));
+        var placeholder = Label(nameBox.transform, "Имя, например: Гоблин", 14, VttUiSkin.Muted,
+            TextAnchor.MiddleLeft, new Vector2(0, 0.5f), new Vector2(0, 0.5f),
+            new Vector2(326, 30), new Vector2(12, 0));
+        _tokenNameInput = nameBox.AddComponent<InputField>();
+        _tokenNameInput.textComponent = nameText;
+        _tokenNameInput.placeholder = placeholder;
+        _tokenNameInput.characterLimit = 64;
+        _tokenNameInput.lineType = InputField.LineType.SingleLine;
+
+        var toggleRoot = new GameObject("CreateHidden", typeof(RectTransform), typeof(Toggle));
+        toggleRoot.transform.SetParent(parent, false);
+        Place(toggleRoot, new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 30), new Vector2(0, -83));
+        var toggleBox = Box(toggleRoot.transform, "Checkbox", VttUiSkin.Button, 4);
+        Place(toggleBox, new Vector2(0, 0.5f), new Vector2(0, 0.5f), new Vector2(24, 24), new Vector2(0, 0));
+        var checkmark = Box(toggleBox.transform, "Checked", VttUiSkin.Blue, 2, false);
+        Place(checkmark, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(14, 14), Vector2.zero);
+        checkmark.GetComponent<Image>().raycastTarget = false;
+        _createHiddenToggle = toggleRoot.GetComponent<Toggle>();
+        _createHiddenToggle.targetGraphic = toggleBox.GetComponent<Image>();
+        _createHiddenToggle.graphic = checkmark.GetComponent<Image>();
+        _createHiddenToggle.isOn = false;
+        var toggleLabel = Label(toggleRoot.transform, "Создать скрытым от игроков", 13, VttUiSkin.Text,
+            TextAnchor.MiddleLeft, new Vector2(0, 0.5f), new Vector2(0, 0.5f),
+            new Vector2(310, 28), new Vector2(34, 0));
+        toggleLabel.raycastTarget = true;
+        Button(parent, "Создать токен", 350, 34, 0, -121, CreateNamedToken, new Color(0.10f, 0.30f, 0.48f));
+        _tokenNotice = Label(parent, "Повторяющиеся имена получат номер: Гоблин 2, Гоблин 3…", 12,
+            VttUiSkin.Muted, TextAnchor.UpperLeft, new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(350, 34), new Vector2(0, -161));
+        _tokenCount = Label(parent, "Все токены", 14, VttUiSkin.Text, TextAnchor.MiddleLeft,
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 24), new Vector2(0, -202), true);
+
+        var viewport = Box(parent, "TokenViewport", new Color(0, 0, 0, 0.01f), 0, false);
+        Place(viewport, new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 208), new Vector2(0, -231));
+        viewport.AddComponent<RectMask2D>();
+        var rows = new GameObject("Tokens", typeof(RectTransform));
+        rows.transform.SetParent(viewport.transform, false);
+        _tokensContent = rows.GetComponent<RectTransform>();
+        _tokensContent.anchorMin = new Vector2(0, 1);
+        _tokensContent.anchorMax = new Vector2(1, 1);
+        _tokensContent.pivot = new Vector2(0.5f, 1);
+        _tokensContent.anchoredPosition = Vector2.zero;
+        var scroll = viewport.AddComponent<ScrollRect>();
+        scroll.viewport = viewport.GetComponent<RectTransform>();
+        scroll.content = _tokensContent;
+        scroll.horizontal = false;
+        scroll.vertical = true;
+        scroll.movementType = ScrollRect.MovementType.Clamped;
+        scroll.scrollSensitivity = 28;
+        Label(parent, "Массовое удаление", 12, VttUiSkin.Muted, TextAnchor.MiddleLeft,
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 22), new Vector2(0, -445));
+        Button(parent, "Все…", 110, 30, 0, -470,
+            () => ConfirmDeleteTokens(0), new Color(0.28f, 0.11f, 0.14f));
+        Button(parent, "Мои…", 110, 30, 120, -470,
+            () => ConfirmDeleteTokens(1), new Color(0.28f, 0.11f, 0.14f));
+        Button(parent, "Игроков…", 110, 30, 240, -470,
+            () => ConfirmDeleteTokens(2), new Color(0.28f, 0.11f, 0.14f));
+    }
+
+    private void CreateNamedToken()
+    {
+        if (!IsLocalHost) return;
+        var token = TokenManager.Instance?.CreateTokenAsHost(_tokenNameInput.text, _createHiddenToggle.isOn);
+        _tokenNotice.text = token == null ? "Не удалось создать токен." :
+            $"Создан: {token.TokenName}" + (token.IsHidden ? " · скрыт" : "");
+        RefreshTokens(true);
+    }
+
+    private void RefreshTokens(bool force = false)
+    {
+        if (!IsLocalHost || _tokensContent == null) return;
+        var tokens = new List<TokenController>();
+        foreach (var token in FindObjectsByType<TokenController>(FindObjectsInactive.Exclude))
+            if (token.IsSpawned) tokens.Add(token);
+        tokens.Sort((a, b) => a.NetworkObjectId.CompareTo(b.NetworkObjectId));
+        var signature = new System.Text.StringBuilder();
+        foreach (var token in tokens)
+            signature.Append(token.NetworkObjectId).Append(':').Append(token.TokenName).Append(':')
+                .Append(token.IsHidden).Append(':').Append(token.IsHero).Append(':').Append(token.VisionFeet).Append(':')
+                .Append(token.ControllerClientId).Append(':').Append(token.EveryoneCanMove).Append(';');
+        string snapshot = signature.ToString();
+        _tokenCount.text = $"Все токены · {tokens.Count}";
+        if (!force && _tokenSignature == snapshot) return;
+        _tokenSignature = snapshot;
+        foreach (Transform child in _tokensContent)
+        {
+            child.gameObject.SetActive(false);
+            Destroy(child.gameObject);
+        }
+        _tokensContent.sizeDelta = new Vector2(0, Mathf.Max(208, tokens.Count * 96));
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            var token = tokens[i];
+            var row = Box(_tokensContent, "Token " + token.NetworkObjectId, VttUiSkin.Raised, 7, false);
+            Place(row, new Vector2(0, 1), new Vector2(0, 1), new Vector2(340, 90), new Vector2(0, -i * 96));
+            Label(row.transform, token.TokenName, 13, VttUiSkin.Text, TextAnchor.MiddleLeft,
+                new Vector2(0, 1), new Vector2(0, 1), new Vector2(200, 24), new Vector2(10, -3), true);
+            string status = (token.IsHidden ? "Скрыт" : "Виден") + (token.IsHero ? " · герой" : "") +
+                $" · {token.VisionFeet} фт";
+            Label(row.transform, status, 11, VttUiSkin.Muted, TextAnchor.MiddleLeft,
+                new Vector2(0, 1), new Vector2(0, 1), new Vector2(200, 22), new Vector2(10, -28));
+            Button(row.transform, token.IsHidden ? "Показать" : "Скрыть", 64, 30, 214, -12,
+                () => {
+                    if (!IsLocalHost || token == null || !token.IsSpawned) return;
+                    token.RequestSetHidden(!token.IsHidden);
+                    RefreshTokens(true);
+                }, VttUiSkin.Button);
+            Button(row.transform, "Удалить", 54, 30, 282, -12,
+                () => {
+                    if (!IsLocalHost || token == null || !token.IsSpawned) return;
+                    token.RequestDespawn();
+                    RefreshTokens(true);
+                }, new Color(0.28f, 0.11f, 0.14f));
+            string owner = token.ControllerClientId == ulong.MaxValue ? string.IsNullOrEmpty(token.SavedOwnerNickname) ? "Не назначен" : "Ждёт " + token.SavedOwnerNickname : token.ControllerClientId == NetworkManager.ServerClientId
+                ? "Мастер" : PlayerColors.GetNickname(token.ControllerClientId) ?? token.SavedOwnerNickname ?? "Отключён";
+            Button(row.transform, "Кому: " + owner, 142, 28, 8, -56, () => {
+                if (!IsLocalHost || token == null || !token.IsSpawned) return;
+                var participants = new List<ulong>(NetworkManager.Singleton.ConnectedClientsIds); participants.Sort(); participants.Add(ulong.MaxValue);
+                int index = participants.IndexOf(token.ControllerClientId); token.AssignController(participants[(index + 1) % participants.Count]); RefreshTokens(true);
+            }, VttUiSkin.Button);
+            Button(row.transform, token.EveryoneCanMove ? "Двигать: всем" : "Только хозяину", 126, 28, 154, -56, () => {
+                if (!IsLocalHost || token == null || !token.IsSpawned) return;
+                token.SetEveryoneCanMove(!token.EveryoneCanMove); RefreshTokens(true);
+            }, VttUiSkin.Button);
+            Button(row.transform, token.IsHero ? "Герой" : "NPC", 48, 28, 284, -56, () => {
+                if (!IsLocalHost || token == null || !token.IsSpawned) return;
+                token.SetHero(!token.IsHero); RefreshTokens(true);
+            }, VttUiSkin.Button);
+        }
+    }
+
+    private void ConfirmDeleteTokens(int scope)
+    {
+        if (!IsLocalHost) return;
+        string[] subjects = { "все токены", "свои токены", "токены игроков" };
+        DiceUI.Instance?.ConfirmAction($"Удалить {subjects[scope]}?",
+            "Токены исчезнут у всех участников. Мастер сможет отменить последнее удаление.",
+            () => DeleteTokens(scope));
+    }
+
+    private static void DeleteTokens(int scope)
+    {
+        if (!IsLocalHost) return;
+        ulong hostId = NetworkManager.Singleton.LocalClientId;
+        var selected = new List<TokenController>();
+        foreach (var token in FindObjectsByType<TokenController>(FindObjectsInactive.Exclude))
+        {
+            if (token == null || !token.IsSpawned || !token.IsServer) continue;
+            bool hostToken = token.ControllerClientId == hostId
+                || token.ControllerClientId == ulong.MaxValue && string.IsNullOrEmpty(token.SavedOwnerNickname);
+            if (scope == 1 && !hostToken || scope == 2 && hostToken) continue;
+            selected.Add(token);
+        }
+        var grid = FindAnyObjectByType<GridManager>();
+        if (grid != null)
+        {
+            var saved = new List<SceneToken>(); foreach (var token in selected) saved.Add(SceneFileStore.CaptureToken(token, grid));
+            GameMasterUndo.Record("массовое удаление токенов", () => {
+                foreach (var data in saved) { var restored = TokenManager.Instance?.RestoreSceneToken(data, grid);
+                    if (restored != null && !string.IsNullOrEmpty(data.portrait)) restored.LoadImage(Convert.FromBase64String(data.portrait)); }
+            });
+        }
+        foreach (var token in selected) token.NetworkObject.Despawn();
     }
 
     private void ShowPage(int index)
@@ -271,8 +535,8 @@ public class DmPanelUI : MonoBehaviour
         _initiativeHint = Label(parent, "", 13, VttUiSkin.Muted, TextAnchor.UpperLeft,
             new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 60),
             new Vector2(0, -41));
-        Button(parent, "Показать трекер", 350, 42, 0, -113,
-            () => InitiativeTracker.Instance?.SetVisible(true), VttUiSkin.Button);
+        Button(parent, "Открыть / закрыть трекер", 350, 42, 0, -113,
+            () => InitiativeTracker.Instance?.ToggleVisible(), VttUiSkin.Button);
         Button(parent, "+ Добавить персонажа / врага", 350, 42, 0, -165,
             () => {
                 _panel.SetActive(false);
@@ -303,6 +567,25 @@ public class DmPanelUI : MonoBehaviour
         if (_page == 1) RefreshPlayers();
         if (_page == 2 && _initiativeHint != null)
             _initiativeHint.text = "Ход виден всем игрокам. DM меняет порядок и состав участников.";
+        if (_page == 3) RefreshTokens();
+        if (_page == 4 && SceneEditor.Instance != null)
+        {
+            var editor = SceneEditor.Instance;
+            _sceneNotice.text = editor.Notice;
+            _sceneMarkupText.text = editor.ShowMarkup ? "Скрыть разметку" : "Показать разметку";
+            _sceneDiameterText.text = $"Диаметр: {editor.ColumnDiameter:0.0} клетки";
+        }
+        if (_page == 5 && FogManager.Instance != null)
+        {
+            var fog = FogManager.Instance;
+            _fogEnabledText.text = fog.Enabled ? "Выключить туман" : "Включить туман";
+            _fogPauseText.text = fog.Paused ? "Продолжить раскрытие" : "Приостановить раскрытие";
+            _fogPreviewText.text = fog.Preview ? "Вернуться к обзору мастера" : "Посмотреть глазами игроков";
+            _fogSourceText.text = fog.PreviewSourceName;
+            _fogHistoryText.text = fog.SaveWithHistory ? "Экспорт: с историей исследования" : "Экспорт: неисследованная карта";
+            _fogAutosaveText.text = fog.Autosave ? "Автосохранение: включено (2 минуты)" : "Автосохранение: выключено";
+            _fogStatus.text = fog.Status + "\nОтмена: " + GameMasterUndo.NextLabel + "\nИгрок открывает ближайшую видимую дверь клавишей E.";
+        }
     }
 
     private GameObject Box(Transform parent, string name, Color color, int radius, bool outline = true)
@@ -335,6 +618,7 @@ public class DmPanelUI : MonoBehaviour
         label.color = color;
         label.alignment = align;
         label.text = value;
+        label.supportRichText = false;
         label.raycastTarget = false;
         return label;
     }

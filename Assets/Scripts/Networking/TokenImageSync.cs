@@ -13,12 +13,16 @@ public class TokenImageSync : MonoBehaviour
     private const string MSG_UPLOAD_META = "TokenImgUploadMeta";
     private const string MSG_UPLOAD_CHUNK = "TokenImgUploadChunk";
     private const string MSG_UPLOAD_ACK = "TokenImgUploadAck";
+    private const string MSG_PROGRESS = "TokenImgProgress";
+    private const string MSG_UPLOAD_PROGRESS = "TokenImgUploadProgress";
+    private const string MSG_CANCEL = "TokenImgCancel";
     private const int ChunkSize = 800;
-    private const int ChunksPerFrame = 3;
+    private const int BatchChunks = 16;
     public const int MaxPortraitBytes = 2 * 1024 * 1024;
     private const int MaxRetries = 3;
     private const float AckTimeoutSeconds = 6f;
     private const float StaleReceiveSeconds = 30f;
+    private const float BatchTimeoutSeconds = 8f;
 
     private sealed class ReceiveState
     {
@@ -35,7 +39,9 @@ public class TokenImageSync : MonoBehaviour
     {
         public int Version;
         public byte[] Data;
+        public byte[] PreviousData;
         public bool Acknowledged;
+        public int ReceivedChunks;
     }
 
     private sealed class PendingPortrait
@@ -56,6 +62,10 @@ public class TokenImageSync : MonoBehaviour
     private readonly Dictionary<ulong, int> _appliedDownloads = new();
     private readonly Dictionary<ulong, (ulong Sender, int Version)> _appliedUploads = new();
     private readonly Dictionary<(ulong Client, ulong Token), int> _downloadAcks = new();
+    private readonly Dictionary<(ulong Client, ulong Token), (int Version, int Count)> _downloadProgress = new();
+    private readonly HashSet<(ulong Client, ulong Token, int Version)> _cancelledDownloads = new();
+    private readonly Dictionary<ulong, int> _cancelledIncomingVersions = new();
+    private readonly Dictionary<(ulong Sender, ulong Token), int> _cancelledUploadVersions = new();
     private int _nextUploadVersion;
     private bool _registered;
     private bool _subscribed;
@@ -89,8 +99,8 @@ public class TokenImageSync : MonoBehaviour
     private void Update()
     {
         float now = Time.unscaledTime;
-        RemoveStale(_incoming, now);
-        RemoveStale(_uploadIncoming, now);
+        RemoveStale(_incoming, now, false);
+        RemoveStale(_uploadIncoming, now, true);
         var expired = new List<ulong>();
         foreach (var entry in _pendingApply)
             if (now - entry.Value.ReceivedAt > StaleReceiveSeconds) expired.Add(entry.Key);
@@ -101,7 +111,7 @@ public class TokenImageSync : MonoBehaviour
         }
     }
 
-    private static void RemoveStale(Dictionary<ulong, ReceiveState> states, float now)
+    private static void RemoveStale(Dictionary<ulong, ReceiveState> states, float now, bool upload)
     {
         var expired = new List<ulong>();
         foreach (var entry in states)
@@ -109,6 +119,8 @@ public class TokenImageSync : MonoBehaviour
         foreach (ulong id in expired)
         {
             states.Remove(id);
+            ImageTransferUI.Finish(upload ? $"portrait-receive-upload-{id}"
+                : $"portrait-receive-{id}", "Передача изображения прервалась");
             Debug.LogWarning($"[TokenImageSync] Incomplete transfer for token {id} expired");
         }
     }
@@ -157,6 +169,9 @@ public class TokenImageSync : MonoBehaviour
 
     private void ClearClientState()
     {
+        foreach (ulong id in _incoming.Keys) ImageTransferUI.Remove($"portrait-receive-{id}");
+        foreach (ulong id in _uploadIncoming.Keys) ImageTransferUI.Remove($"portrait-receive-upload-{id}");
+        foreach (ulong id in _outboundUploads.Keys) ImageTransferUI.Remove($"portrait-upload-{id}");
         _incoming.Clear();
         _uploadIncoming.Clear();
         _outboundUploads.Clear();
@@ -164,6 +179,10 @@ public class TokenImageSync : MonoBehaviour
         _appliedDownloads.Clear();
         _appliedUploads.Clear();
         _downloadAcks.Clear();
+        _downloadProgress.Clear();
+        _cancelledDownloads.Clear();
+        _cancelledIncomingVersions.Clear();
+        _cancelledUploadVersions.Clear();
         _nextUploadVersion = 0;
     }
 
@@ -204,6 +223,9 @@ public class TokenImageSync : MonoBehaviour
         cmm.RegisterNamedMessageHandler(MSG_UPLOAD_META, OnUploadMeta);
         cmm.RegisterNamedMessageHandler(MSG_UPLOAD_CHUNK, OnUploadChunk);
         cmm.RegisterNamedMessageHandler(MSG_UPLOAD_ACK, OnUploadAck);
+        cmm.RegisterNamedMessageHandler(MSG_PROGRESS, OnDownloadProgress);
+        cmm.RegisterNamedMessageHandler(MSG_UPLOAD_PROGRESS, OnUploadProgress);
+        cmm.RegisterNamedMessageHandler(MSG_CANCEL, OnCancel);
         _registered = true;
     }
 
@@ -219,11 +241,15 @@ public class TokenImageSync : MonoBehaviour
             cmm.UnregisterNamedMessageHandler(MSG_UPLOAD_META);
             cmm.UnregisterNamedMessageHandler(MSG_UPLOAD_CHUNK);
             cmm.UnregisterNamedMessageHandler(MSG_UPLOAD_ACK);
+            cmm.UnregisterNamedMessageHandler(MSG_PROGRESS);
+            cmm.UnregisterNamedMessageHandler(MSG_UPLOAD_PROGRESS);
+            cmm.UnregisterNamedMessageHandler(MSG_CANCEL);
         }
         _registered = false;
     }
 
-    public static void UploadToServer(ulong networkObjectId, byte[] jpgData)
+    public static void UploadToServer(ulong networkObjectId, byte[] jpgData,
+        byte[] previousData = null)
     {
         EnsureInstance();
         var nm = NetworkManager.Singleton;
@@ -234,7 +260,14 @@ public class TokenImageSync : MonoBehaviour
             DiceUI.Instance?.ShowToolNotice("Изображение токена слишком большое (максимум 2 МБ).");
             return;
         }
-        var upload = new UploadState { Version = ++Instance._nextUploadVersion, Data = jpgData };
+        if (Instance._outboundUploads.TryGetValue(networkObjectId, out UploadState previous))
+        {
+            previousData = previous.PreviousData;
+            CancelTransfer(NetworkManager.ServerClientId, networkObjectId,
+                previous.Version, true);
+        }
+        var upload = new UploadState
+            { Version = ++Instance._nextUploadVersion, Data = jpgData, PreviousData = previousData };
         Instance._outboundUploads[networkObjectId] = upload;
         Instance.StartCoroutine(Instance.UploadRoutine(networkObjectId, upload));
     }
@@ -244,6 +277,9 @@ public class TokenImageSync : MonoBehaviour
         for (int attempt = 1; attempt <= MaxRetries + 1; attempt++)
         {
             if (!CurrentUpload(netId, upload)) yield break;
+            ImageTransferUI.Show($"portrait-upload-{netId}", "Отправка токена",
+                0f, $"Попытка {attempt}/{MaxRetries + 1}",
+                () => CancelUpload(netId, upload.Version));
             yield return SendTransferRoutine(NetworkManager.ServerClientId, netId, upload.Version,
                 upload.Data, MSG_UPLOAD_META, MSG_UPLOAD_CHUNK);
             float deadline = Time.unscaledTime + AckTimeoutSeconds;
@@ -252,6 +288,7 @@ public class TokenImageSync : MonoBehaviour
                 if (upload.Acknowledged)
                 {
                     _outboundUploads.Remove(netId);
+                    ImageTransferUI.Finish($"portrait-upload-{netId}", "Изображение токена отправлено");
                     yield break;
                 }
                 yield return new WaitForSecondsRealtime(0.25f);
@@ -262,6 +299,8 @@ public class TokenImageSync : MonoBehaviour
         if (CurrentUpload(netId, upload))
         {
             _outboundUploads.Remove(netId);
+            RestorePreviousImage(netId, upload);
+            ImageTransferUI.Finish($"portrait-upload-{netId}", "Не удалось отправить изображение токена");
             Debug.LogError($"[TokenImageSync] Upload failed for token {netId} after {MaxRetries} retries");
             DiceUI.Instance?.ShowToolNotice("Не удалось отправить изображение токена.");
         }
@@ -270,6 +309,11 @@ public class TokenImageSync : MonoBehaviour
     private bool CurrentUpload(ulong netId, UploadState upload) =>
         NetworkManager.Singleton != null && NetworkManager.Singleton.IsConnectedClient
         && _outboundUploads.TryGetValue(netId, out UploadState current) && current == upload;
+
+    private static void RestorePreviousImage(ulong netId, UploadState upload)
+    {
+        FindToken(netId)?.RestoreImageLocal(upload.PreviousData);
+    }
 
     public static bool BroadcastImage(ulong networkObjectId, byte[] jpgData)
     {
@@ -307,10 +351,23 @@ public class TokenImageSync : MonoBehaviour
         Instance._outboundUploads.Remove(networkObjectId);
         Instance._appliedDownloads.Remove(networkObjectId);
         Instance._appliedUploads.Remove(networkObjectId);
+        Instance._cancelledIncomingVersions.Remove(networkObjectId);
+        ImageTransferUI.Remove($"portrait-upload-{networkObjectId}");
+        ImageTransferUI.Remove($"portrait-receive-{networkObjectId}");
+        ImageTransferUI.Remove($"portrait-receive-upload-{networkObjectId}");
         var ackKeys = new List<(ulong Client, ulong Token)>();
         foreach (var entry in Instance._downloadAcks)
             if (entry.Key.Token == networkObjectId) ackKeys.Add(entry.Key);
         foreach (var key in ackKeys) Instance._downloadAcks.Remove(key);
+        Instance._cancelledDownloads.RemoveWhere(key => key.Token == networkObjectId);
+        var cancelledUploads = new List<(ulong Sender, ulong Token)>();
+        foreach (var entry in Instance._cancelledUploadVersions)
+            if (entry.Key.Token == networkObjectId) cancelledUploads.Add(entry.Key);
+        foreach (var key in cancelledUploads) Instance._cancelledUploadVersions.Remove(key);
+        var progressKeys = new List<(ulong Client, ulong Token)>();
+        foreach (var entry in Instance._downloadProgress)
+            if (entry.Key.Token == networkObjectId) progressKeys.Add(entry.Key);
+        foreach (var key in progressKeys) Instance._downloadProgress.Remove(key);
     }
 
     public static bool TryGetCachedPortrait(ulong networkObjectId, out byte[] jpgData)
@@ -337,6 +394,7 @@ public class TokenImageSync : MonoBehaviour
         Instance._pendingApply.Remove(netId);
         Instance._appliedDownloads[netId] = pending.Version;
         Instance.SendDownloadAck(netId, pending.Version);
+        ImageTransferUI.Finish($"portrait-receive-{netId}", "Токен получен");
         return true;
     }
 
@@ -386,7 +444,10 @@ public class TokenImageSync : MonoBehaviour
             while (Time.unscaledTime < deadline)
             {
                 if (_downloadAcks.TryGetValue((clientId, netId), out int ack) && ack == version)
+                {
+                    ImageTransferUI.Finish($"portrait-send-{clientId}-{netId}", "Токен отправлен");
                     yield break;
+                }
                 if (!CanSendPortrait(clientId, netId, version)) yield break;
                 yield return new WaitForSecondsRealtime(0.25f);
             }
@@ -395,6 +456,7 @@ public class TokenImageSync : MonoBehaviour
         }
         if (CanSendPortrait(clientId, netId, version))
         {
+            ImageTransferUI.Finish($"portrait-send-{clientId}-{netId}", "Не удалось отправить токен");
             Debug.LogError($"[TokenImageSync] Client {clientId} did not apply portrait for token {netId}");
             DiceUI.Instance?.ShowToolNotice($"Игрок {clientId} не получил изображение токена.");
         }
@@ -404,7 +466,8 @@ public class TokenImageSync : MonoBehaviour
     {
         var nm = NetworkManager.Singleton;
         return nm != null && nm.IsServer && nm.ConnectedClients.ContainsKey(clientId)
-            && PortraitVersions.TryGetValue(netId, out int current) && current == version;
+            && PortraitVersions.TryGetValue(netId, out int current) && current == version
+            && (Instance == null || !Instance._cancelledDownloads.Contains((clientId, netId, version)));
     }
 
     private IEnumerator SendTransferRoutine(
@@ -452,8 +515,38 @@ public class TokenImageSync : MonoBehaviour
                 for (int j = 0; j < size; j++) writer.WriteValueSafe(data[offset + j]);
                 cmm.SendNamedMessage(chunkName, target, writer);
             }
-            if ((i + 1) % ChunksPerFrame == 0) yield return null;
+            if ((i + 1) % BatchChunks == 0 || i + 1 == total)
+            {
+                if (metaName == MSG_UPLOAD_META)
+                    ImageTransferUI.Show($"portrait-upload-{netId}", "Отправка токена",
+                        (float)(i + 1) / total, "Передача изображения на сервер",
+                        () => CancelUpload(netId, version));
+                else
+                    ImageTransferUI.Show($"portrait-send-{target}-{netId}", "Отправка токена",
+                        (float)(i + 1) / total, $"Игроку {target}",
+                        () => CancelDownload(target, netId, version));
+            }
+            // Wait for receiver progress before queuing another batch of reliable messages.
+            if ((i + 1) % BatchChunks == 0 && i + 1 < total)
+            {
+                float deadline = Time.unscaledTime + BatchTimeoutSeconds;
+                while (Time.unscaledTime < deadline && TransferStillNeeded(metaName, target, netId, version)
+                    && ReceivedProgress(metaName, target, netId, version) < i + 1)
+                    yield return null;
+                if (ReceivedProgress(metaName, target, netId, version) < i + 1)
+                    yield break;
+            }
+            else if ((i + 1) % 3 == 0) yield return null;
         }
+    }
+
+    private int ReceivedProgress(string metaName, ulong target, ulong netId, int version)
+    {
+        if (metaName == MSG_UPLOAD_META)
+            return _outboundUploads.TryGetValue(netId, out UploadState upload)
+                && upload.Version == version ? upload.ReceivedChunks : 0;
+        return _downloadProgress.TryGetValue((target, netId), out var progress)
+            && progress.Version == version ? progress.Count : 0;
     }
 
     private bool TransferStillNeeded(string metaName, ulong target, ulong netId, int version)
@@ -461,9 +554,142 @@ public class TokenImageSync : MonoBehaviour
         if (metaName == MSG_META)
             return PortraitVersions.TryGetValue(netId, out int currentVersion)
                 && currentVersion == version
+                && !_cancelledDownloads.Contains((target, netId, version))
                 && (!_downloadAcks.TryGetValue((target, netId), out int ack) || ack != version);
         return _outboundUploads.TryGetValue(netId, out UploadState upload)
             && upload.Version == version && !upload.Acknowledged;
+    }
+
+    private void ReportReceiveProgress(ulong sender, ulong netId, ReceiveState state, bool upload)
+    {
+        int count = state.Chunks.Count;
+        string id = upload ? $"portrait-receive-upload-{netId}" : $"portrait-receive-{netId}";
+        if (count % BatchChunks != 0 && count != state.TotalChunks) return;
+        ImageTransferUI.Show(id, "Получение токена", (float)count / state.TotalChunks,
+            upload ? $"От игрока {sender}" : "От сервера",
+            upload ? () => CancelIncomingUpload(sender, netId, state.Version)
+                : () => CancelIncomingDownload(netId, state.Version));
+        SendReceiveCount(sender, netId, state.Version, count, upload);
+    }
+
+    private static void SendReceiveCount(ulong sender, ulong netId, int version, int count, bool upload)
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm == null) return;
+        using var writer = new FastBufferWriter(sizeof(ulong) + 2 * sizeof(int), Allocator.Temp);
+        writer.WriteValueSafe(netId);
+        writer.WriteValueSafe(version);
+        writer.WriteValueSafe(count);
+        nm.CustomMessagingManager.SendNamedMessage(upload ? MSG_UPLOAD_PROGRESS : MSG_PROGRESS,
+            sender, writer);
+    }
+
+    private void OnUploadProgress(ulong sender, FastBufferReader reader)
+    {
+        if (sender != NetworkManager.ServerClientId || !TryReadProgress(reader,
+            out ulong netId, out int version, out int count)) return;
+        if (_outboundUploads.TryGetValue(netId, out UploadState upload)
+            && upload.Version == version
+            && count <= (upload.Data.Length + ChunkSize - 1) / ChunkSize)
+            upload.ReceivedChunks = Mathf.Max(upload.ReceivedChunks, count);
+    }
+
+    private void OnDownloadProgress(ulong sender, FastBufferReader reader)
+    {
+        if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer
+            || !TryReadProgress(reader, out ulong netId, out int version, out int count)) return;
+        if (PortraitVersions.TryGetValue(netId, out int current) && current == version
+            && PortraitCache.TryGetValue(netId, out byte[] data)
+            && count <= (data.Length + ChunkSize - 1) / ChunkSize)
+            _downloadProgress[(sender, netId)] = (version, count);
+    }
+
+    private static bool TryReadProgress(FastBufferReader reader,
+        out ulong netId, out int version, out int count)
+    {
+        netId = 0;
+        version = count = 0;
+        if (!reader.TryBeginRead(sizeof(ulong) + 2 * sizeof(int))) return false;
+        reader.ReadValueSafe(out netId);
+        reader.ReadValueSafe(out version);
+        reader.ReadValueSafe(out count);
+        return count >= 0;
+    }
+
+    private void CancelUpload(ulong netId, int version, bool notify = true)
+    {
+        if (!_outboundUploads.TryGetValue(netId, out UploadState upload)
+            || upload.Version != version) return;
+        _outboundUploads.Remove(netId);
+        RestorePreviousImage(netId, upload);
+        if (notify) CancelTransfer(NetworkManager.ServerClientId, netId, version, true);
+        ImageTransferUI.Finish($"portrait-upload-{netId}", "Отправка токена отменена");
+    }
+
+    private void CancelIncomingUpload(ulong sender, ulong netId, int version, bool notify = true)
+    {
+        if (!_uploadIncoming.TryGetValue(netId, out ReceiveState state)
+            || state.Version != version || state.Sender != sender) return;
+        _uploadIncoming.Remove(netId);
+        _cancelledUploadVersions[(sender, netId)] = version;
+        if (notify) CancelTransfer(sender, netId, version, true);
+        ImageTransferUI.Finish($"portrait-receive-upload-{netId}", "Получение токена отменено");
+    }
+
+    private void CancelDownload(ulong clientId, ulong netId, int version, bool notify = true)
+    {
+        _cancelledDownloads.Add((clientId, netId, version));
+        if (notify) CancelTransfer(clientId, netId, version, false);
+        ImageTransferUI.Finish($"portrait-send-{clientId}-{netId}", "Отправка токена отменена");
+    }
+
+    private void CancelIncomingDownload(ulong netId, int version, bool notify = true)
+    {
+        if (_incoming.TryGetValue(netId, out ReceiveState incoming)
+            && incoming.Version == version) _incoming.Remove(netId);
+        if (_pendingApply.TryGetValue(netId, out PendingPortrait pending)
+            && pending.Version == version) _pendingApply.Remove(netId);
+        _cancelledIncomingVersions[netId] = version;
+        if (notify) CancelTransfer(NetworkManager.ServerClientId, netId, version, false);
+        ImageTransferUI.Finish($"portrait-receive-{netId}", "Получение токена отменено");
+    }
+
+    private static void CancelTransfer(ulong target, ulong netId, int version, bool upload)
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm == null || !nm.IsConnectedClient) return;
+        using var writer = new FastBufferWriter(sizeof(ulong) + sizeof(int) + sizeof(bool), Allocator.Temp);
+        writer.WriteValueSafe(netId);
+        writer.WriteValueSafe(version);
+        writer.WriteValueSafe(upload);
+        nm.CustomMessagingManager.SendNamedMessage(MSG_CANCEL, target, writer);
+    }
+
+    private void OnCancel(ulong sender, FastBufferReader reader)
+    {
+        if (!reader.TryBeginRead(sizeof(ulong) + sizeof(int) + sizeof(bool))) return;
+        reader.ReadValueSafe(out ulong netId);
+        reader.ReadValueSafe(out int version);
+        reader.ReadValueSafe(out bool upload);
+        var nm = NetworkManager.Singleton;
+        if (nm == null) return;
+        if (upload)
+        {
+            if (nm.IsServer)
+            {
+                _cancelledUploadVersions[(sender, netId)] = version;
+                if (_uploadIncoming.TryGetValue(netId, out ReceiveState state)
+                    && state.Sender == sender && state.Version == version)
+                    CancelIncomingUpload(sender, netId, version, false);
+            }
+            else if (sender == NetworkManager.ServerClientId)
+                CancelUpload(netId, version, false);
+        }
+        else if (nm.IsServer && PortraitVersions.TryGetValue(netId, out int current)
+            && current == version)
+            CancelDownload(sender, netId, version, false);
+        else if (sender == NetworkManager.ServerClientId)
+            CancelIncomingDownload(netId, version, false);
     }
 
     private void OnUploadMeta(ulong senderId, FastBufferReader reader)
@@ -473,6 +699,8 @@ public class TokenImageSync : MonoBehaviour
             out int bytes, out uint checksum)) return;
         if (!ValidMetadata(total, bytes)
             || !NetworkPermissions.CanUploadTokenPortrait(senderId, FindToken(netId))) return;
+        if (_cancelledUploadVersions.TryGetValue((senderId, netId), out int cancelled)
+            && version <= cancelled) return;
 
         if (_appliedUploads.TryGetValue(netId, out var applied)
             && applied.Sender == senderId && version <= applied.Version)
@@ -484,11 +712,14 @@ public class TokenImageSync : MonoBehaviour
             && existing.Sender == senderId && existing.Version == version)
         {
             existing.LastProgress = Time.unscaledTime;
+            SendReceiveCount(senderId, netId, existing.Version, existing.Chunks.Count, true);
             return;
         }
         if (existing != null && existing.Sender == senderId && existing.Version > version)
             return;
         _uploadIncoming[netId] = NewReceiveState(senderId, version, total, bytes, checksum);
+        ImageTransferUI.Show($"portrait-receive-upload-{netId}", "Получение токена",
+            0f, $"От игрока {senderId}", () => CancelIncomingUpload(senderId, netId, version));
     }
 
     private void OnUploadChunk(ulong senderId, FastBufferReader reader)
@@ -496,6 +727,7 @@ public class TokenImageSync : MonoBehaviour
         if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer) return;
         if (!ReadChunk(reader, _uploadIncoming, senderId, out ulong netId, out ReceiveState state))
             return;
+        ReportReceiveProgress(senderId, netId, state, true);
         if (state.Chunks.Count != state.TotalChunks) return;
         _uploadIncoming.Remove(netId);
         if (!TryReassemble(state, out byte[] full))
@@ -508,6 +740,7 @@ public class TokenImageSync : MonoBehaviour
             || !BroadcastImage(netId, full)) return;
         _appliedUploads[netId] = (senderId, state.Version);
         SendUploadAck(senderId, netId, state.Version);
+        ImageTransferUI.Finish($"portrait-receive-upload-{netId}", "Токен получен");
     }
 
     private void OnUploadAck(ulong senderId, FastBufferReader reader)
@@ -526,6 +759,8 @@ public class TokenImageSync : MonoBehaviour
         if (!TryReadMeta(reader, out ulong netId, out int version, out int total,
             out int bytes, out uint checksum)) return;
         if (!ValidMetadata(total, bytes)) return;
+        if (_cancelledIncomingVersions.TryGetValue(netId, out int cancelled)
+            && version <= cancelled) return;
         if (_appliedDownloads.TryGetValue(netId, out int applied) && version <= applied)
         {
             if (version == applied) SendDownloadAck(netId, version);
@@ -537,10 +772,13 @@ public class TokenImageSync : MonoBehaviour
             && existing.Version == version)
         {
             existing.LastProgress = Time.unscaledTime;
+            SendReceiveCount(senderId, netId, existing.Version, existing.Chunks.Count, false);
             return;
         }
         if (existing != null && existing.Version > version) return;
         _incoming[netId] = NewReceiveState(senderId, version, total, bytes, checksum);
+        ImageTransferUI.Show($"portrait-receive-{netId}", "Получение токена",
+            0f, "От сервера", () => CancelIncomingDownload(netId, version));
     }
 
     private void OnChunkReceived(ulong senderId, FastBufferReader reader)
@@ -548,6 +786,7 @@ public class TokenImageSync : MonoBehaviour
         if (senderId != NetworkManager.ServerClientId) return;
         if (!ReadChunk(reader, _incoming, senderId, out ulong netId, out ReceiveState state))
             return;
+        ReportReceiveProgress(senderId, netId, state, false);
         if (state.Chunks.Count != state.TotalChunks) return;
         _incoming.Remove(netId);
         if (!TryReassemble(state, out byte[] full))
@@ -565,6 +804,7 @@ public class TokenImageSync : MonoBehaviour
         if (!token.ApplyImageLocal(full)) return;
         _appliedDownloads[netId] = state.Version;
         SendDownloadAck(netId, state.Version);
+        ImageTransferUI.Finish($"portrait-receive-{netId}", "Токен получен");
     }
 
     private void OnDownloadAck(ulong senderId, FastBufferReader reader)

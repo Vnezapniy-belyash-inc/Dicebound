@@ -87,6 +87,8 @@ public class DiceUI : MonoBehaviour
         _gridManager = FindAnyObjectByType<GridManager>();
         if (GetComponent<EffectPaintTool>() == null)
             gameObject.AddComponent<EffectPaintTool>();
+        if (GetComponent<SceneEditor>() == null) gameObject.AddComponent<SceneEditor>();
+        if (GetComponent<FogManager>() == null) gameObject.AddComponent<FogManager>();
         BuildUI();
         PlayerColors.Changed += OnPlayerColorsChanged;
         if (GetComponent<DmPanelUI>() == null)
@@ -411,7 +413,7 @@ public class DiceUI : MonoBehaviour
                 if (_sidebarGO != null && !_sidebarGO.activeSelf)
                     SelectDefaultTool(); }, "fa-solid--tools");
         MakeHeaderButton("Инициатива", font, 145, -328,
-            () => InitiativeTracker.Instance?.SetVisible(true), "charm--swords");
+            () => InitiativeTracker.Instance?.ToggleVisible(), "charm--swords");
         var characterButton = MakeHeaderButton("Персонаж", font, 130, -190,
             () => { }, "circle-user-round");
         characterButton.interactable = false;
@@ -545,7 +547,13 @@ public class DiceUI : MonoBehaviour
     void ShowLeaveConfirm()
     {
         if (_leaveConfirmDialog != null)
+        {
+            var question = _leaveConfirmDialog.transform.Find("Question").GetComponent<Text>();
+            bool unsaved = SceneFileStore.HasUnsavedChanges();
+            question.text = unsaved ? "Выйти из лобби?\nСцена не сохранена в JSON." : "Выйти из лобби?";
+            question.fontSize = unsaved ? 16 : 20;
             _leaveConfirmDialog.SetActive(true);
+        }
     }
 
     void DoLeave()
@@ -773,6 +781,8 @@ public class DiceUI : MonoBehaviour
 
     void SelectDefaultTool()
     {
+        SceneEditor.Instance?.Deactivate();
+        FogManager.Instance?.StopManual();
         MeasurementTool.Instance?.Deactivate();
         EffectPaintTool.Instance?.Deactivate();
         _textureMenuOpen = false;

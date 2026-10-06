@@ -1,8 +1,11 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 /// <summary>Shared initiative order. Only the host changes entries and turns.</summary>
@@ -23,6 +26,8 @@ public class InitiativeTracker : NetworkBehaviour
     }
 
     private readonly List<Entry> _entries = new();
+    // HP exists only on the host and is deliberately excluded from _netData.
+    private readonly Dictionary<int, int> _hpById = new();
     private int _currentIndex;
     private int _nextEntryId;
     private bool _userVisible;
@@ -32,7 +37,8 @@ public class InitiativeTracker : NetworkBehaviour
     private GameObject _panel, _addPanel, _hostButtons, _emptyMessage;
     private GameObject _viewport;
     private RectTransform _content;
-    private InputField _nameInput, _initInput;
+    private InputField _nameInput, _initInput, _hpInput;
+    private int _focusedAddField;
     private Text _roundText;
     private Text _addErrorText;
     private const int CardsPerRow = 5;
@@ -74,6 +80,7 @@ public class InitiativeTracker : NetworkBehaviour
     public override void OnNetworkDespawn()
     {
         _netData.OnValueChanged -= OnDataChanged;
+        _hpById.Clear();
     }
 
     private void OnDataChanged(FixedString4096Bytes oldValue, FixedString4096Bytes newValue)
@@ -85,18 +92,47 @@ public class InitiativeTracker : NetworkBehaviour
     private void Update()
     {
         bool connected = GameNetworkManager.Instance != null && GameNetworkManager.Instance.IsConnected;
-        bool shouldShow = connected && (_entries.Count > 0 || _userVisible);
+        bool shouldShow = connected && _userVisible;
         if (_panel != null && _panel.activeSelf != shouldShow)
             _panel.SetActive(shouldShow);
         if (!connected && _addPanel != null) _addPanel.SetActive(false);
 
         if (connected) UpdateHostControls();
+        if (_addPanel != null && _addPanel.activeSelf
+            && Keyboard.current?.tabKey.wasPressedThisFrame == true)
+        {
+            int direction = Keyboard.current.shiftKey.isPressed ? -1 : 1;
+            _focusedAddField = (_focusedAddField + direction + 3) % 3;
+            StartCoroutine(FocusAfterFrame(AddField(_focusedAddField)));
+        }
+    }
+
+    private void LateUpdate()
+    {
+        if (_addPanel == null || !_addPanel.activeSelf
+            || Keyboard.current?.tabKey.wasPressedThisFrame == true) return;
+        var selected = EventSystem.current?.currentSelectedGameObject;
+        if (selected == _nameInput.gameObject) _focusedAddField = 0;
+        else if (selected == _initInput.gameObject) _focusedAddField = 1;
+        else if (selected == _hpInput.gameObject) _focusedAddField = 2;
+    }
+
+    private InputField AddField(int index) => index == 0 ? _nameInput
+        : index == 1 ? _initInput : _hpInput;
+
+    private IEnumerator FocusAfterFrame(InputField field)
+    {
+        yield return new WaitForEndOfFrame();
+        if (_addPanel == null || !_addPanel.activeSelf || field == null) yield break;
+        EventSystem.current?.SetSelectedGameObject(field.gameObject);
+        field.ActivateInputField();
     }
 
     public void SetVisible(bool visible)
     {
         _userVisible = visible;
-        if (_panel != null) _panel.SetActive(visible || _entries.Count > 0);
+        if (_panel != null) _panel.SetActive(visible && GameNetworkManager.Instance != null
+            && GameNetworkManager.Instance.IsConnected);
         if (!visible && _addPanel != null) _addPanel.SetActive(false);
     }
 
@@ -177,12 +213,13 @@ public class InitiativeTracker : NetworkBehaviour
         _currentIndex = Mathf.Max(0, _entries.FindIndex(e => e.id == activeId));
     }
 
-    public void AddEntry(string name, int initiative, string colorHex = "#FFFFFF")
+    public void AddEntry(string name, int initiative, string colorHex = "#FFFFFF", int hp = 0)
     {
-        AddEntryInternal(name, initiative, colorHex, ulong.MaxValue);
+        AddEntryInternal(name, initiative, colorHex, ulong.MaxValue, hp);
     }
 
-    private void AddEntryInternal(string name, int initiative, string colorHex, ulong playerId)
+    private void AddEntryInternal(string name, int initiative, string colorHex, ulong playerId,
+        int hp = 0)
     {
         if (!IsHost || _entries.Count >= 30 || string.IsNullOrWhiteSpace(name)) return;
         initiative = Mathf.Clamp(initiative, -999, 999);
@@ -198,8 +235,10 @@ public class InitiativeTracker : NetworkBehaviour
             return;
         }
         int activeId = ActiveId;
-        _entries.Add(new Entry { id = ++_nextEntryId, name = cleanName,
+        int newId = ++_nextEntryId;
+        _entries.Add(new Entry { id = newId, name = cleanName,
             initiative = initiative, colorHex = colorHex, playerId = playerId });
+        _hpById[newId] = Mathf.Clamp(hp, 0, 99999);
         SortKeepingTurn(activeId);
         Sync();
     }
@@ -226,6 +265,7 @@ public class InitiativeTracker : NetworkBehaviour
     {
         if (!IsHost || index < 0 || index >= _entries.Count) return;
         int activeId = ActiveId;
+        _hpById.Remove(_entries[index].id);
         _entries.RemoveAt(index);
         _currentIndex = Mathf.Max(0, _entries.FindIndex(e => e.id == activeId));
         Sync();
@@ -248,6 +288,14 @@ public class InitiativeTracker : NetworkBehaviour
         Sync();
     }
 
+    private void SetHpById(int id, string value)
+    {
+        if (!IsHost || !_entries.Exists(entry => entry.id == id)) return;
+        if (int.TryParse(value, out int hp))
+            _hpById[id] = Mathf.Clamp(hp, 0, 99999);
+        RebuildRows();
+    }
+
     public void NextTurn()
     {
         if (!IsHost || _entries.Count == 0) return;
@@ -259,6 +307,7 @@ public class InitiativeTracker : NetworkBehaviour
     {
         if (!IsHost) return;
         _entries.Clear();
+        _hpById.Clear();
         _currentIndex = 0;
         Sync();
     }
@@ -369,18 +418,27 @@ public class InitiativeTracker : NetworkBehaviour
                 active ? VttUiSkin.Blue : VttUiSkin.Muted, TextAnchor.MiddleCenter,
                 new Vector2(0, 1), new Vector2(0, 1), new Vector2(28, 24),
                 new Vector2(4, -4), active);
-            string displayName = entry.name.Length > 14
-                ? entry.name.Substring(0, 13) + "…" : entry.name;
+            int maxNameLength = IsHost ? 11 : 14;
+            string displayName = entry.name.Length > maxNameLength
+                ? entry.name.Substring(0, maxNameLength - 1) + "…" : entry.name;
             Label(row.transform, displayName, 13, VttUiSkin.Text, TextAnchor.MiddleLeft,
-                new Vector2(0, 1), new Vector2(0, 1), new Vector2(122, 25),
+                new Vector2(0, 1), new Vector2(0, 1), new Vector2(IsHost ? 100 : 122, 25),
                 new Vector2(32, -3), active);
             if (IsHost)
             {
-                var input = Input(row.transform, entry.initiative.ToString(), 48, 22, 32, -25);
+                var input = Input(row.transform, entry.initiative.ToString(), 44, 22, 24, -25);
                 input.contentType = InputField.ContentType.IntegerNumber;
                 int id = entry.id;
                 input.onEndEdit.AddListener(value => SetInitiativeById(id, value));
-                Button(row.transform, "×", 24, 22, 135, -25,
+                Label(row.transform, "HP", 10, new Color(1f, 0.36f, 0.38f),
+                    TextAnchor.MiddleLeft, new Vector2(0, 1), new Vector2(0, 1),
+                    new Vector2(18, 22), new Vector2(82, -25), true);
+                var hpInput = Input(row.transform, _hpById.GetValueOrDefault(id).ToString(),
+                    58, 22, 100, -25);
+                hpInput.contentType = InputField.ContentType.IntegerNumber;
+                hpInput.textComponent.color = new Color(1f, 0.36f, 0.38f);
+                hpInput.onEndEdit.AddListener(value => SetHpById(id, value));
+                Button(row.transform, "×", 22, 20, 137, -3,
                     () => RemoveEntryById(id), new Color(0.28f, 0.11f, 0.14f));
             }
             else
@@ -394,7 +452,7 @@ public class InitiativeTracker : NetworkBehaviour
     {
         _addPanel = Box(parent, "AddParticipant", VttUiSkin.Panel, 12);
         Place(_addPanel, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
-            new Vector2(414, 174), Vector2.zero);
+            new Vector2(414, 216), Vector2.zero);
         _addPanel.SetActive(false);
         Label(_addPanel.transform, "Добавить участника", 18, VttUiSkin.Text,
             TextAnchor.MiddleLeft, new Vector2(0, 1), new Vector2(0, 1),
@@ -406,12 +464,18 @@ public class InitiativeTracker : NetworkBehaviour
             new Vector2(0, 1), new Vector2(0, 1), new Vector2(125, 22), new Vector2(18, -96));
         _initInput = Input(_addPanel.transform, "0", 74, 32, 150, -93);
         _initInput.contentType = InputField.ContentType.IntegerNumber;
+        Label(_addPanel.transform, "HP", 13, new Color(1f, 0.36f, 0.38f),
+            TextAnchor.MiddleLeft, new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(125, 22), new Vector2(18, -138));
+        _hpInput = Input(_addPanel.transform, "0", 100, 32, 150, -135);
+        _hpInput.contentType = InputField.ContentType.IntegerNumber;
+        _hpInput.textComponent.color = new Color(1f, 0.36f, 0.38f);
         _addErrorText = Label(_addPanel.transform, "", 12,
             VttUiSkin.Muted, TextAnchor.MiddleLeft, new Vector2(0, 1), new Vector2(0, 1),
-            new Vector2(365, 20), new Vector2(18, -129));
-        Button(_addPanel.transform, "Отмена", 92, 34, 18, -137,
+            new Vector2(365, 20), new Vector2(18, -166));
+        Button(_addPanel.transform, "Отмена", 92, 34, 18, -178,
             () => _addPanel.SetActive(false), VttUiSkin.Button);
-        Button(_addPanel.transform, "Добавить", 112, 34, 284, -137,
+        Button(_addPanel.transform, "Добавить", 112, 34, 284, -178,
             SubmitAdd, new Color(0.10f, 0.30f, 0.48f));
     }
 
@@ -421,6 +485,8 @@ public class InitiativeTracker : NetworkBehaviour
         _addErrorText.text = "";
         SetVisible(true);
         _addPanel.SetActive(true);
+        _focusedAddField = 0;
+        StartCoroutine(FocusAfterFrame(_nameInput));
     }
 
     private void SubmitAdd()
@@ -429,16 +495,26 @@ public class InitiativeTracker : NetworkBehaviour
         if (string.IsNullOrWhiteSpace(_nameInput.text))
         {
             _addErrorText.text = "Введите имя участника.";
+            StartCoroutine(FocusAfterFrame(_nameInput));
             return;
         }
         if (!int.TryParse(_initInput.text, out int score))
         {
             _addErrorText.text = "Укажите инициативу числом.";
+            StartCoroutine(FocusAfterFrame(_initInput));
             return;
         }
-        AddEntry(_nameInput.text, Mathf.Clamp(score, -999, 999));
+        if (!int.TryParse(_hpInput.text, out int hp) || hp < 0)
+        {
+            _addErrorText.text = "Укажите HP неотрицательным числом.";
+            StartCoroutine(FocusAfterFrame(_hpInput));
+            return;
+        }
+        AddEntry(_nameInput.text, Mathf.Clamp(score, -999, 999), "#FFFFFF",
+            Mathf.Clamp(hp, 0, 99999));
         _nameInput.text = "";
         _initInput.text = "0";
+        _hpInput.text = "0";
         _addPanel.SetActive(false);
     }
 

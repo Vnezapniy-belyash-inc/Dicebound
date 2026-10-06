@@ -26,6 +26,8 @@ public class TokenManager : MonoBehaviour
     private int _nextRequestId;
     private readonly Dictionary<int, bool> _pendingRequests = new();
     private readonly Dictionary<(ulong Client, int Request), ulong> _processedRequests = new();
+    private readonly TokenSessionState _sessionState = new();
+    private readonly TokenNameRegistry _names = new();
 
     private void Awake()
     {
@@ -66,6 +68,8 @@ public class TokenManager : MonoBehaviour
                 MSG_SPAWN_TOKEN);
         _handlerRegistered = false;
         _processedRequests.Clear();
+        _sessionState.Clear();
+        _names.Clear();
     }
 
     private void OnClientStopped(bool wasHost)
@@ -137,13 +141,56 @@ public class TokenManager : MonoBehaviour
 
         if (NetworkManager.Singleton.IsServer)
         {
-            SpawnTokenForClient(pos, NetworkManager.Singleton.LocalClientId);
+            if (DmPanelUI.Instance != null) DmPanelUI.Instance.ShowTokenCreation();
+            else SpawnTokenForClient(pos, NetworkManager.Singleton.LocalClientId);
         }
         else
         {
             int requestId = ++_nextRequestId;
             _pendingRequests[requestId] = true;
             StartCoroutine(SendSpawnRequestRoutine(requestId));
+        }
+    }
+
+    /// <summary>GM creates a named token with hidden state included before any client sees it.</summary>
+    public TokenController CreateTokenAsHost(string name, bool hidden)
+    {
+        var manager = NetworkManager.Singleton;
+        if (manager == null || !manager.IsHost) return null;
+        return SpawnTokenForClient(GetDefaultSpawnPosition(), manager.LocalClientId,
+            hidden: hidden, requestedName: name);
+    }
+
+    public TokenController RestoreSceneToken(SceneToken data, GridManager grid)
+    {
+        if (NetworkManager.Singleton?.IsHost != true) return null;
+        return SpawnTokenForClient(grid.GridCoordinatesToWorld(data.position), NetworkManager.Singleton.LocalClientId,
+            hidden: data.hidden, requestedName: data.name, restored: data);
+    }
+
+    private float _nextAssignmentCheck;
+    private void Update()
+    {
+        if (NetworkManager.Singleton?.IsHost != true || Time.unscaledTime < _nextAssignmentCheck) return;
+        _nextAssignmentCheck = Time.unscaledTime + 0.5f;
+        RestoreAssignments();
+    }
+    private ulong ResolveParticipant(string nickname)
+    {
+        if (string.IsNullOrEmpty(nickname)) return NetworkManager.ServerClientId;
+        foreach (ulong client in NetworkManager.Singleton.ConnectedClientsIds)
+            if (client != NetworkManager.ServerClientId && string.Equals(PlayerColors.GetNickname(client), nickname, System.StringComparison.OrdinalIgnoreCase)) return client;
+        return ulong.MaxValue;
+    }
+    private void RestoreAssignments()
+    {
+        foreach (var token in FindObjectsByType<TokenController>(FindObjectsInactive.Exclude))
+        {
+            if (!token.IsSpawned || string.IsNullOrEmpty(token.SavedOwnerNickname)) continue;
+            ulong client = ResolveParticipant(token.SavedOwnerNickname);
+            if (client == ulong.MaxValue) continue;
+            if (token.ControllerClientId != client) token.ServerRestoreAssignment(client);
+            if (token.IsHero) _sessionState.RestoreHero(client);
         }
     }
 
@@ -188,7 +235,8 @@ public class TokenManager : MonoBehaviour
         if (!NetworkManager.Singleton.IsServer || source == null || !source.IsSpawned || tokenPrefab == null)
             return null;
 
-        TokenController copy = SpawnTokenForClient(GetDefaultSpawnPosition(), copierClientId);
+        TokenController copy = SpawnTokenForClient(GetDefaultSpawnPosition(), copierClientId,
+            isCopy: true, hidden: source.IsHidden, requestedName: source.NameBase);
         if (copy == null) return null;
 
         byte[] portrait = TokenImageSync.GetPortraitBytesForCopy(source);
@@ -217,6 +265,13 @@ public class TokenManager : MonoBehaviour
             return;
         }
         if (!NetworkManager.Singleton.ConnectedClients.ContainsKey(senderId)) return;
+        // Registration restores the previous hero record before this client can create another token.
+        if (PlayerRegistry.Instance == null || !PlayerRegistry.Instance.IsRegisteredPlayer(senderId))
+        {
+            SendSpawnAck(senderId, requestId, 0);
+            return;
+        }
+        RestoreAssignments();
         var token = SpawnTokenForClient(GetDefaultSpawnPosition(), senderId);
         _processedRequests[key] = token != null ? token.NetworkObjectId : 0;
         SendSpawnAck(senderId, requestId, token != null ? token.NetworkObjectId : 0);
@@ -234,11 +289,35 @@ public class TokenManager : MonoBehaviour
         cmm.SendNamedMessage(MSG_SPAWN_TOKEN_ACK, clientId, writer);
     }
 
-    private TokenController SpawnTokenForClient(Vector3 pos, ulong ownerId)
+    public void ReassignHeroRecord(ulong oldClientId, ulong newClientId) =>
+        _sessionState.ReassignPlayer(oldClientId, newClientId);
+
+    private TokenController SpawnTokenForClient(Vector3 pos, ulong ownerId,
+        bool isCopy = false, bool hidden = false, string requestedName = null, SceneToken restored = null)
     {
         if (tokenPrefab == null) return null;
-        pos.y = spawnHeight;
+        if (restored == null) pos.y = spawnHeight;
         NetworkObject netObj = Instantiate(tokenPrefab, pos, Quaternion.identity);
+        if (restored != null) netObj.transform.localScale = restored.scale;
+        var token = netObj.GetComponent<TokenController>();
+        if (token == null)
+        {
+            Destroy(netObj.gameObject);
+            return null;
+        }
+        ulong controller = restored != null ? restored.unassigned ? ulong.MaxValue : ResolveParticipant(restored.ownerNickname) : ownerId;
+        bool hero = restored != null ? restored.hero : _sessionState.IssueHero(ownerId, NetworkPermissions.IsHostClient(ownerId), isCopy);
+        if (hero && controller != ulong.MaxValue && controller != NetworkManager.ServerClientId) _sessionState.RestoreHero(controller);
+        string basis = TokenNameRegistry.Normalize(requestedName ?? (hero ? "Герой" : "Токен"));
+        var existingNames = new List<string>();
+        foreach (var existing in FindObjectsByType<TokenController>(FindObjectsInactive.Exclude))
+            if (existing.IsSpawned) existingNames.Add(existing.TokenName);
+        bool conflicts = restored != null && existingNames.Exists(existing => string.Equals(existing, restored.name, System.StringComparison.OrdinalIgnoreCase));
+        string name = restored != null && !conflicts ? restored.name : _names.Allocate(basis, existingNames);
+        _names.Reserve(name);
+        token.InitializeServerState(ownerId, hero, hidden, name, restored?.nameBase ?? basis,
+            restored?.visionFeet ?? 0, restored?.id, controller, restored?.everyoneCanMove ?? false,
+            restored != null ? restored.ownerNickname : ownerId != NetworkManager.ServerClientId ? PlayerColors.GetNickname(ownerId) : null);
         netObj.SpawnWithObservers = false;
         netObj.SpawnWithOwnership(ownerId);
         netObj.DontDestroyWithOwner = true;
@@ -246,8 +325,13 @@ public class TokenManager : MonoBehaviour
         else
             foreach (ulong clientId in NetworkManager.Singleton.ConnectedClientsIds)
                 if (clientId != NetworkManager.ServerClientId) netObj.NetworkShow(clientId);
-        netObj.GetComponent<TokenController>()?.SnapToGrid();
+        if (restored == null) token.SnapToGrid();
+        if (restored == null && NetworkPermissions.IsHostClient(ownerId))
+        {
+            string id = token.SceneId;
+            GameMasterUndo.Record("создание токена", () => TokenController.FindSceneToken(id)?.RequestDespawn());
+        }
         Debug.Log($"[Token] Spawned for owner {ownerId}");
-        return netObj.GetComponent<TokenController>();
+        return token;
     }
 }

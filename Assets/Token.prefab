@@ -267,9 +267,9 @@ MonoBehaviour:
   m_GameObject: {fileID: 5658650786901395620}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: e96cb6065543e43c4a752faaa1468eb1, type: 3}
+  m_Script: {fileID: 11500000, guid: 89aa80234ab14d19b7c1946be8fb9a18, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Unity.Netcode.Runtime::Unity.Netcode.Components.NetworkTransform
+  m_EditorClassIdentifier: Assembly-CSharp::NetworkDragTransform
   ShowTopMostFoldoutHeaderGroup: 1
   NetworkTransformExpanded: 0
   AutoOwnerAuthorityTickOffset: 1

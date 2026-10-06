@@ -11,11 +11,14 @@ public class MapSync : NetworkBehaviour
     private const string MSG_MAP_CHUNK = "MapChunk";
     private const string MSG_MAP_REQUEST = "MapRequest";
     private const string MSG_MAP_ACK = "MapAck";
+    private const string MSG_MAP_PROGRESS = "MapProgress";
+    private const string MSG_MAP_CANCEL = "MapCancel";
     private const int ChunkSize = 1000;
     private const int ChunksPerFrame = 4;
+    private const int BatchChunks = 32;
     public const int MaxMapBytes = 16 * 1024 * 1024;
     private const int MaxRetries = 3;
-    private const float AckTimeoutSeconds = 6f;
+    private const float AckTimeoutSeconds = 20f;
     private const float ClientRetryAfterSeconds = 12f;
 
     [Header("References")]
@@ -23,11 +26,33 @@ public class MapSync : NetworkBehaviour
 
     public static MapSync Instance { get; private set; }
     public bool IsReceivingMap => _receivingMap;
+    public float TransferWaitSeconds
+    {
+        get
+        {
+            int players = NetworkManager != null ? Mathf.Max(1, NetworkManager.ConnectedClientsIds.Count - 1) : 1;
+            return Mathf.Max(40, 60 + (_cachedPng?.Length ?? 0) / (128f * 1024) * Mathf.Max(1, players / 4f));
+        }
+    }
+    public bool AllClientsHaveCurrentMap
+    {
+        get
+        {
+            if (!IsServer || _cachedPng == null) return false;
+            foreach (ulong client in NetworkManager.ConnectedClientsIds)
+                if (client != Unity.Netcode.NetworkManager.ServerClientId
+                    && (!_acknowledgedVersions.TryGetValue(client, out int version) || version != _mapVersion)) return false;
+            return true;
+        }
+    }
 
     private byte[] _cachedPng;
     private int _mapVersion;
     private uint _mapChecksum;
     private readonly Dictionary<ulong, int> _acknowledgedVersions = new();
+    private readonly Dictionary<ulong, (int Version, int Count)> _receivedProgress = new();
+    private readonly HashSet<(ulong Client, int Version)> _cancelledSends = new();
+    private readonly HashSet<(ulong Client, int Version)> _activeSends = new();
     private readonly Dictionary<ulong, float> _lastMapRequestTime = new();
 
     private readonly Dictionary<int, byte[]> _incomingChunks = new();
@@ -39,6 +64,7 @@ public class MapSync : NetworkBehaviour
     private int _retryCount;
     private float _lastProgressTime;
     private bool _receivingMap;
+    private int _cancelledIncomingVersion = -1;
     private bool _handlersRegistered;
     private bool _registeredAsServer;
 
@@ -52,10 +78,15 @@ public class MapSync : NetworkBehaviour
 
     public override void OnNetworkDespawn()
     {
+        StopAllCoroutines();
         UnregisterHandlers();
         _receivingMap = false;
         _incomingChunks.Clear();
         _acknowledgedVersions.Clear();
+        _receivedProgress.Clear();
+        _cancelledSends.Clear();
+        _activeSends.Clear();
+        ImageTransferUI.Remove("map-receive");
         _lastMapRequestTime.Clear();
         base.OnNetworkDespawn();
     }
@@ -77,12 +108,14 @@ public class MapSync : NetworkBehaviour
         {
             cmm.RegisterNamedMessageHandler(MSG_MAP_REQUEST, OnMapRequest);
             cmm.RegisterNamedMessageHandler(MSG_MAP_ACK, OnMapAck);
+            cmm.RegisterNamedMessageHandler(MSG_MAP_PROGRESS, OnMapProgress);
         }
         else
         {
             cmm.RegisterNamedMessageHandler(MSG_MAP_META, OnMapMetaReceived);
             cmm.RegisterNamedMessageHandler(MSG_MAP_CHUNK, OnMapChunkReceived);
         }
+        cmm.RegisterNamedMessageHandler(MSG_MAP_CANCEL, OnMapCancel);
         _handlersRegistered = true;
     }
 
@@ -96,12 +129,14 @@ public class MapSync : NetworkBehaviour
             {
                 cmm.UnregisterNamedMessageHandler(MSG_MAP_REQUEST);
                 cmm.UnregisterNamedMessageHandler(MSG_MAP_ACK);
+                cmm.UnregisterNamedMessageHandler(MSG_MAP_PROGRESS);
             }
             else
             {
                 cmm.UnregisterNamedMessageHandler(MSG_MAP_META);
                 cmm.UnregisterNamedMessageHandler(MSG_MAP_CHUNK);
             }
+            cmm.UnregisterNamedMessageHandler(MSG_MAP_CANCEL);
         }
         _handlersRegistered = false;
     }
@@ -117,6 +152,7 @@ public class MapSync : NetworkBehaviour
             DiceUI.Instance?.ShowToolNotice("Не удалось загрузить карту. Переподключитесь к сессии.");
             _receivingMap = false;
             _incomingChunks.Clear();
+            ImageTransferUI.Finish("map-receive", "Не удалось загрузить карту");
             return;
         }
         _retryCount++;
@@ -136,6 +172,8 @@ public class MapSync : NetworkBehaviour
         _mapVersion++;
         _mapChecksum = ComputeChecksum(pngData);
         _acknowledgedVersions.Clear();
+        _receivedProgress.Clear();
+        _cancelledSends.Clear();
         foreach (var clientId in NetworkManager.Singleton.ConnectedClientsIds)
         {
             if (clientId != NetworkManager.ServerClientId)
@@ -145,18 +183,43 @@ public class MapSync : NetworkBehaviour
 
     public IEnumerator SendMapWithRetriesToClientRoutine(ulong clientId)
     {
+        int version = _mapVersion;
+        if (!_activeSends.Add((clientId, version)))
+        {
+            while (_activeSends.Contains((clientId, version))
+                && version == _mapVersion
+                && NetworkManager.Singleton != null
+                && NetworkManager.Singleton.ConnectedClients.ContainsKey(clientId))
+                yield return new WaitForSecondsRealtime(0.25f);
+            yield break;
+        }
+        yield return SendMapWithRetriesCore(clientId);
+        _activeSends.Remove((clientId, version));
+    }
+
+    private IEnumerator SendMapWithRetriesCore(ulong clientId)
+    {
         if (!IsServer || _cachedPng == null) yield break;
         int version = _mapVersion;
         for (int attempt = 1; attempt <= MaxRetries + 1 && version == _mapVersion; attempt++)
         {
             if (!NetworkManager.Singleton.ConnectedClients.ContainsKey(clientId)) yield break;
+            if (_cancelledSends.Contains((clientId, version))) yield break;
+            ImageTransferUI.Show($"map-send-{clientId}", "Отправка карты", 0f,
+                $"Игроку {clientId}, попытка {attempt}/{MaxRetries + 1}",
+                () => CancelSend(clientId, version));
             yield return SendMapToClientRoutine(clientId);
             float deadline = Time.unscaledTime + AckTimeoutSeconds;
             while (Time.unscaledTime < deadline)
             {
                 if (_acknowledgedVersions.TryGetValue(clientId, out int ack) && ack == version)
+                {
+                    ImageTransferUI.Finish($"map-send-{clientId}", "Карта отправлена");
                     yield break;
-                if (!NetworkManager.Singleton.ConnectedClients.ContainsKey(clientId)) yield break;
+                }
+                if (_cancelledSends.Contains((clientId, version))) yield break;
+                var manager = NetworkManager.Singleton;
+                if (manager == null || !manager.IsListening || !manager.ConnectedClients.ContainsKey(clientId)) yield break;
                 yield return new WaitForSecondsRealtime(0.25f);
             }
             if (attempt <= MaxRetries)
@@ -166,6 +229,7 @@ public class MapSync : NetworkBehaviour
         {
             Debug.LogError($"[MapSync] Client {clientId} did not apply map version {version}");
             DiceUI.Instance?.ShowToolNotice($"Игрок {clientId} не получил карту.");
+            ImageTransferUI.Finish($"map-send-{clientId}", "Не удалось отправить карту");
         }
     }
 
@@ -188,8 +252,10 @@ public class MapSync : NetworkBehaviour
             cmm.SendNamedMessage(MSG_MAP_META, clientId, writer);
         }
         yield return null;
-        for (int i = 0; i < total && version == _mapVersion; i++)
+        int first = _receivedProgress.TryGetValue(clientId, out var progress) && progress.Version == version ? progress.Count : 0;
+        for (int i = first; i < total && version == _mapVersion; i++)
         {
+            if (_cancelledSends.Contains((clientId, version))) yield break;
             if (!NetworkManager.Singleton.ConnectedClients.ContainsKey(clientId)) yield break;
             if (_acknowledgedVersions.TryGetValue(clientId, out int ack) && ack == version)
                 yield break;
@@ -206,10 +272,26 @@ public class MapSync : NetworkBehaviour
                 writer.WriteValueSafe(version);
                 writer.WriteValueSafe(i);
                 writer.WriteValueSafe(size);
-                for (int j = 0; j < size; j++) writer.WriteValueSafe(data[offset + j]);
+                writer.WriteBytesSafe(data, size, offset);
                 cmm.SendNamedMessage(MSG_MAP_CHUNK, clientId, writer);
             }
-            if ((i + 1) % ChunksPerFrame == 0) yield return null;
+            if ((i + 1) % BatchChunks == 0 || i + 1 == total)
+                ImageTransferUI.Show($"map-send-{clientId}", "Отправка карты",
+                    (float)(i + 1) / total, $"Игроку {clientId}",
+                    () => CancelSend(clientId, version));
+            if ((i + 1) % BatchChunks == 0 && i + 1 < total)
+            {
+                float deadline = Time.unscaledTime + AckTimeoutSeconds;
+                while (Time.unscaledTime < deadline && version == _mapVersion
+                    && !_cancelledSends.Contains((clientId, version))
+                    && (!_receivedProgress.TryGetValue(clientId, out var received)
+                        || received.Version != version || received.Count < i + 1))
+                    yield return null;
+                if (!_receivedProgress.TryGetValue(clientId, out var receivedAfter)
+                    || receivedAfter.Version != version || receivedAfter.Count < i + 1)
+                    yield break;
+            }
+            else if ((i + 1) % ChunksPerFrame == 0) yield return null;
         }
     }
 
@@ -227,6 +309,7 @@ public class MapSync : NetworkBehaviour
             return;
         }
         if (version <= _appliedVersion) { SendAck(version); return; }
+        if (version <= _cancelledIncomingVersion) return;
         if (version < _incomingVersion) return;
         if (version == _incomingVersion && !_receivingMap && _retryCount >= MaxRetries)
             return;
@@ -240,8 +323,12 @@ public class MapSync : NetworkBehaviour
             _incomingChecksum = checksum;
             if (isNewVersion) _retryCount = 0;
         }
+        else SendProgress(version, _incomingChunks.Count);
         _receivingMap = true;
         _lastProgressTime = Time.unscaledTime;
+        ImageTransferUI.Show("map-receive", "Загрузка карты",
+            (float)_incomingChunks.Count / _incomingTotalChunks, "Получение от сервера",
+            () => CancelReceive(version));
     }
 
     private void OnMapChunkReceived(ulong senderId, FastBufferReader reader)
@@ -255,10 +342,17 @@ public class MapSync : NetworkBehaviour
         int expected = Mathf.Min(ChunkSize, _incomingBytes - index * ChunkSize);
         if (size != expected || !reader.TryBeginRead(size)) return;
         byte[] chunk = new byte[size];
-        for (int i = 0; i < size; i++) reader.ReadValueSafe(out chunk[i]);
+        reader.ReadBytesSafe(ref chunk, size);
         if (_incomingChunks.ContainsKey(index)) return;
         _incomingChunks.Add(index, chunk);
         _lastProgressTime = Time.unscaledTime;
+        if (_incomingChunks.Count % BatchChunks == 0 || _incomingChunks.Count == _incomingTotalChunks)
+        {
+            ImageTransferUI.Show("map-receive", "Загрузка карты",
+                (float)_incomingChunks.Count / _incomingTotalChunks, "Получение от сервера",
+                () => CancelReceive(version));
+            SendProgress(version, _incomingChunks.Count);
+        }
         if (_incomingChunks.Count == _incomingTotalChunks) Reassemble();
     }
 
@@ -283,8 +377,8 @@ public class MapSync : NetworkBehaviour
         _appliedVersion = _incomingVersion;
         _receivingMap = false;
         _incomingChunks.Clear();
-        TokenController.RebuildCellOccupancy();
         SendAck(_appliedVersion);
+        ImageTransferUI.Finish("map-receive", "Карта загружена");
         Debug.Log($"[MapSync] Applied map version {_appliedVersion}, {_incomingBytes} bytes");
     }
 
@@ -305,6 +399,70 @@ public class MapSync : NetworkBehaviour
         if (version == _mapVersion) _acknowledgedVersions[senderId] = version;
     }
 
+    private void SendProgress(int version, int count)
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm == null || !nm.IsConnectedClient || nm.IsServer) return;
+        using var writer = new FastBufferWriter(2 * sizeof(int), Allocator.Temp);
+        writer.WriteValueSafe(version);
+        writer.WriteValueSafe(count);
+        nm.CustomMessagingManager.SendNamedMessage(MSG_MAP_PROGRESS,
+            NetworkManager.ServerClientId, writer);
+    }
+
+    private void OnMapProgress(ulong senderId, FastBufferReader reader)
+    {
+        if (!IsServer || !reader.TryBeginRead(2 * sizeof(int))) return;
+        reader.ReadValueSafe(out int version);
+        reader.ReadValueSafe(out int count);
+        if (version != _mapVersion || count < 0 || _cachedPng == null
+            || count > (_cachedPng.Length + ChunkSize - 1) / ChunkSize
+            || !NetworkManager.Singleton.ConnectedClients.ContainsKey(senderId))
+            return;
+        _receivedProgress[senderId] = (version, count);
+    }
+
+    private void CancelSend(ulong clientId, int version, bool notify = true)
+    {
+        if (version != _mapVersion) return;
+        _cancelledSends.Add((clientId, version));
+        if (notify) SendCancel(clientId, version);
+        ImageTransferUI.Finish($"map-send-{clientId}", "Отправка карты отменена");
+    }
+
+    private void CancelReceive(int version, bool notify = true)
+    {
+        if (version != _incomingVersion) return;
+        _receivingMap = false;
+        _incomingChunks.Clear();
+        _cancelledIncomingVersion = Mathf.Max(_cancelledIncomingVersion, version);
+        if (notify) SendCancel(NetworkManager.ServerClientId, version);
+        ImageTransferUI.Finish("map-receive", "Загрузка карты отменена");
+    }
+
+    private static void SendCancel(ulong target, int version)
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm == null || !nm.IsConnectedClient) return;
+        using var writer = new FastBufferWriter(sizeof(int), Allocator.Temp);
+        writer.WriteValueSafe(version);
+        nm.CustomMessagingManager.SendNamedMessage(MSG_MAP_CANCEL, target, writer);
+    }
+
+    private void OnMapCancel(ulong senderId, FastBufferReader reader)
+    {
+        if (!reader.TryBeginRead(sizeof(int))) return;
+        reader.ReadValueSafe(out int version);
+        if (IsServer)
+        {
+            if (version == _mapVersion
+                && NetworkManager.Singleton.ConnectedClients.ContainsKey(senderId))
+                CancelSend(senderId, version, false);
+        }
+        else if (senderId == NetworkManager.ServerClientId)
+            CancelReceive(version, false);
+    }
+
     private void OnMapRequest(ulong senderId, FastBufferReader reader)
     {
         if (!IsServer || !NetworkManager.Singleton.ConnectedClients.ContainsKey(senderId))
@@ -312,7 +470,8 @@ public class MapSync : NetworkBehaviour
         if (_lastMapRequestTime.TryGetValue(senderId, out float last)
             && Time.unscaledTime - last < 3f) return;
         _lastMapRequestTime[senderId] = Time.unscaledTime;
-        StartCoroutine(SendMapToClientRoutine(senderId));
+        if (!_activeSends.Contains((senderId, _mapVersion)))
+            StartCoroutine(SendMapWithRetriesToClientRoutine(senderId));
     }
 
     public static void RequestMapFromServer()
@@ -340,20 +499,36 @@ internal static class NetworkTransferBudget
     private static readonly Dictionary<ulong, int> BytesByTarget = new();
     private static int _frame = -1;
     private static int _totalBytes;
+    private static readonly Dictionary<ulong, (double Time, double Credit)> Credits = new();
+    private static double _globalTime, _globalCredit;
+    private const double BytesPerSecond = 128 * 1024;
+    private const double GlobalBytesPerSecond = 512 * 1024;
+    private const double Burst = 6 * 1024;
 
     public static bool TryConsume(ulong target, int bytes)
+        => TryConsumeAt(target, bytes, Time.realtimeSinceStartupAsDouble, Time.frameCount);
+    public static bool TryConsumeAt(ulong target, int bytes, double now, int frame)
     {
-        if (_frame != Time.frameCount)
+        if (_frame != frame)
         {
-            _frame = Time.frameCount;
+            _frame = frame;
             _totalBytes = 0;
             BytesByTarget.Clear();
         }
         BytesByTarget.TryGetValue(target, out int used);
         if (used + bytes > MaxBytesPerTargetPerFrame || _totalBytes + bytes > MaxBytesPerFrame)
             return false;
+        if (!Credits.TryGetValue(target, out var bucket)) bucket = (now, Burst);
+        double credit = System.Math.Min(Burst, bucket.Credit + System.Math.Max(0, now - bucket.Time) * BytesPerSecond);
+        _globalCredit = System.Math.Min(MaxBytesPerFrame, _globalCredit + System.Math.Max(0, now - _globalTime) * GlobalBytesPerSecond);
+        _globalTime = now;
+        Credits[target] = (now, credit);
+        if (credit < bytes || _globalCredit < bytes) return false;
+        Credits[target] = (now, credit - bytes); _globalCredit -= bytes;
         BytesByTarget[target] = used + bytes;
         _totalBytes += bytes;
         return true;
     }
+    public static void Reset()
+    { Credits.Clear(); BytesByTarget.Clear(); _frame = -1; _totalBytes = 0; _globalTime = Time.realtimeSinceStartupAsDouble; _globalCredit = MaxBytesPerFrame; }
 }

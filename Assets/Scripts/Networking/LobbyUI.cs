@@ -24,11 +24,13 @@ public class LobbyUI : MonoBehaviour
     private bool _ignoreDisconnect;
     private bool _hasSessionClientId;
     private ulong _sessionClientId;
+    private Button _prepareButton;
 
     private void Start()
     {
         hostButton.onClick.AddListener(OnHostClicked);
         joinButton.onClick.AddListener(OnJoinClicked);
+        BuildPreparationButton();
         if (exitButton != null)
             exitButton.onClick.AddListener(() => Application.Quit());
 
@@ -51,6 +53,52 @@ public class LobbyUI : MonoBehaviour
             SaveNickname();
             _ = JoinSession(code, true);
         }
+    }
+
+    private void BuildPreparationButton()
+    {
+        var go = Instantiate(hostButton.gameObject, hostButton.transform.parent);
+        go.name = "Prepare scene locally";
+        _prepareButton = go.GetComponent<Button>();
+        _prepareButton.onClick = new Button.ButtonClickedEvent();
+        _prepareButton.onClick.AddListener(PrepareScene);
+        var text = go.GetComponentInChildren<Text>();
+        if (text != null) { text.text = "Подготовить сцену без игроков"; text.fontSize = 16; }
+        var rect = go.GetComponent<RectTransform>();
+        rect.SetSiblingIndex(hostButton.transform.GetSiblingIndex() + 1);
+        if (hostButton.GetComponentInParent<LayoutGroup>() == null)
+        {
+            var hostRect = hostButton.GetComponent<RectTransform>();
+            float spacing = hostRect.sizeDelta.y + 10;
+            rect.anchoredPosition = hostRect.anchoredPosition + Vector2.down * spacing;
+            // Insert preparation immediately below Host, moving the existing join block together.
+            foreach (var control in new Transform[] { joinButton.transform, joinCodeInput.transform, exitButton != null ? exitButton.transform : null })
+                if (control != null) control.GetComponent<RectTransform>().anchoredPosition += Vector2.down * spacing;
+        }
+    }
+
+    private async void PrepareScene()
+    {
+        if (_isConnecting) return;
+        _isConnecting = true; SetInteractable(false); SaveNickname();
+        try
+        {
+            await GameNetworkManager.Instance.ShutdownAndReset();
+            RelayManager.ClearJoinCode();
+            NetworkManager.Singleton.GetComponent<Unity.Netcode.Transports.UTP.UnityTransport>()
+                .SetConnectionData("127.0.0.1", 7777, "127.0.0.1");
+            CellMarker.EnsureRegistered();
+            if (!GameNetworkManager.Instance.StartHost()) throw new System.InvalidOperationException("Не удалось открыть редактор.");
+            await WaitForPlayerRegistration();
+            _sessionClientId = NetworkManager.Singleton.LocalClientId; _hasSessionClientId = true;
+            lobbyPanel.SetActive(false); ShowGameUI(); DmPanelUI.Instance?.ShowSceneEditor();
+            DiceUI.Instance?.ShowToolNotice("Локальная подготовка: сохраните JSON, затем загрузите его в игровом лобби.");
+        }
+        catch (System.Exception ex)
+        {
+            await CleanupFailedConnection(); statusText.text = "Подготовка: " + ex.Message; SetInteractable(true);
+        }
+        finally { _isConnecting = false; }
     }
 
     void TrySubscribeDisconnect()
@@ -272,6 +320,7 @@ public class LobbyUI : MonoBehaviour
 
     private void SetInteractable(bool interactable)
     {
+        if (_prepareButton != null) _prepareButton.interactable = interactable;
         hostButton.interactable = interactable;
         joinButton.interactable = interactable;
         joinCodeInput.interactable = interactable;
