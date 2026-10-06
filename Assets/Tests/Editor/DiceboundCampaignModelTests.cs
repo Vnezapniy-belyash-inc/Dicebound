@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
@@ -19,7 +20,7 @@ public class DiceboundCampaignModelTests
         Set(scene, "gridWidth", 4);
         Set(scene, "gridHeight", 4);
         Set(scene, "cellSize", 1f);
-        Set(scene, "mapImage", "fixture");
+        Set(scene, "mapImage", Convert.ToBase64String(new byte[] { 1, 2, 3 }));
         return scene;
     }
 
@@ -34,7 +35,7 @@ public class DiceboundCampaignModelTests
 
         Assert.That(Get<int>(upgraded, "version"), Is.EqualTo(2));
         Assert.That(Get<string>(upgraded, "sceneId"), Is.Not.Empty);
-        Assert.That(Get<string>(upgraded, "mapImage"), Is.EqualTo("fixture"));
+        Assert.That(Get<string>(upgraded, "mapImage"), Is.EqualTo(Convert.ToBase64String(new byte[] { 1, 2, 3 })));
         TypeOf("SceneValidation").GetMethod("Validate", new[] { TypeOf("SceneDefinition") })
             .Invoke(null, new[] { upgraded });
     }
@@ -103,5 +104,49 @@ public class DiceboundCampaignModelTests
             TypeOf("SceneValidation").GetMethod("Validate", new[] { TypeOf("CampaignDefinition") })
                 .Invoke(null, new[] { campaign }));
         Assert.That(error.InnerException, Is.TypeOf<FormatException>());
+    }
+
+    [Test]
+    public void CampaignStoreRoundTripsMultipleScenesAndLegacySceneImport()
+    {
+        var campaign = New("CampaignDefinition");
+        Set(campaign, "campaignId", "campaign-1");
+        Set(campaign, "activeSceneId", "scene-b");
+        var entries = Array.CreateInstance(TypeOf("CampaignScene"), 2);
+        foreach (int index in new[] { 0, 1 })
+        {
+            string id = index == 0 ? "scene-a" : "scene-b";
+            var entry = New("CampaignScene");
+            Set(entry, "sceneId", id);
+            Set(entry, "title", id);
+            Set(entry, "scene", ValidScene(id));
+            entries.SetValue(entry, index);
+        }
+        Set(campaign, "scenes", entries);
+
+        string campaignPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".json");
+        string scenePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".json");
+        try
+        {
+            TypeOf("CampaignFileStore").GetMethod("Save").Invoke(null, new[] { campaignPath, campaign });
+            var restored = TypeOf("CampaignFileStore").GetMethod("LoadCompatible")
+                .Invoke(null, new object[] { campaignPath });
+            Assert.That(Get<Array>(restored, "scenes").Length, Is.EqualTo(2));
+            Assert.That(Get<string>(restored, "activeSceneId"), Is.EqualTo("scene-b"));
+
+            var legacy = ValidScene("legacy");
+            Set(legacy, "version", 1);
+            Set(legacy, "sceneId", "");
+            File.WriteAllText(scenePath, UnityEngine.JsonUtility.ToJson(legacy));
+            var imported = TypeOf("CampaignFileStore").GetMethod("LoadCompatible")
+                .Invoke(null, new object[] { scenePath });
+            Assert.That(Get<Array>(imported, "scenes").Length, Is.EqualTo(1));
+            Assert.That(Get<string>(imported, "activeSceneId"), Is.Not.Empty);
+        }
+        finally
+        {
+            if (File.Exists(campaignPath)) File.Delete(campaignPath);
+            if (File.Exists(scenePath)) File.Delete(scenePath);
+        }
     }
 }

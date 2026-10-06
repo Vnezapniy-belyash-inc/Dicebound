@@ -25,6 +25,7 @@ public class DmPanelUI : MonoBehaviour
     private string _playerSignature;
     private float _nextRefresh;
     private InputField _tokenNameInput;
+    private InputField _sceneNameInput;
     private Toggle _createHiddenToggle;
     private Text _tokenNotice;
     private Text _tokenCount;
@@ -174,11 +175,32 @@ public class DmPanelUI : MonoBehaviour
         _sceneMarkupText = markup.GetComponentInChildren<Text>();
         Button(parent, "Сохранить JSON", 170, 36, 0, -335, SceneFileStore.SaveDialog, VttUiSkin.Button);
         Button(parent, "Загрузить JSON", 170, 36, 180, -335, SceneFileStore.LoadDialog, VttUiSkin.Button);
-        Button(parent, "Сохранить сессию", 350, 34, 0, -376, SceneFileStore.SaveCampaignDialog, VttUiSkin.Button);
+        Button(parent, "Сохранить сессию", 170, 34, 0, -376, SceneFileStore.SaveCampaignDialog, VttUiSkin.Button);
+        Button(parent, "Загрузить сессию", 170, 34, 180, -376, SceneFileStore.LoadCampaignDialog, VttUiSkin.Button);
+        Button(parent, "←", 48, 32, 0, -416, () => SceneFileStore.CycleScene(-1), VttUiSkin.Button);
+        Button(parent, "Новая сцена-копия", 244, 32, 53, -416, SceneFileStore.CreateSceneCopy, VttUiSkin.Button);
+        Button(parent, "→", 48, 32, 305, -416, () => SceneFileStore.CycleScene(1), VttUiSkin.Button);
+        var sceneNameBox = Box(parent, "SceneName", VttUiSkin.Button, 7);
+        Place(sceneNameBox, new Vector2(0, 1), new Vector2(0, 1), new Vector2(150, 30), new Vector2(0, -452));
+        var sceneNameText = Label(sceneNameBox.transform, "", 13, VttUiSkin.Text, TextAnchor.MiddleLeft,
+            new Vector2(0, 0.5f), new Vector2(0, 0.5f), new Vector2(130, 26), new Vector2(10, 0));
+        _sceneNameInput = sceneNameBox.AddComponent<InputField>();
+        _sceneNameInput.textComponent = sceneNameText;
+        _sceneNameInput.lineType = InputField.LineType.SingleLine;
+        _sceneNameInput.characterLimit = 64;
+        Button(parent, "Имя ✓", 92, 30, 156, -452, RenameActiveScene, VttUiSkin.Button);
+        Button(parent, "Удалить", 92, 30, 256, -452, () => DiceUI.Instance?.ConfirmAction(
+            "Удалить активную сцену?", "Будет загружена следующая сцена. Последнюю сцену удалить нельзя.",
+            SceneFileStore.DeleteActiveScene), VttUiSkin.Button);
         _sceneNotice = Label(parent, "", 12, VttUiSkin.Text, TextAnchor.UpperLeft,
-            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 45), new Vector2(0, -415));
-        Label(parent, "Стены — голубые, двери — жёлтые; открытые — зелёные. Игрокам видна разметка в текущем обзоре. JSON содержит карту, всех персонажей и портреты. История и пауза — во вкладке «Туман».",
-            12, VttUiSkin.Muted, TextAnchor.UpperLeft, new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 56), new Vector2(0, -449));
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 28), new Vector2(0, -486));
+    }
+
+    private void RenameActiveScene()
+    {
+        if (_sceneNameInput == null || string.IsNullOrWhiteSpace(_sceneNameInput.text)) return;
+        SceneFileStore.RenameActiveScene(_sceneNameInput.text);
+        _sceneNameInput.text = string.Empty;
     }
 
     private void AdjustColumn(float delta)
@@ -572,7 +594,7 @@ public class DmPanelUI : MonoBehaviour
         if (_page == 4 && SceneEditor.Instance != null)
         {
             var editor = SceneEditor.Instance;
-            _sceneNotice.text = editor.Notice;
+            _sceneNotice.text = SceneFileStore.ActiveSceneLabel + "\n" + editor.Notice;
             _sceneMarkupText.text = editor.ShowMarkup ? "Скрыть разметку" : "Показать разметку";
             _sceneDiameterText.text = $"Диаметр: {editor.ColumnDiameter:0.0} клетки";
         }
