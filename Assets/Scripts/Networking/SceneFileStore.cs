@@ -954,6 +954,7 @@ public static class SceneFileStore
     {
         if (NetworkManager.Singleton?.IsHost != true) return;
         CampaignDefinition campaign = CampaignFileStore.LoadCompatible(path);
+        ValidateCampaignImages(campaign);
         CampaignScene active = Array.Find(campaign.scenes, item => item.sceneId == campaign.activeSceneId);
         if (active == null) throw new FormatException("Активная сцена не найдена в сессии.");
         var previousCampaign = _campaign;
@@ -963,6 +964,20 @@ public static class SceneFileStore
         catch { _campaign = previousCampaign; _campaignDirty = previousDirty; throw; }
         _campaignDirty = false;
         DiceUI.Instance?.ShowToolNotice($"Сессия «{campaign.title}» загружена · сцена «{active.title}».");
+    }
+
+    private static void ValidateCampaignImages(CampaignDefinition campaign)
+    {
+        var checkedMaps = new HashSet<string>(StringComparer.Ordinal);
+        var checkedPortraits = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var asset in campaign.mapAssets)
+            if (checkedMaps.Add(asset.imageData)) Decode(asset.imageData, MapSync.MaxMapBytes);
+        foreach (var entry in campaign.scenes)
+        {
+            if (checkedMaps.Add(entry.scene.mapImage)) Decode(entry.scene.mapImage, MapSync.MaxMapBytes);
+            foreach (var token in entry.scene.tokens)
+                if (checkedPortraits.Add(token.portrait)) Decode(token.portrait, TokenImageSync.MaxPortraitBytes);
+        }
     }
 
     private static void ApplyScene(SceneDefinition scene, SceneBattleState battle)
