@@ -415,14 +415,18 @@ public static class SceneFileStore
         scenes[scenes.Length - 1] = created;
         _campaign.scenes = scenes;
         _campaignDirty = true;
-        try { SceneValidation.Validate(_campaign); }
+        try
+        {
+            SceneValidation.Validate(_campaign);
+            CampaignFileStore.ValidateEmbeddedImageBudget(_campaign);
+            SwitchToScene(created.sceneId);
+        }
         catch
         {
             _campaign.scenes = previousScenes;
             _campaignDirty = previousDirty;
             throw;
         }
-        SwitchToScene(created.sceneId);
     }
 
     private static void CreateSceneCopyCore()
@@ -449,11 +453,24 @@ public static class SceneFileStore
             battle = JsonUtility.FromJson<SceneBattleState>(JsonUtility.ToJson(current.battle))
         };
         var scenes = new CampaignScene[_campaign.scenes.Length + 1];
+        var previousScenes = _campaign.scenes;
+        bool previousDirty = _campaignDirty;
         Array.Copy(_campaign.scenes, scenes, _campaign.scenes.Length);
         scenes[scenes.Length - 1] = copy;
         _campaign.scenes = scenes;
         _campaignDirty = true;
-        SwitchToScene(copy.sceneId);
+        try
+        {
+            SceneValidation.Validate(_campaign);
+            CampaignFileStore.ValidateEmbeddedImageBudget(_campaign);
+            SwitchToScene(copy.sceneId);
+        }
+        catch
+        {
+            _campaign.scenes = previousScenes;
+            _campaignDirty = previousDirty;
+            throw;
+        }
     }
 
     public static void CycleScene(int direction) => Safely(() => CycleSceneCore(direction));
