@@ -78,11 +78,14 @@ public class TokenController : NetworkDraggable
     public string NameBase => string.IsNullOrEmpty(_nameBase) ? TokenName : _nameBase;
     public bool IsHidden => _netHidden.Value;
     public int VisionFeet => _netVisionFeet.Value;
+    private bool ShowMasterStats => IsServer && FogManager.Instance?.ShowingPlayerView != true;
     public int VisibleCurrentHp => IsServer ? _masterData.currentHp : _netVisibleCurrentHp.Value;
     public int VisibleMaxHp => IsServer ? _masterData.maxHp : _netVisibleMaxHp.Value;
+    public int DisplayedCurrentHp => ShowMasterStats ? _masterData.currentHp : _netVisibleCurrentHp.Value;
+    public int DisplayedMaxHp => ShowMasterStats ? _masterData.maxHp : _netVisibleMaxHp.Value;
     public int NetworkVisibleCurrentHp => _netVisibleCurrentHp.Value;
     public int ArmorClass => IsServer ? _masterData.armorClass : _netArmorClass.Value;
-    public string[] VisibleConditionIds => IsServer ? (string[])_masterData.conditionIds.Clone()
+    public string[] VisibleConditionIds => ShowMasterStats ? (string[])_masterData.conditionIds.Clone()
         : string.IsNullOrEmpty(_netVisibleConditions.Value.ToString())
             ? Array.Empty<string>() : _netVisibleConditions.Value.ToString().Split('|');
     public string PublicStatBlockJson => _netPublicStatBlock.Value.ToString();
@@ -1365,8 +1368,8 @@ public class TokenController : NetworkDraggable
         };
         _statsLabelStyle.normal.textColor = VttUiSkin.Text;
         GUI.Label(new Rect(3, 1, 154, 19), IsHero ? TokenName + " · герой" : TokenName, _statsLabelStyle);
-        int currentHp = VisibleCurrentHp;
-        int maxHp = VisibleMaxHp;
+        int currentHp = DisplayedCurrentHp;
+        int maxHp = DisplayedMaxHp;
         string conditions = string.Join(" · ", Array.ConvertAll(VisibleConditionIds,
             TokenConditionCatalog.DisplayName));
         if (currentHp >= 0 && maxHp > 0)

@@ -76,6 +76,12 @@ public class DiceboundSceneIntegrationTests
         Assert.That((bool)restoredMaster.GetType().GetField("hideConditions").GetValue(restoredMaster), Is.True);
         Assert.That(Read<int>(token, "NetworkVisibleCurrentHp"), Is.EqualTo(-1));
         Call(token, "ServerToggleCondition", "poisoned");
+        Call(fog, "TogglePreview");
+        Assert.That(Read<int>(token, "DisplayedCurrentHp"), Is.EqualTo(-1), "Player preview must hide private HP.");
+        Assert.That(Read<int>(token, "DisplayedMaxHp"), Is.EqualTo(-1));
+        Assert.That(Read<string[]>(token, "VisibleConditionIds"), Is.Empty, "Player preview must hide private conditions.");
+        Call(fog, "TogglePreview");
+        Assert.That(Read<string[]>(token, "VisibleConditionIds"), Does.Contain("poisoned"), "Master view must retain private conditions.");
         TypeOf("GameMasterUndo").GetMethod("Undo").Invoke(null, null);
         restoredMaster = Call(token, "CaptureMasterData");
         Assert.That(((string[])restoredMaster.GetType().GetField("conditionIds").GetValue(restoredMaster)).Length, Is.EqualTo(0));
