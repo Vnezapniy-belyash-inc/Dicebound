@@ -61,7 +61,7 @@ public class DiceboundSceneTests
         Set(scene, "mapImage", "placeholder");
         return scene;
     }
-    private static void Validate(object scene) => TypeOf("SceneValidation").GetMethod("Validate").Invoke(null, new[] { scene });
+    private static void Validate(object scene) => TypeOf("SceneValidation").GetMethod("Validate", new[] { TypeOf("SceneDefinition") }).Invoke(null, new[] { scene });
     private static void Invalid(object scene)
     {
         var error = Assert.Throws<TargetInvocationException>(() => Validate(scene));

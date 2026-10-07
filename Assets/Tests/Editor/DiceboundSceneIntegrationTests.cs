@@ -267,7 +267,7 @@ public class DiceboundSceneIntegrationTests
         pending.GetType().GetField("hero").SetValue(pending, true);
         pending.GetType().GetField("scale").SetValue(pending, Vector3.one);
         pending.GetType().GetField("position").SetValue(pending, new Vector3(3.5f, 0.1f, 2.5f));
-        var waiting = Call(tokens, "RestoreSceneToken", pending, grid);
+        var waiting = Call(tokens, "RestoreSceneToken", pending, grid, null);
         Assert.That(Read<ulong>(waiting, "ControllerClientId"), Is.EqualTo(ulong.MaxValue));
         Assert.That(Read<bool>(waiting, "IsHero"), Is.True);
         Call(waiting, "ServerRestoreAssignment", 42UL);

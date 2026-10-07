@@ -154,7 +154,7 @@ public class DiceboundCampaignModelTests
         Set(scene, "version", 1);
         Set(scene, "sceneId", "");
 
-        var campaign = TypeOf("SceneSaveMigration").GetMethod("UpgradeSingleScene")
+        var campaign = TypeOf("SceneSaveMigration").GetMethod("UpgradeSingleScene", new[] { TypeOf("SceneDefinition") })
             .Invoke(null, new[] { TypeOf("SceneSaveMigration").GetMethod("UpgradeScene")
                 .Invoke(null, new[] { scene }) });
         var scenes = Get<Array>(campaign, "scenes");
