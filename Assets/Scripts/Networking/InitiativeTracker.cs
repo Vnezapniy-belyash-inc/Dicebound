@@ -592,11 +592,11 @@ public class InitiativeTracker : NetworkBehaviour
         _hpById.Clear();
         _round = Mathf.Clamp(battle.round, 1, 100000);
         _nextEntryId = 0;
+        var restoredIds = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var participant in battle.participants)
         {
-            int id = int.TryParse(participant.id, out int parsedId) && parsedId > 0
-                ? parsedId : ++_nextEntryId;
-            _nextEntryId = Mathf.Max(_nextEntryId, id);
+            int id = ++_nextEntryId;
+            restoredIds[participant.id] = id;
             TokenController token = string.IsNullOrEmpty(participant.tokenId)
                 ? null : TokenController.FindSceneToken(participant.tokenId);
             string name = token != null ? token.TokenName
@@ -623,7 +623,9 @@ public class InitiativeTracker : NetworkBehaviour
             int byScore = b.initiative.CompareTo(a.initiative);
             return byScore != 0 ? byScore : a.id.CompareTo(b.id);
         });
-        _activeParticipantId = battle.activeParticipantId;
+        _activeParticipantId = !string.IsNullOrEmpty(battle.activeParticipantId)
+            && restoredIds.TryGetValue(battle.activeParticipantId, out int activeId)
+                ? activeId.ToString() : null;
         _currentIndex = _entries.FindIndex(entry => entry.id.ToString() == _activeParticipantId);
         if (_currentIndex < 0) _currentIndex = 0;
         Sync();
