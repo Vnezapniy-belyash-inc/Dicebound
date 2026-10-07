@@ -52,6 +52,7 @@ public class InitiativeTracker : NetworkBehaviour
     private const string StateMessage = "InitiativeStateV2", RequestMessage = "InitiativeRequestV2", AckMessage = "InitiativeAckV2";
     private const int MaxStateBytes = 512 * 1024;
     private int _stateRevision, _receivedRevision = -1;
+    private float _nextStateRequest;
     private readonly Dictionary<ulong, int> _stateAcks = new();
     public bool AllClientsHaveCurrentState
     {
@@ -218,11 +219,7 @@ public class InitiativeTracker : NetworkBehaviour
         NetworkManager.CustomMessagingManager.RegisterNamedMessageHandler(AckMessage, ReceiveStateAck);
         _netData.OnValueChanged += OnDataChanged;
         if (!IsServer) ParseData(_netData.Value.ToString());
-        if (!IsServer)
-        {
-            using var writer = new FastBufferWriter(1, Unity.Collections.Allocator.Temp);
-            NetworkManager.CustomMessagingManager.SendNamedMessage(RequestMessage, Unity.Netcode.NetworkManager.ServerClientId, writer);
-        }
+        if (!IsServer) RequestCurrentState();
         RebuildRows();
         UpdateHostControls();
     }
@@ -249,6 +246,8 @@ public class InitiativeTracker : NetworkBehaviour
 
     private void Update()
     {
+        if (IsSpawned && !IsServer && _receivedRevision < 0 && Time.unscaledTime >= _nextStateRequest)
+            RequestCurrentState();
         bool connected = GameNetworkManager.Instance != null && GameNetworkManager.Instance.IsConnected;
         bool shouldShow = connected && _userVisible;
         if (_panel != null && _panel.activeSelf != shouldShow)
@@ -415,6 +414,13 @@ public class InitiativeTracker : NetworkBehaviour
         foreach (ulong client in NetworkManager.ConnectedClientsIds)
             if (client != Unity.Netcode.NetworkManager.ServerClientId) SendState(client, data);
         RebuildRows();
+    }
+
+    private void RequestCurrentState()
+    {
+        _nextStateRequest = Time.unscaledTime + 2f;
+        using var writer = new FastBufferWriter(1, Unity.Collections.Allocator.Temp);
+        NetworkManager.CustomMessagingManager.SendNamedMessage(RequestMessage, Unity.Netcode.NetworkManager.ServerClientId, writer);
     }
 
     private void ReceiveStateRequest(ulong client, FastBufferReader reader)
