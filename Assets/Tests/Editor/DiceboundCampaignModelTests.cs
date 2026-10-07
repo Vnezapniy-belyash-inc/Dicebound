@@ -32,8 +32,9 @@ public class DiceboundCampaignModelTests
         {
             var tracker = root.AddComponent(TypeOf("InitiativeTracker"));
             var rows = new string[40];
+            string longName = new string('Ж', 100);
             for (int i = 0; i < rows.Length; i++)
-                rows[i] = "{\"id\":" + (i + 1) + ",\"name\":\"Участник " + i
+                rows[i] = "{\"id\":" + (i + 1) + ",\"name\":\"" + (i == 0 ? longName : "Участник " + i)
                     + "\",\"initiative\":10,\"publicHp\":-1}";
             string json = "{\"currentIndex\":35,\"round\":3,\"activeParticipantId\":\"36\",\"entries\":["
                 + string.Join(",", rows) + "]}";
@@ -41,6 +42,7 @@ public class DiceboundCampaignModelTests
                 .Invoke(tracker, new object[] { json });
             var battle = tracker.GetType().GetMethod("CaptureBattleState").Invoke(tracker, null);
             Assert.That(Get<Array>(battle, "participants").Length, Is.EqualTo(40));
+            Assert.That(Get<string>(Get<Array>(battle, "participants").GetValue(0), "name"), Is.EqualTo(longName));
             Assert.That(Get<string>(battle, "activeParticipantId"), Is.EqualTo("36"));
             Assert.That(Get<int>(battle, "round"), Is.EqualTo(3));
         }

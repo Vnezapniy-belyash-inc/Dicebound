@@ -328,7 +328,7 @@ public class InitiativeTracker : NetworkBehaviour
                 _entries.Add(new Entry
                 {
                     id = item.id,
-                    name = ClampText(item.name, 28, "Участник"),
+                    name = ClampText(item.name, 256, "Участник"),
                     initiative = Mathf.Clamp(item.initiative, -999, 999),
                     colorHex = item.colorHex ?? "#FFFFFF",
                     playerId = item.playerId,
