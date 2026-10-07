@@ -666,6 +666,8 @@ public static class SceneFileStore
         var occupiedCells = new HashSet<(int X, int Y)>();
         foreach (var existing in target.scene.tokens)
             if (existing != null) occupiedCells.Add((Mathf.FloorToInt(existing.position.x), Mathf.FloorToInt(existing.position.z)));
+        foreach (var obstacle in target.scene.geometry.obstacles)
+            if (obstacle != null) occupiedCells.Add((obstacle.x, obstacle.y));
         for (int i = 0; i < moving.Length; i++)
         {
             var copy = JsonUtility.FromJson<SceneToken>(JsonUtility.ToJson(moving[i]));
