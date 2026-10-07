@@ -142,6 +142,7 @@ public class PlayerRegistry : MonoBehaviour
         if (NetworkManager.Singleton.IsServer) RegisterServerHandlers();
 
         CellMarker.EnsureRegistered();
+        SceneTransitionMarker.EnsureRegistered();
         TokenImageSync.EnsureInstance();
         LateJoinSync.EnsureInstance();
         StartCoroutine(RegisterLocalPlayerWhenReady());

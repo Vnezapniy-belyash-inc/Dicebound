@@ -4,6 +4,7 @@ using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
+using System;
 #if UNITY_EDITOR
 using UnityEditor;
 #endif
@@ -14,6 +15,8 @@ using UnityEditor;
 /// </summary>
 public class DiceUI : MonoBehaviour
 {
+    /// <summary>Raised when a result is added to the journal, with the die type and face value.</summary>
+    public static event Action<string, int, ulong> JournalResultRecorded;
     [Header("Размеры кнопок")]
     public float buttonWidth = 55f;
     public float buttonHeight = 32f;
@@ -550,7 +553,7 @@ public class DiceUI : MonoBehaviour
         {
             var question = _leaveConfirmDialog.transform.Find("Question").GetComponent<Text>();
             bool unsaved = SceneFileStore.HasUnsavedChanges();
-            question.text = unsaved ? "Выйти из лобби?\nСцена не сохранена в JSON." : "Выйти из лобби?";
+            question.text = unsaved ? "Выйти из лобби?\nСессия не сохранена в JSON." : "Выйти из лобби?";
             question.fontSize = unsaved ? 16 : 20;
             _leaveConfirmDialog.SetActive(true);
         }
@@ -1562,9 +1565,9 @@ public class DiceUI : MonoBehaviour
         if (GameNetworkManager.Instance != null && GameNetworkManager.Instance.IsConnected)
         {
             Vector3 pos = mapCenter + new Vector3(
-                Random.Range(-spawnSpread, spawnSpread),
+                UnityEngine.Random.Range(-spawnSpread, spawnSpread),
                 0,
-                Random.Range(-spawnSpread, spawnSpread)
+                UnityEngine.Random.Range(-spawnSpread, spawnSpread)
             );
             NetworkDiceManager.Instance?.RequestSpawnDie(type, pos);
             return;
@@ -1572,8 +1575,8 @@ public class DiceUI : MonoBehaviour
 
         // Локальный режим — старый DiceManager
         if (DiceManager.Instance == null) return;
-        float x = mapCenter.x + Random.Range(-spawnSpread, spawnSpread);
-        float z = mapCenter.z + Random.Range(-spawnSpread, spawnSpread);
+        float x = mapCenter.x + UnityEngine.Random.Range(-spawnSpread, spawnSpread);
+        float z = mapCenter.z + UnityEngine.Random.Range(-spawnSpread, spawnSpread);
         DiceManager.Instance.SpawnDieAt(type, x, z);
     }
 
@@ -1671,6 +1674,7 @@ public class DiceUI : MonoBehaviour
         _logEntries.Insert(0, logLine);
         if (_logEntries.Count > 500) _logEntries.RemoveAt(_logEntries.Count - 1);
         UpdateLogText();
+        JournalResultRecorded?.Invoke(DieTypeName(type), result, throwerId);
         Debug.Log($"[Dice] Remote: {who} rolled {dieTypeName}: {result}");
     }
 
@@ -1774,6 +1778,9 @@ public class DiceUI : MonoBehaviour
         _logEntries.Insert(0, logLine);
         if (_logEntries.Count > 500) _logEntries.RemoveAt(_logEntries.Count - 1);
         UpdateLogText();
+        foreach (var result in _lastResults)
+            JournalResultRecorded?.Invoke(DieTypeName(result.type), result.value,
+                NetworkManager.Singleton != null ? NetworkManager.Singleton.LocalClientId : 0);
     }
 
     static string DieTypeName(DieType t) => t switch

@@ -57,6 +57,35 @@ public class DiceboundSceneIntegrationTests
         Call(model, "SetEdge", 2, 2, false, false, false, true);
         Call(model, "SetObstacle", 3, 3, true, 0.4f, false);
         var token = Call(tokenManager, "CreateTokenAsHost", "Гоблин", true);
+        TypeOf("GameMasterUndo").GetMethod("Clear").Invoke(null, null);
+        Call(token, "ServerSetHealth", 12, 12, true);
+        TypeOf("GameMasterUndo").GetMethod("Undo").Invoke(null, null);
+        var restoredMaster = Call(token, "CaptureMasterData");
+        Assert.That((int)restoredMaster.GetType().GetField("currentHp").GetValue(restoredMaster), Is.EqualTo(0));
+        Assert.That((int)restoredMaster.GetType().GetField("maxHp").GetValue(restoredMaster), Is.EqualTo(0));
+        Call(token, "ServerSetArmorClass", 18, true);
+        TypeOf("GameMasterUndo").GetMethod("Undo").Invoke(null, null);
+        restoredMaster = Call(token, "CaptureMasterData");
+        Assert.That((int)restoredMaster.GetType().GetField("armorClass").GetValue(restoredMaster), Is.EqualTo(10));
+        Assert.That(Read<int>(token, "NetworkVisibleCurrentHp"), Is.EqualTo(-1), "Hidden HP must not enter the shared initiative view.");
+        Call(token, "ServerSetMasterVisibility", false, false);
+        Assert.That(Read<int>(token, "NetworkVisibleCurrentHp"), Is.EqualTo(0));
+        TypeOf("GameMasterUndo").GetMethod("Undo").Invoke(null, null);
+        restoredMaster = Call(token, "CaptureMasterData");
+        Assert.That((bool)restoredMaster.GetType().GetField("hideHp").GetValue(restoredMaster), Is.True);
+        Assert.That((bool)restoredMaster.GetType().GetField("hideConditions").GetValue(restoredMaster), Is.True);
+        Assert.That(Read<int>(token, "NetworkVisibleCurrentHp"), Is.EqualTo(-1));
+        Call(token, "ServerToggleCondition", "poisoned");
+        Call(fog, "TogglePreview");
+        Assert.That(Read<int>(token, "DisplayedCurrentHp"), Is.EqualTo(-1), "Player preview must hide private HP.");
+        Assert.That(Read<int>(token, "DisplayedMaxHp"), Is.EqualTo(-1));
+        Assert.That(Read<string[]>(token, "VisibleConditionIds"), Is.Empty, "Player preview must hide private conditions.");
+        Call(fog, "TogglePreview");
+        Assert.That(Read<string[]>(token, "VisibleConditionIds"), Does.Contain("poisoned"), "Master view must retain private conditions.");
+        TypeOf("GameMasterUndo").GetMethod("Undo").Invoke(null, null);
+        restoredMaster = Call(token, "CaptureMasterData");
+        Assert.That(((string[])restoredMaster.GetType().GetField("conditionIds").GetValue(restoredMaster)).Length, Is.EqualTo(0));
+        TypeOf("GameMasterUndo").GetMethod("Clear").Invoke(null, null);
         Call(token, "RequestSetVision", 30); Call(token, "LoadImage", _texture.EncodeToPNG());
         Call(token, "RequestSetHidden", false); Call(fog, "TogglePause"); yield return null;
         Call(token, "RequestSetHidden", true); yield return null;
@@ -84,6 +113,10 @@ public class DiceboundSceneIntegrationTests
         Assert.That(Read<string>(restored, "TokenName"), Is.EqualTo("Гоблин"));
         Assert.That(Read<string>(restored, "SceneId"), Is.EqualTo(stableId));
         Assert.That(Read<bool>(restored, "IsHidden"), Is.True);
+        var eligibleTransfers = (Array)TypeOf("DmPanelUI").GetMethod("GetActiveSceneTokens",
+            BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, null);
+        Assert.That(eligibleTransfers.Length, Is.EqualTo(1), "The transfer list must include spawned NPCs even when hidden.");
+        Assert.That(eligibleTransfers.GetValue(0), Is.SameAs(restored), "Token IDs must not be compared with the active scene ID.");
         Assert.That(Read<int>(restored, "VisionFeet"), Is.EqualTo(30));
         Assert.That(Call(restored, "GetPortraitJpg"), Is.Not.Null);
         var geometry = Call(model, "Snapshot");
@@ -102,6 +135,57 @@ public class DiceboundSceneIntegrationTests
         var bits = Convert.FromBase64String((string)blankMemory.GetType().GetField("explored").GetValue(blankMemory));
         Assert.That(Array.TrueForAll(bits, value => value == 0), Is.True);
         Assert.That(Read<bool>(fog, "Paused"), Is.True);
+        var tracker = Add("InitiativeTracker", "Initiative restore test");
+        tracker.GetComponent<NetworkObject>().Spawn();
+        var battle = Activator.CreateInstance(TypeOf("SceneBattleState"));
+        var participantType = TypeOf("BattleParticipant");
+        var participants = Array.CreateInstance(participantType, 2);
+        string transferredId = Guid.NewGuid().ToString("N");
+        for (int i = 0; i < 2; i++)
+        {
+            var participant = Activator.CreateInstance(participantType);
+            participantType.GetField("id").SetValue(participant, i == 0 ? transferredId : "1");
+            participantType.GetField("name").SetValue(participant, i == 0 ? "Перенесённый" : "Исходный");
+            participantType.GetField("initiative").SetValue(participant, i == 0 ? 12 : 20);
+            participantType.GetField("hasHitPoints").SetValue(participant, true);
+            participantType.GetField("hitPoints").SetValue(participant, i == 0 ? 7 : 15);
+            participants.SetValue(participant, i);
+        }
+        battle.GetType().GetField("participants").SetValue(battle, participants);
+        battle.GetType().GetField("activeParticipantId").SetValue(battle, transferredId);
+        battle.GetType().GetField("round").SetValue(battle, 4);
+        var pendingIds = (System.Collections.Generic.Queue<string>)tracker.GetType().GetField("_awaitingInitiativeTokenIds",
+            BindingFlags.Instance | BindingFlags.NonPublic).GetValue(tracker);
+        pendingIds.Enqueue("old-scene-token");
+        tracker.GetType().GetField("_awaitingInitiativeTokenId", BindingFlags.Instance | BindingFlags.NonPublic)
+            .SetValue(tracker, "old-scene-token");
+        Call(tracker, "RestoreBattleState", battle);
+        Assert.That(pendingIds, Is.Empty, "Loading a battle must discard pending rolls from the previous scene.");
+        Assert.That(tracker.GetType().GetField("_awaitingInitiativeTokenId", BindingFlags.Instance | BindingFlags.NonPublic)
+            .GetValue(tracker), Is.Null);
+        var capturedBattle = Call(tracker, "CaptureBattleState");
+        var capturedParticipants = (Array)capturedBattle.GetType().GetField("participants").GetValue(capturedBattle);
+        string activeId = (string)capturedBattle.GetType().GetField("activeParticipantId").GetValue(capturedBattle);
+        var ids = new System.Collections.Generic.HashSet<string>();
+        foreach (object participant in capturedParticipants)
+        {
+            string id = (string)participantType.GetField("id").GetValue(participant);
+            Assert.That(ids.Add(id), Is.True, "Restored IDs must be unique.");
+            string name = (string)participantType.GetField("name").GetValue(participant);
+            Assert.That(participantType.GetField("hitPoints").GetValue(participant), Is.EqualTo(name == "Перенесённый" ? 7 : 15));
+            if (id == activeId) Assert.That(name, Is.EqualTo("Перенесённый"));
+        }
+        Assert.That(ids.Contains(activeId), Is.True);
+        Assert.That(capturedBattle.GetType().GetField("round").GetValue(capturedBattle), Is.EqualTo(4));
+        var block = JsonUtility.FromJson("{\"id\":\"restore-public-block\",\"name\":\"Public name\",\"size\":\"\",\"creatureType\":\"\",\"alignment\":\"\",\"speed\":\"\",\"challengeRating\":\"\",\"description\":\"Master secret\",\"actions\":[],\"publicFieldsMask\":1}", TypeOf("StatBlockDefinition"));
+        TypeOf("SceneFileStore").GetMethod("UpsertStatBlock").Invoke(null, new[] { block });
+        var statToken = Call(tokenManager, "CreateTokenAsHost", "Stat block restore", false);
+        var master = Call(statToken, "CaptureMasterData");
+        master.GetType().GetField("statBlockId").SetValue(master, "restore-public-block");
+        Call(statToken, "ServerApplyMasterData", master);
+        string publicBlock = Read<string>(statToken, "PublicStatBlockJson");
+        Assert.That(publicBlock, Does.Contain("Public name"), "Restoring master data must publish permitted stat block fields.");
+        Assert.That(publicBlock, Does.Not.Contain("Master secret"));
     }
 
     [UnityTearDown]
@@ -192,7 +276,7 @@ public class DiceboundSceneIntegrationTests
         pending.GetType().GetField("hero").SetValue(pending, true);
         pending.GetType().GetField("scale").SetValue(pending, Vector3.one);
         pending.GetType().GetField("position").SetValue(pending, new Vector3(3.5f, 0.1f, 2.5f));
-        var waiting = Call(tokens, "RestoreSceneToken", pending, grid);
+        var waiting = Call(tokens, "RestoreSceneToken", pending, grid, null);
         Assert.That(Read<ulong>(waiting, "ControllerClientId"), Is.EqualTo(ulong.MaxValue));
         Assert.That(Read<bool>(waiting, "IsHero"), Is.True);
         Call(waiting, "ServerRestoreAssignment", 42UL);

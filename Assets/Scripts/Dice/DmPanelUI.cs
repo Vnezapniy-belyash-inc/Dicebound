@@ -1,13 +1,24 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 /// <summary>Host-only controls built on the existing map and initiative APIs.</summary>
 public class DmPanelUI : MonoBehaviour
 {
+    private static readonly string[] StatBlockPublicFieldNames =
+        { "Название", "Размер", "Тип существа", "Мировоззрение", "КД", "ХП", "Скорость", "Характеристики", "Опасность", "Описание", "Действия" };
+    private static readonly int[] StatBlockPublicFieldMasks =
+    {
+        StatBlockPublicFields.Name, StatBlockPublicFields.Size, StatBlockPublicFields.CreatureType,
+        StatBlockPublicFields.Alignment, StatBlockPublicFields.ArmorClass, StatBlockPublicFields.HitPoints,
+        StatBlockPublicFields.Speed, StatBlockPublicFields.Abilities, StatBlockPublicFields.ChallengeRating,
+        StatBlockPublicFields.Description, StatBlockPublicFields.Actions
+    };
     public static DmPanelUI Instance { get; private set; }
 
     private Canvas _canvas;
@@ -25,11 +36,47 @@ public class DmPanelUI : MonoBehaviour
     private string _playerSignature;
     private float _nextRefresh;
     private InputField _tokenNameInput;
+    private InputField _sceneNameInput;
+    private InputField _transitionTitleInput;
+    private InputField _transitionXInput;
+    private InputField _transitionYInput;
+    private RectTransform _transitionList;
+    private RectTransform _tokenTransferList;
+    private string _tokenTransferSignature;
+    private readonly HashSet<string> _selectedTokenTransferIds = new();
+    private GameObject _transitionPanel;
+    private Text _transitionTargetText;
+    private string _selectedTransitionTargetId;
+    private int _transitionTargetIndex;
+    private string _transitionSignature;
+    private string _editingTransitionId;
+    private string _transitionDraftTargetId;
+    private bool _transitionPickingCell;
+    private InputField[] _statBlockInputs;
+    private RectTransform _statBlockList;
+    private string _selectedStatBlockId;
+    private string _statBlockSignature;
+    private Text _statBlockHint;
+    private GameObject _statBlockVisibilityPanel;
+    private Text[] _statBlockVisibilityLabels;
+    private int _statBlockVisibleFieldsDraft;
+    private GameObject _mapCatalogPanel;
+    private InputField _mapAssetNameInput;
+    private RectTransform _mapAssetsContent;
+    private string _mapAssetsSignature;
+    private string _selectedMapAssetId;
+    private Text _mapCatalogNotice;
     private Toggle _createHiddenToggle;
     private Text _tokenNotice;
     private Text _tokenCount;
     private RectTransform _tokensContent;
     private string _tokenSignature;
+    private readonly HashSet<string> _selectedInitiativeTokenIds = new();
+    private InputField _referenceSearch, _referenceTitle, _referenceCategory, _referenceTags, _referenceBody;
+    private RectTransform _referenceList;
+    private string _selectedReferenceId, _referenceSignature;
+    private Text _referencePrivacyText, _referencePinText, _referenceHint;
+    private bool _referenceMasterOnly, _referencePinned;
     private Text _sceneNotice, _sceneMarkupText, _sceneDiameterText;
     private Text _fogEnabledText, _fogPauseText, _fogPreviewText, _fogSourceText, _fogHistoryText, _fogAutosaveText, _fogStatus;
 
@@ -52,9 +99,12 @@ public class DmPanelUI : MonoBehaviour
     {
         if (_panel == null || !_panel.activeSelf) return;
         if (!IsLocalHost) { _panel.SetActive(false); return; }
+        if (_transitionPanel != null && _transitionPanel.activeSelf && _transitionPickingCell)
+            UpdateTransitionCellPicker();
         if (Time.unscaledTime < _nextRefresh) return;
         _nextRefresh = Time.unscaledTime + 1f;
         Refresh();
+        if (_transitionPanel != null && _transitionPanel.activeSelf) RefreshSceneTransitions(true);
     }
 
     public void Toggle()
@@ -95,14 +145,15 @@ public class DmPanelUI : MonoBehaviour
         Button(_panel.transform, "×", 32, 30, 362, -14,
             () => _panel.SetActive(false), VttUiSkin.Button);
 
-        _pages = new GameObject[6];
-        _tabs = new Image[6];
-        string[] titles = { "Карта", "Игроки", "Бой", "Токены", "Сцена", "Туман" };
+        _pages = new GameObject[8];
+        _tabs = new Image[8];
+        string[] titles = { "Карта", "Игроки", "Бой", "Токены", "Сцена", "Туман", "Статы", "Справ." };
         for (int i = 0; i < _pages.Length; i++)
         {
             int pageIndex = i;
-            var tab = Button(_panel.transform, titles[i], 58, 34, 18 + i * 63, -58,
+            var tab = Button(_panel.transform, titles[i], 45, 34, 8 + i * 46, -58,
                 () => ShowPage(pageIndex), VttUiSkin.Button);
+            tab.GetComponentInChildren<Text>().fontSize = 11;
             _tabs[i] = tab.GetComponent<Image>();
             _pages[i] = new GameObject(titles[i] + "Page", typeof(RectTransform));
             _pages[i].transform.SetParent(_panel.transform, false);
@@ -115,6 +166,8 @@ public class DmPanelUI : MonoBehaviour
         BuildTokensPage(_pages[3].transform);
         BuildScenePage(_pages[4].transform);
         BuildFogPage(_pages[5].transform);
+        BuildStatBlockPage(_pages[6].transform);
+        BuildReferencePage(_pages[7].transform);
         ShowPage(0);
     }
 
@@ -139,6 +192,477 @@ public class DmPanelUI : MonoBehaviour
             new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 56), new Vector2(0, -449));
     }
 
+    private void BuildStatBlockPage(Transform parent)
+    {
+        Label(parent, "Статблоки кампании", 16, VttUiSkin.Text, TextAnchor.MiddleLeft,
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(180, 26), new Vector2(0, -2), true);
+        Button(parent, "Поля игрокам…", 94, 26, 176, -2, OpenStatBlockVisibilityPanel, VttUiSkin.Button);
+        Button(parent, "Новый", 64, 26, 276, -2, ClearStatBlockInputs, VttUiSkin.Button);
+        Button(parent, "Импорт листа", 100, 26, 248, -30, ImportCharacterDataToStatBlock, VttUiSkin.Button);
+        var viewport = Box(parent, "StatBlockViewport", new Color(0, 0, 0, 0.01f), 0, false);
+        Place(viewport, new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 66), new Vector2(0, -30));
+        viewport.AddComponent<RectMask2D>();
+        var rows = new GameObject("StatBlocks", typeof(RectTransform));
+        rows.transform.SetParent(viewport.transform, false);
+        _statBlockList = rows.GetComponent<RectTransform>();
+        _statBlockList.anchorMin = new Vector2(0, 1);
+        _statBlockList.anchorMax = new Vector2(1, 1);
+        _statBlockList.pivot = new Vector2(0.5f, 1);
+        var scroll = viewport.AddComponent<ScrollRect>();
+        scroll.viewport = viewport.GetComponent<RectTransform>();
+        scroll.content = _statBlockList;
+        scroll.horizontal = false;
+        scroll.vertical = true;
+        scroll.scrollSensitivity = 24;
+
+        _statBlockInputs = new InputField[11];
+        _statBlockInputs[0] = CreateInput(parent, "Название статблока", 0, -104, 350, 30);
+        _statBlockInputs[1] = CreateInput(parent, "Тип существа", 0, -138, 170, 30);
+        _statBlockInputs[2] = CreateInput(parent, "Размер", 180, -138, 80, 30);
+        _statBlockInputs[3] = CreateInput(parent, "Мировоззрение", 268, -138, 82, 30);
+        _statBlockInputs[4] = CreateInput(parent, "КД", 0, -172, 64, 30);
+        _statBlockInputs[5] = CreateInput(parent, "ХП", 72, -172, 64, 30);
+        _statBlockInputs[6] = CreateInput(parent, "Скорость", 144, -172, 206, 30);
+        _statBlockInputs[7] = CreateInput(parent, "СИЛ,ЛОВ,ТЕЛ,ИНТ,МДР,ХАР", 0, -206, 260, 30);
+        _statBlockInputs[8] = CreateInput(parent, "Опасность", 268, -206, 82, 30);
+        _statBlockInputs[9] = CreateInput(parent, "Описание", 0, -240, 350, 86, true);
+        _statBlockInputs[10] = CreateInput(parent, "Действия: название: описание", 0, -332, 350, 64, true);
+        Button(parent, "Сохранить статблок", 220, 30, 0, -402, SaveStatBlock, VttUiSkin.Button);
+        Button(parent, "Удалить выбранный", 122, 30, 228, -402, DeleteSelectedStatBlock,
+            new Color(0.28f, 0.11f, 0.14f));
+        _statBlockHint = Label(parent, "", 12, VttUiSkin.Muted, TextAnchor.UpperLeft,
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 52), new Vector2(0, -438));
+
+        _statBlockVisibilityPanel = Box(parent, "StatBlockVisibility", VttUiSkin.Panel, 10);
+        Place(_statBlockVisibilityPanel, new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(350, 450), new Vector2(0, -28));
+        Label(_statBlockVisibilityPanel.transform, "Поля, открытые игрокам", 15, VttUiSkin.Text,
+            TextAnchor.MiddleLeft, new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(280, 30), new Vector2(12, -8), true);
+        Button(_statBlockVisibilityPanel.transform, "×", 28, 28, 310, -8,
+            () => _statBlockVisibilityPanel.SetActive(false), VttUiSkin.Button);
+        var visibilityViewport = Box(_statBlockVisibilityPanel.transform, "VisibilityViewport",
+            new Color(0, 0, 0, 0.01f), 0, false);
+        Place(visibilityViewport, new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(326, 360), new Vector2(12, -46));
+        visibilityViewport.AddComponent<RectMask2D>();
+        var visibilityRows = new GameObject("VisibilityFields", typeof(RectTransform));
+        visibilityRows.transform.SetParent(visibilityViewport.transform, false);
+        var visibilityContent = visibilityRows.GetComponent<RectTransform>();
+        visibilityContent.anchorMin = new Vector2(0, 1);
+        visibilityContent.anchorMax = new Vector2(1, 1);
+        visibilityContent.pivot = new Vector2(0.5f, 1);
+        visibilityContent.sizeDelta = new Vector2(0, 11 * 31);
+        var visibilityScroll = visibilityViewport.AddComponent<ScrollRect>();
+        visibilityScroll.viewport = visibilityViewport.GetComponent<RectTransform>();
+        visibilityScroll.content = visibilityContent;
+        visibilityScroll.horizontal = false;
+        visibilityScroll.vertical = true;
+        visibilityScroll.scrollSensitivity = 24;
+        _statBlockVisibilityLabels = new Text[StatBlockPublicFieldNames.Length];
+        for (int i = 0; i < StatBlockPublicFieldNames.Length; i++)
+        {
+            int mask = StatBlockPublicFieldMasks[i];
+            var toggle = Button(visibilityContent, "", 310, 28, 0, -i * 31,
+                () => ToggleStatBlockPublicField(mask), VttUiSkin.Button);
+            _statBlockVisibilityLabels[i] = toggle.GetComponentInChildren<Text>();
+        }
+        UpdateStatBlockVisibilityLabels();
+        Label(_statBlockVisibilityPanel.transform, "Настройки применятся после сохранения статблока.",
+            11, VttUiSkin.Muted, TextAnchor.UpperLeft, new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(326, 28), new Vector2(12, -414));
+        _statBlockVisibilityPanel.SetActive(false);
+    }
+
+    private void BuildReferencePage(Transform parent)
+    {
+        Label(parent, "Справочник кампании", 16, VttUiSkin.Text, TextAnchor.MiddleLeft,
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(250, 26), new Vector2(0, -2), true);
+        Button(parent, "Новая", 76, 26, 274, -2, ClearReferenceInputs, VttUiSkin.Button);
+        _referenceSearch = CreateInput(parent, "Поиск по названию, тексту, тегам", 0, -32, 350, 28);
+        _referenceSearch.onValueChanged.AddListener(_ => RefreshReferences(true));
+        var viewport = Box(parent, "ReferenceViewport", new Color(0, 0, 0, 0.01f), 0, false);
+        Place(viewport, new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 108), new Vector2(0, -64));
+        viewport.AddComponent<RectMask2D>();
+        var rows = new GameObject("References", typeof(RectTransform));
+        rows.transform.SetParent(viewport.transform, false);
+        _referenceList = rows.GetComponent<RectTransform>();
+        _referenceList.anchorMin = new Vector2(0, 1);
+        _referenceList.anchorMax = new Vector2(1, 1);
+        _referenceList.pivot = new Vector2(0.5f, 1);
+        var scroll = viewport.AddComponent<ScrollRect>();
+        scroll.viewport = viewport.GetComponent<RectTransform>();
+        scroll.content = _referenceList;
+        scroll.horizontal = false;
+        scroll.vertical = true;
+        scroll.scrollSensitivity = 24;
+
+        _referenceTitle = CreateInput(parent, "Название", 0, -178, 350, 28);
+        _referenceCategory = CreateInput(parent, "Категория", 0, -210, 170, 28);
+        _referenceTags = CreateInput(parent, "Теги через запятую", 180, -210, 170, 28);
+        _referenceBody = CreateInput(parent, "Содержание записи", 0, -242, 350, 132, true);
+        _referenceBody.characterLimit = 65000;
+        _referencePrivacyText = Button(parent, "Игрокам доступно", 170, 28, 0, -380,
+            ToggleReferencePrivacy, VttUiSkin.Button).GetComponentInChildren<Text>();
+        _referencePinText = Button(parent, "Не закреплено", 170, 28, 180, -380,
+            ToggleReferencePinned, VttUiSkin.Button).GetComponentInChildren<Text>();
+        Button(parent, "Сохранить запись", 210, 30, 0, -414, SaveReference, VttUiSkin.Button);
+        Button(parent, "Удалить", 130, 30, 220, -414, DeleteReference,
+            new Color(0.28f, 0.11f, 0.14f));
+        Button(parent, "Экспорт…", 170, 28, 0, -450, SceneFileStore.ExportReferenceLibraryDialog, VttUiSkin.Button);
+        Button(parent, "Импорт (замена)…", 170, 28, 180, -450, SceneFileStore.ImportReferenceLibraryDialog, VttUiSkin.Button);
+        _referenceHint = Label(parent, "Записи сохраняются в файл сессии.", 11, VttUiSkin.Muted,
+            TextAnchor.UpperLeft, new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(350, 24), new Vector2(0, -481));
+    }
+
+    private void RefreshReferences(bool force = false)
+    {
+        if (_referenceList == null) return;
+        var entries = SceneFileStore.GetReferenceEntries();
+        string query = (_referenceSearch?.text ?? string.Empty).Trim();
+        var filtered = new List<ReferenceEntry>();
+        foreach (var entry in entries)
+        {
+            if (entry == null) continue;
+            if (string.IsNullOrEmpty(query) || entry.title.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0
+                || entry.category.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0
+                || entry.body.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0
+                || Array.Exists(entry.tags, tag => tag.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0))
+                filtered.Add(entry);
+        }
+        filtered.Sort((a, b) =>
+        {
+            int pinned = b.pinned.CompareTo(a.pinned);
+            return pinned != 0 ? pinned : string.Compare(a.title, b.title, StringComparison.CurrentCultureIgnoreCase);
+        });
+        if (!string.IsNullOrEmpty(_selectedReferenceId)
+            && !Array.Exists(entries, item => item != null && item.id == _selectedReferenceId)) ClearReferenceInputs();
+        var signature = new System.Text.StringBuilder(query);
+        foreach (var entry in filtered) signature.Append('|').Append(entry.id).Append(':').Append(entry.title).Append(':').Append(entry.category).Append(':').Append(entry.pinned);
+        string snapshot = signature.ToString();
+        if (!force && snapshot == _referenceSignature) return;
+        _referenceSignature = snapshot;
+        foreach (Transform child in _referenceList) Destroy(child.gameObject);
+        _referenceList.sizeDelta = new Vector2(0, Mathf.Max(108, filtered.Count * 32));
+        for (int i = 0; i < filtered.Count; i++)
+        {
+            var entry = filtered[i];
+            string title = (entry.pinned ? "★ " : "") + entry.title + " · " + entry.category;
+            Button(_referenceList, title, 340, 28, 0, -i * 32,
+                () => SelectReference(entry), VttUiSkin.Button);
+        }
+    }
+
+    private void SelectReference(ReferenceEntry entry)
+    {
+        if (entry == null) return;
+        _selectedReferenceId = entry.id;
+        _referenceTitle.text = entry.title;
+        _referenceCategory.text = entry.category;
+        _referenceTags.text = string.Join(", ", entry.tags ?? Array.Empty<string>());
+        _referenceBody.text = entry.body;
+        _referenceMasterOnly = entry.masterOnly;
+        _referencePinned = entry.pinned;
+        UpdateReferenceToggles();
+        _referenceHint.text = "Выбрано: " + entry.title;
+    }
+
+    private void ClearReferenceInputs()
+    {
+        _selectedReferenceId = null;
+        if (_referenceTitle == null) return;
+        _referenceTitle.SetTextWithoutNotify(string.Empty);
+        _referenceCategory.SetTextWithoutNotify(string.Empty);
+        _referenceTags.SetTextWithoutNotify(string.Empty);
+        _referenceBody.SetTextWithoutNotify(string.Empty);
+        _referenceMasterOnly = false;
+        _referencePinned = false;
+        UpdateReferenceToggles();
+    }
+
+    private void ToggleReferencePrivacy() { _referenceMasterOnly = !_referenceMasterOnly; UpdateReferenceToggles(); }
+    private void ToggleReferencePinned() { _referencePinned = !_referencePinned; UpdateReferenceToggles(); }
+
+    private void UpdateReferenceToggles()
+    {
+        if (_referencePrivacyText != null) _referencePrivacyText.text = _referenceMasterOnly ? "Только мастеру" : "Игрокам доступно";
+        if (_referencePinText != null) _referencePinText.text = _referencePinned ? "★ Закреплено" : "Не закреплено";
+    }
+
+    private void SaveReference()
+    {
+        try
+        {
+            var tags = new List<string>();
+            foreach (string tag in (_referenceTags.text ?? string.Empty).Split(','))
+                if (!string.IsNullOrWhiteSpace(tag)) tags.Add(tag.Trim());
+            var entry = new ReferenceEntry
+            {
+                id = _selectedReferenceId, title = _referenceTitle.text, category = _referenceCategory.text,
+                body = _referenceBody.text, tags = tags.ToArray(), masterOnly = _referenceMasterOnly, pinned = _referencePinned
+            };
+            SceneFileStore.UpsertReferenceEntry(entry);
+            _selectedReferenceId = entry.id;
+            _referenceHint.text = "Запись сохранена в кампании. Не забудьте сохранить файл сессии.";
+            RefreshReferences(true);
+        }
+        catch (Exception ex) { _referenceHint.text = ex.Message; }
+    }
+
+    private void DeleteReference()
+    {
+        if (string.IsNullOrEmpty(_selectedReferenceId)) { _referenceHint.text = "Сначала выберите запись."; return; }
+        string id = _selectedReferenceId;
+        try
+        {
+            SceneFileStore.DeleteReferenceEntry(id);
+            ClearReferenceInputs();
+            _referenceHint.text = "Запись удалена из кампании.";
+            RefreshReferences(true);
+        }
+        catch (Exception ex) { _referenceHint.text = ex.Message; }
+    }
+
+    public void OnReferenceLibraryChanged()
+    {
+        _referenceSignature = null;
+        if (_page == 7) RefreshReferences(true);
+        if (_referenceHint != null) _referenceHint.text = "Справочник обновлён.";
+    }
+
+    private InputField CreateInput(Transform parent, string placeholderText, float x, float y,
+        float width, float height, bool multiline = false)
+    {
+        var box = Box(parent, "Input " + placeholderText, VttUiSkin.Button, 6, false);
+        Place(box, new Vector2(0, 1), new Vector2(0, 1), new Vector2(width, height), new Vector2(x, y));
+        var input = box.AddComponent<InputField>();
+        input.targetGraphic = box.GetComponent<Image>();
+        input.lineType = multiline ? InputField.LineType.MultiLineNewline : InputField.LineType.SingleLine;
+        input.characterLimit = multiline ? 4000 : 256;
+        input.textComponent = Label(box.transform, "", 12, VttUiSkin.Text, TextAnchor.MiddleLeft,
+            new Vector2(0, 0.5f), new Vector2(0, 0.5f), new Vector2(width - 14, height - 8), new Vector2(7, 0));
+        input.placeholder = Label(box.transform, placeholderText, 11, VttUiSkin.Muted, TextAnchor.MiddleLeft,
+            new Vector2(0, 0.5f), new Vector2(0, 0.5f), new Vector2(width - 14, height - 8), new Vector2(7, 0));
+        return input;
+    }
+
+    private void RefreshStatBlocks(bool force = false)
+    {
+        if (_statBlockList == null) return;
+        var blocks = SceneFileStore.GetStatBlocks();
+        if (!string.IsNullOrEmpty(_selectedStatBlockId)
+            && !Array.Exists(blocks, item => item.id == _selectedStatBlockId)) ClearStatBlockInputs();
+        var signature = new System.Text.StringBuilder();
+        foreach (var block in blocks) signature.Append(block.id).Append(':').Append(block.name).Append(';');
+        string snapshot = signature.ToString();
+        if (!force && _statBlockSignature == snapshot) return;
+        _statBlockSignature = snapshot;
+        foreach (Transform child in _statBlockList) Destroy(child.gameObject);
+        _statBlockList.sizeDelta = new Vector2(0, Mathf.Max(66, blocks.Length * 32));
+        for (int i = 0; i < blocks.Length; i++)
+        {
+            var block = blocks[i];
+            Button(_statBlockList, block.name, 340, 28, 0, -i * 32,
+                () => SelectStatBlock(block), VttUiSkin.Button);
+        }
+        if (string.IsNullOrEmpty(_selectedStatBlockId)) ClearStatBlockInputs();
+    }
+
+    private void SelectStatBlock(StatBlockDefinition block)
+    {
+        if (block == null) return;
+        _selectedStatBlockId = block.id;
+        _statBlockVisibleFieldsDraft = block.publicFieldsMask;
+        UpdateStatBlockVisibilityLabels();
+        _statBlockInputs[0].text = block.name;
+        _statBlockInputs[1].text = block.creatureType;
+        _statBlockInputs[2].text = block.size;
+        _statBlockInputs[3].text = block.alignment;
+        _statBlockInputs[4].text = block.armorClass.ToString(CultureInfo.InvariantCulture);
+        _statBlockInputs[5].text = block.hitPoints.ToString(CultureInfo.InvariantCulture);
+        _statBlockInputs[6].text = block.speed;
+        _statBlockInputs[7].text = string.Format(CultureInfo.InvariantCulture, "{0},{1},{2},{3},{4},{5}",
+            block.strength, block.dexterity, block.constitution, block.intelligence, block.wisdom, block.charisma);
+        _statBlockInputs[8].text = block.challengeRating;
+        _statBlockInputs[9].text = block.description;
+        var actions = new System.Text.StringBuilder();
+        foreach (var action in block.actions)
+        {
+            if (actions.Length > 0) actions.Append('\n');
+            actions.Append(action.name).Append(": ").Append(action.description);
+        }
+        _statBlockInputs[10].text = actions.ToString();
+        _statBlockHint.text = "Выбран: " + block.name;
+    }
+
+    private void OpenStatBlockVisibilityPanel()
+    {
+        if (string.IsNullOrEmpty(_selectedStatBlockId))
+        {
+            _statBlockHint.text = "Сначала выберите статблок или создайте и сохраните новый.";
+            return;
+        }
+        UpdateStatBlockVisibilityLabels();
+        _statBlockVisibilityPanel.SetActive(true);
+    }
+
+    private void ToggleStatBlockPublicField(int mask)
+    {
+        _statBlockVisibleFieldsDraft ^= mask;
+        UpdateStatBlockVisibilityLabels();
+    }
+
+    private void ImportCharacterDataToStatBlock()
+    {
+        var character = FindAnyObjectByType<CharacterData>();
+        if (character == null)
+        {
+            _statBlockHint.text = "Лист персонажа не найден в сцене.";
+            return;
+        }
+
+        ClearStatBlockInputs();
+        _statBlockInputs[0].text = string.IsNullOrWhiteSpace(character.characterName)
+            ? character.className : character.characterName;
+        _statBlockInputs[1].text = character.className ?? string.Empty;
+        _statBlockInputs[2].text = "Средний";
+        _statBlockInputs[3].text = "Не задано";
+        _statBlockInputs[4].text = character.armorClass.ToString();
+        _statBlockInputs[5].text = character.maxHP.ToString();
+        _statBlockInputs[6].text = string.Empty;
+        _statBlockInputs[7].text = string.Join(",", character.strength, character.dexterity,
+            character.constitution, character.intelligence, character.wisdom, character.charisma);
+        _statBlockInputs[8].text = "Уровень " + character.level;
+        _statBlockInputs[9].text = string.Join("\n", new[]
+        {
+            BuildCharacterStatDetails(character),
+            character.otherProficiencies, character.featuresAndTraits, character.extraAbilities,
+            character.traits, character.equipment, character.treasure,
+            character.note1, character.note2, character.note3, character.note4, character.note5, character.note6
+        }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        var actionLines = new List<string>();
+        AppendCharacterActionLines(actionLines, "Атаки и заклинания", character.attacksAndSpells);
+        AppendCharacterActionLines(actionLines, "Особенности", character.featuresAndTraits);
+        _statBlockInputs[10].text = string.Join("\n", actionLines);
+        _statBlockHint.text = "Поля листа скопированы. Проверьте их и сохраните статблок.";
+    }
+
+    private static string BuildCharacterStatDetails(CharacterData character)
+    {
+        var lines = new List<string> { "Бонус мастерства: " + CharacterData.ModString(character.proficiencyBonus) };
+        lines.Add("Спасброски: " + string.Join(", ", new[]
+        {
+            "СИЛ " + CharacterData.ModString(character.StrSave), "ЛОВ " + CharacterData.ModString(character.DexSave),
+            "ТЕЛ " + CharacterData.ModString(character.ConSave), "ИНТ " + CharacterData.ModString(character.IntSave),
+            "МДР " + CharacterData.ModString(character.WisSave), "ХАР " + CharacterData.ModString(character.ChaSave)
+        }));
+        var skills = new List<string>();
+        int perception = 10 + character.WisMod, insight = 10 + character.WisMod, analysis = 10 + character.IntMod;
+        foreach (var skill in character.skills ?? Array.Empty<CharacterData.SkillEntry>())
+        {
+            if (skill == null || string.IsNullOrWhiteSpace(skill.name)) continue;
+            int bonus = character.GetSkillBonus(skill);
+            skills.Add(skill.name + " " + CharacterData.ModString(bonus) + (skill.expertise ? " (экспертиза)" : ""));
+            if (skill.name == "Восприятие") perception = 10 + bonus;
+            else if (skill.name == "Проницательность") insight = 10 + bonus;
+            else if (skill.name == "Анализ") analysis = 10 + bonus;
+        }
+        if (skills.Count > 0) lines.Add("Навыки: " + string.Join(", ", skills));
+        lines.Add($"Пассивные чувства: Восприятие {perception}, Проницательность {insight}, Анализ {analysis}");
+        return string.Join("\n", lines);
+    }
+
+    private static void AppendCharacterActionLines(List<string> output, string title, string source)
+    {
+        if (string.IsNullOrWhiteSpace(source)) return;
+        foreach (string raw in source.Split('\n'))
+        {
+            string line = raw.Trim();
+            if (line.Length == 0) continue;
+            // The statblock editor uses "name: description" rows.
+            int separator = line.IndexOf(':');
+            output.Add(separator > 0 ? line : title + ": " + line);
+        }
+    }
+
+    private void UpdateStatBlockVisibilityLabels()
+    {
+        if (_statBlockVisibilityLabels == null) return;
+        for (int i = 0; i < _statBlockVisibilityLabels.Length; i++)
+        {
+            bool visible = (_statBlockVisibleFieldsDraft & StatBlockPublicFieldMasks[i]) != 0;
+            _statBlockVisibilityLabels[i].text = (visible ? "✓  " : "□  ") + StatBlockPublicFieldNames[i];
+        }
+    }
+
+    private void ClearStatBlockInputs()
+    {
+        if (_statBlockInputs == null) return;
+        _selectedStatBlockId = null;
+        _statBlockVisibleFieldsDraft = 0;
+        UpdateStatBlockVisibilityLabels();
+        foreach (var input in _statBlockInputs) input.SetTextWithoutNotify(string.Empty);
+        if (_statBlockHint != null) _statBlockHint.text = "Новая запись: заполните поля и сохраните.";
+    }
+
+    private void SaveStatBlock()
+    {
+        try
+        {
+            string abilityText = string.IsNullOrWhiteSpace(_statBlockInputs[7].text)
+                ? "10,10,10,10,10,10" : _statBlockInputs[7].text;
+            string[] abilities = abilityText.Split(',');
+            if (abilities.Length != 6) throw new FormatException("Укажите шесть характеристик через запятую.");
+            var stats = new int[6];
+            for (int i = 0; i < stats.Length; i++)
+                if (!int.TryParse(abilities[i].Trim(), out stats[i])) throw new FormatException("Проверьте шесть характеристик.");
+            var actions = new List<StatBlockAction>();
+            foreach (string line in _statBlockInputs[10].text.Split('\n'))
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                int separator = line.IndexOf(':');
+                if (separator <= 0) throw new FormatException("Действия записываются по одному на строку: Название: описание.");
+                actions.Add(new StatBlockAction { name = line.Substring(0, separator).Trim(), description = line.Substring(separator + 1).Trim() });
+            }
+            var block = new StatBlockDefinition
+            {
+                id = _selectedStatBlockId, name = _statBlockInputs[0].text,
+                creatureType = _statBlockInputs[1].text,
+                size = string.IsNullOrWhiteSpace(_statBlockInputs[2].text) ? "Средний" : _statBlockInputs[2].text,
+                alignment = _statBlockInputs[3].text,
+                armorClass = int.Parse(_statBlockInputs[4].text),
+                hitPoints = int.Parse(_statBlockInputs[5].text), speed = _statBlockInputs[6].text,
+                strength = stats[0], dexterity = stats[1], constitution = stats[2],
+                intelligence = stats[3], wisdom = stats[4], charisma = stats[5],
+                challengeRating = _statBlockInputs[8].text, description = _statBlockInputs[9].text,
+                actions = actions.ToArray(), publicFieldsMask = _statBlockVisibleFieldsDraft
+            };
+            SceneFileStore.UpsertStatBlock(block);
+            _selectedStatBlockId = block.id;
+            _statBlockHint.text = "Сохранено. Не забудьте сохранить кампанию, чтобы записать каталог в файл.";
+            RefreshStatBlocks(true);
+        }
+        catch (Exception ex) { _statBlockHint.text = ex.Message; }
+    }
+
+    private void DeleteSelectedStatBlock()
+    {
+        if (string.IsNullOrEmpty(_selectedStatBlockId)) return;
+        string id = _selectedStatBlockId;
+        DiceUI.Instance?.ConfirmAction("Удалить статблок?", "Если он назначен токену, сначала снимите назначение.", () =>
+        {
+            try
+            {
+                SceneFileStore.DeleteStatBlock(id);
+                ClearStatBlockInputs();
+                _statBlockHint.text = "Статблок удалён из сессии.";
+                RefreshStatBlocks(true);
+            }
+            catch (Exception ex) { _statBlockHint.text = ex.Message; }
+        });
+    }
+
     public void ShowSceneEditor()
     {
         if (!IsLocalHost || _panel == null) return;
@@ -148,7 +672,7 @@ public class DmPanelUI : MonoBehaviour
     private void BuildScenePage(Transform parent)
     {
         Label(parent, "Разметка и файл сцены", 16, VttUiSkin.Text, TextAnchor.MiddleLeft,
-            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 30), new Vector2(0, -4), true);
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(210, 30), new Vector2(0, -4), true);
         Button(parent, "Кисть стен", 170, 34, 0, -44,
             () => SceneEditor.Instance?.Activate(SceneEditor.Tool.Wall), VttUiSkin.Button);
         Button(parent, "Стереть ребро", 170, 34, 180, -44,
@@ -174,10 +698,334 @@ public class DmPanelUI : MonoBehaviour
         _sceneMarkupText = markup.GetComponentInChildren<Text>();
         Button(parent, "Сохранить JSON", 170, 36, 0, -335, SceneFileStore.SaveDialog, VttUiSkin.Button);
         Button(parent, "Загрузить JSON", 170, 36, 180, -335, SceneFileStore.LoadDialog, VttUiSkin.Button);
+        Button(parent, "Сохранить сессию", 170, 34, 0, -376, SceneFileStore.SaveCampaignDialog, VttUiSkin.Button);
+        Button(parent, "Загрузить сессию", 170, 34, 180, -376, SceneFileStore.LoadCampaignDialog, VttUiSkin.Button);
+        Button(parent, "←", 40, 32, 0, -416, () => SceneFileStore.CycleScene(-1), VttUiSkin.Button);
+        Button(parent, "Копировать", 126, 32, 44, -416, SceneFileStore.CreateSceneCopy, VttUiSkin.Button);
+        Button(parent, "Пустая", 126, 32, 176, -416, SceneFileStore.CreateEmptyScene, VttUiSkin.Button);
+        Button(parent, "→", 40, 32, 308, -416, () => SceneFileStore.CycleScene(1), VttUiSkin.Button);
+        var sceneNameBox = Box(parent, "SceneName", VttUiSkin.Button, 7);
+        Place(sceneNameBox, new Vector2(0, 1), new Vector2(0, 1), new Vector2(150, 30), new Vector2(0, -452));
+        var sceneNameText = Label(sceneNameBox.transform, "", 13, VttUiSkin.Text, TextAnchor.MiddleLeft,
+            new Vector2(0, 0.5f), new Vector2(0, 0.5f), new Vector2(130, 26), new Vector2(10, 0));
+        _sceneNameInput = sceneNameBox.AddComponent<InputField>();
+        _sceneNameInput.textComponent = sceneNameText;
+        _sceneNameInput.lineType = InputField.LineType.SingleLine;
+        _sceneNameInput.characterLimit = 64;
+        Button(parent, "Имя ✓", 92, 30, 156, -452, RenameActiveScene, VttUiSkin.Button);
+        Button(parent, "Удалить", 92, 30, 256, -452, () => DiceUI.Instance?.ConfirmAction(
+            "Удалить активную сцену?", "Будет загружена следующая сцена. Последнюю сцену удалить нельзя.",
+            SceneFileStore.DeleteActiveScene), VttUiSkin.Button);
         _sceneNotice = Label(parent, "", 12, VttUiSkin.Text, TextAnchor.UpperLeft,
-            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 60), new Vector2(0, -385));
-        Label(parent, "Стены — голубые, двери — жёлтые; открытые — зелёные. Игрокам видна разметка в текущем обзоре. JSON содержит карту, всех персонажей и портреты. История и пауза — во вкладке «Туман».",
-            12, VttUiSkin.Muted, TextAnchor.UpperLeft, new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 56), new Vector2(0, -449));
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 28), new Vector2(0, -486));
+        Button(parent, "Переходы…", 130, 28, 220, -4, ToggleTransitionsPanel, VttUiSkin.Button);
+        _transitionPanel = Box(parent, "SceneTransitions", VttUiSkin.Panel, 10);
+        Place(_transitionPanel, new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(350, 450), new Vector2(0, -24));
+        Label(_transitionPanel.transform, "Переходы и перемещение токенов", 15, VttUiSkin.Text,
+            TextAnchor.MiddleLeft, new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(280, 28), new Vector2(10, -6), true);
+        Button(_transitionPanel.transform, "×", 28, 28, 310, -6,
+            () => { _transitionPickingCell = false; _transitionPanel.SetActive(false); }, VttUiSkin.Button);
+        _transitionTitleInput = CreateInput(_transitionPanel.transform, "Название перехода", 10, -40, 330, 30);
+        _transitionXInput = CreateInput(_transitionPanel.transform, "X клетки", 10, -74, 100, 30);
+        _transitionYInput = CreateInput(_transitionPanel.transform, "Y клетки", 120, -74, 100, 30);
+        Button(_transitionPanel.transform, "Цель ◀", 92, 28, 10, -110,
+            () => StepTransitionTarget(-1), VttUiSkin.Button);
+        _transitionTargetText = Label(_transitionPanel.transform, "", 13, VttUiSkin.Text,
+            TextAnchor.MiddleCenter, new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(192, 28), new Vector2(104, -110));
+        Button(_transitionPanel.transform, "▶", 32, 28, 308, -110,
+            () => StepTransitionTarget(1), VttUiSkin.Button);
+        Button(_transitionPanel.transform, "Добавить", 160, 28, 10, -144,
+            AddSceneTransition, VttUiSkin.Button);
+        Button(_transitionPanel.transform, "Обновить", 160, 28, 180, -144,
+            UpdateSelectedSceneTransition, VttUiSkin.Button);
+        Button(_transitionPanel.transform, "Выбрать клетку на карте", 330, 26, 10, -174,
+            BeginTransitionCellPicker, VttUiSkin.Button);
+        var transitionViewport = Box(_transitionPanel.transform, "TransitionViewport",
+            new Color(0, 0, 0, 0.01f), 0, false);
+        Place(transitionViewport, new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(330, 72), new Vector2(10, -210));
+        transitionViewport.AddComponent<RectMask2D>();
+        var transitionRows = new GameObject("TransitionRows", typeof(RectTransform));
+        transitionRows.transform.SetParent(transitionViewport.transform, false);
+        _transitionList = transitionRows.GetComponent<RectTransform>();
+        _transitionList.anchorMin = new Vector2(0, 1);
+        _transitionList.anchorMax = new Vector2(1, 1);
+        _transitionList.pivot = new Vector2(0.5f, 1);
+        var transitionScroll = transitionViewport.AddComponent<ScrollRect>();
+        transitionScroll.viewport = transitionViewport.GetComponent<RectTransform>();
+        transitionScroll.content = _transitionList;
+        transitionScroll.horizontal = false;
+        transitionScroll.vertical = true;
+        Button(_transitionPanel.transform, "Выбрать всех / снять выбор", 330, 26, 10, -290,
+            ToggleAllTokensForTransfer, VttUiSkin.Button);
+        var heroViewport = Box(_transitionPanel.transform, "HeroTransferViewport",
+            new Color(0, 0, 0, 0.01f), 0, false);
+        Place(heroViewport, new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(330, 76), new Vector2(10, -320));
+        heroViewport.AddComponent<RectMask2D>();
+        var heroRows = new GameObject("HeroTransferRows", typeof(RectTransform));
+        heroRows.transform.SetParent(heroViewport.transform, false);
+        _tokenTransferList = heroRows.GetComponent<RectTransform>();
+        _tokenTransferList.anchorMin = new Vector2(0, 1);
+        _tokenTransferList.anchorMax = new Vector2(1, 1);
+        _tokenTransferList.pivot = new Vector2(0.5f, 1);
+        var heroScroll = heroViewport.AddComponent<ScrollRect>();
+        heroScroll.viewport = heroViewport.GetComponent<RectTransform>();
+        heroScroll.content = _tokenTransferList;
+        heroScroll.horizontal = false;
+        heroScroll.vertical = true;
+        Button(_transitionPanel.transform, "Перенести выбранные токены", 330, 32, 10, -404,
+            TransferTokensToSelectedScene, new Color(0.10f, 0.30f, 0.48f));
+        _transitionPanel.SetActive(false);
+    }
+
+    private void RenameActiveScene()
+    {
+        if (_sceneNameInput == null || string.IsNullOrWhiteSpace(_sceneNameInput.text)) return;
+        SceneFileStore.RenameActiveScene(_sceneNameInput.text);
+        _sceneNameInput.text = string.Empty;
+    }
+
+    private void ToggleTransitionsPanel()
+    {
+        bool show = _transitionPanel != null && !_transitionPanel.activeSelf;
+        _transitionPickingCell = false;
+        _transitionPanel?.SetActive(show);
+        if (show) { RefreshSceneTransitions(true); RefreshTokenTransferList(true); }
+    }
+
+    private void BeginTransitionCellPicker()
+    {
+        _transitionPickingCell = true;
+        DiceUI.Instance?.ShowToolNotice("Наведите мышь на нужную клетку и нажмите ЛКМ. Esc — отмена.");
+    }
+
+    private void UpdateTransitionCellPicker()
+    {
+        if (Keyboard.current?.escapeKey.wasPressedThisFrame == true)
+        {
+            _transitionPickingCell = false;
+            return;
+        }
+        var mouse = Mouse.current;
+        var camera = Camera.main;
+        var grid = FindAnyObjectByType<GridManager>();
+        if (mouse == null || camera == null || grid == null || !mouse.leftButton.wasPressedThisFrame
+            || GameplayInputGate.IsPointerOverUI) return;
+        Ray ray = camera.ScreenPointToRay(mouse.position.ReadValue());
+        var plane = new Plane(Vector3.up, Vector3.zero);
+        if (!plane.Raycast(ray, out float distance)) return;
+        Vector2Int cell = grid.GetGridPosition(ray.GetPoint(distance));
+        if (cell.x < 0 || !grid.IsPointOnMap(grid.GetCellCenter(cell.x, cell.y))) return;
+        _transitionXInput.text = cell.x.ToString();
+        _transitionYInput.text = cell.y.ToString();
+        _transitionPickingCell = false;
+        DiceUI.Instance?.ShowToolNotice($"Клетка перехода выбрана: {cell.x}, {cell.y}.");
+    }
+
+    private CampaignScene[] GetTransitionTargets()
+    {
+        var targets = new List<CampaignScene>();
+        foreach (var scene in SceneFileStore.GetCampaignScenes())
+            if (scene != null && scene.scene != null && scene.sceneId != SceneFileStore.ActiveSceneId)
+                targets.Add(scene);
+        return targets.ToArray();
+    }
+
+    private void StepTransitionTarget(int direction)
+    {
+        var targets = GetTransitionTargets();
+        if (targets.Length == 0) { RefreshTransitionTargetLabel(); return; }
+        _transitionTargetIndex = (_transitionTargetIndex + direction % targets.Length + targets.Length) % targets.Length;
+        _transitionDraftTargetId = targets[_transitionTargetIndex].sceneId;
+        RefreshTransitionTargetLabel();
+    }
+
+    private void RefreshTransitionTargetLabel()
+    {
+        var targets = GetTransitionTargets();
+        if (targets.Length == 0)
+        {
+            _selectedTransitionTargetId = null;
+            if (_transitionTargetText != null) _transitionTargetText.text = "Сначала создайте ещё сцену";
+            return;
+        }
+        _transitionTargetIndex = Mathf.Clamp(_transitionTargetIndex, 0, targets.Length - 1);
+        if (!string.IsNullOrEmpty(_transitionDraftTargetId))
+        {
+            int draftIndex = Array.FindIndex(targets, item => item.sceneId == _transitionDraftTargetId);
+            if (draftIndex >= 0) _transitionTargetIndex = draftIndex;
+        }
+        _selectedTransitionTargetId = targets[_transitionTargetIndex].sceneId;
+        _transitionDraftTargetId = _selectedTransitionTargetId;
+        if (_transitionTargetText != null) _transitionTargetText.text = targets[_transitionTargetIndex].title;
+    }
+
+    private void AddSceneTransition()
+    {
+        RefreshTransitionTargetLabel();
+        if (string.IsNullOrEmpty(_selectedTransitionTargetId)) return;
+        string title = _transitionTitleInput.text;
+        if (!int.TryParse(_transitionXInput.text, out int x)) x = 0;
+        if (!int.TryParse(_transitionYInput.text, out int y)) y = 0;
+        int before = SceneFileStore.GetActiveSceneTransitions().Length;
+        SceneFileStore.AddSceneTransition(title, _selectedTransitionTargetId, x, y);
+        if (SceneFileStore.GetActiveSceneTransitions().Length == before) return;
+        _transitionTitleInput.text = string.Empty;
+        _transitionXInput.text = "0";
+        _transitionYInput.text = "0";
+        _editingTransitionId = null;
+        RefreshSceneTransitions(true);
+    }
+
+    private void BeginEditSceneTransition(SceneTransition transition)
+    {
+        if (transition == null) return;
+        _editingTransitionId = transition.id;
+        _transitionTitleInput.text = transition.title;
+        _transitionXInput.text = transition.x.ToString();
+        _transitionYInput.text = transition.y.ToString();
+        _transitionDraftTargetId = transition.targetSceneId;
+        var targets = GetTransitionTargets();
+        _transitionTargetIndex = Mathf.Max(0, Array.FindIndex(targets, item => item.sceneId == transition.targetSceneId));
+        RefreshTransitionTargetLabel();
+    }
+
+    private void UpdateSelectedSceneTransition()
+    {
+        if (string.IsNullOrEmpty(_editingTransitionId))
+        {
+            DiceUI.Instance?.ShowToolNotice("Сначала нажмите на переход, который нужно изменить.");
+            return;
+        }
+        RefreshTransitionTargetLabel();
+        if (string.IsNullOrEmpty(_selectedTransitionTargetId)) return;
+        if (!int.TryParse(_transitionXInput.text, out int x) || !int.TryParse(_transitionYInput.text, out int y))
+        {
+            DiceUI.Instance?.ShowToolNotice("Введите целые координаты клетки.");
+            return;
+        }
+        SceneFileStore.UpdateSceneTransition(_editingTransitionId, _transitionTitleInput.text,
+            _selectedTransitionTargetId, x, y);
+        _editingTransitionId = null;
+        _transitionTitleInput.text = string.Empty;
+        _transitionXInput.text = "0";
+        _transitionYInput.text = "0";
+        RefreshSceneTransitions(true);
+    }
+
+    private void TransferTokensToSelectedScene()
+    {
+        RefreshTokenTransferList(true);
+        RefreshTransitionTargetLabel();
+        if (string.IsNullOrEmpty(_selectedTransitionTargetId)) return;
+        string[] tokenIds = _selectedTokenTransferIds.ToArray();
+        if (tokenIds.Length == 0)
+        {
+            DiceUI.Instance?.ShowToolNotice("Выберите хотя бы один токен.");
+            return;
+        }
+        string targetId = _selectedTransitionTargetId;
+        var target = Array.Find(SceneFileStore.GetCampaignScenes(), item => item != null && item.sceneId == targetId);
+        if (target == null) return;
+        DiceUI.Instance?.ConfirmAction("Перенести токены?",
+            $"Выбранные токены ({tokenIds.Length}) будут перемещены в «{target.title}». Их HP, состояния, изображения и записи инициативы сохранятся.",
+            () => { SceneFileStore.TransferTokensToScene(targetId, tokenIds); _selectedTokenTransferIds.Clear(); RefreshSceneTransitions(true); RefreshTokenTransferList(true); });
+    }
+
+    private static TokenController[] GetActiveSceneTokens()
+    {
+        var tokens = FindObjectsByType<TokenController>(FindObjectsInactive.Exclude);
+        var heroes = new List<TokenController>();
+        foreach (var token in tokens)
+            if (token != null && token.IsSpawned)
+                heroes.Add(token);
+        return heroes.ToArray();
+    }
+
+    private void ToggleAllTokensForTransfer()
+    {
+        var heroes = GetActiveSceneTokens();
+        bool allSelected = heroes.Length > 0 && heroes.All(token => _selectedTokenTransferIds.Contains(token.SceneId));
+        if (allSelected) _selectedTokenTransferIds.Clear();
+        else
+        {
+            _selectedTokenTransferIds.Clear();
+            foreach (var token in heroes) _selectedTokenTransferIds.Add(token.SceneId);
+        }
+        RefreshTokenTransferList(true);
+    }
+
+    private void RefreshTokenTransferList(bool force = false)
+    {
+        if (_tokenTransferList == null) return;
+        var heroes = GetActiveSceneTokens();
+        var signature = new System.Text.StringBuilder();
+        foreach (var token in heroes)
+            signature.Append(token.SceneId).Append(':').Append(token.TokenName).Append(':')
+                .Append(_selectedTokenTransferIds.Contains(token.SceneId)).Append(';');
+        string snapshot = signature.ToString();
+        if (!force && snapshot == _tokenTransferSignature) return;
+        _tokenTransferSignature = snapshot;
+        var liveIds = new HashSet<string>(heroes.Select(token => token.SceneId));
+        _selectedTokenTransferIds.RemoveWhere(id => !liveIds.Contains(id));
+        foreach (Transform child in _tokenTransferList) Destroy(child.gameObject);
+        _tokenTransferList.sizeDelta = new Vector2(0, Mathf.Max(76, heroes.Length * 34));
+        for (int i = 0; i < heroes.Length; i++)
+        {
+            var token = heroes[i];
+            string id = token.SceneId;
+            string marker = _selectedTokenTransferIds.Contains(id) ? "☑" : "☐";
+            string label = (token.IsHero ? "Герой: " : "NPC: ") + (string.IsNullOrWhiteSpace(token.TokenName) ? "Токен" : token.TokenName);
+            Button(_tokenTransferList, $"{marker}  {label}", 320, 30, 0, -i * 34,
+                () => { if (!_selectedTokenTransferIds.Add(id)) _selectedTokenTransferIds.Remove(id); RefreshTokenTransferList(true); },
+                VttUiSkin.Button);
+        }
+        if (heroes.Length == 0)
+            Label(_tokenTransferList, "В активной сцене нет токенов", 12, VttUiSkin.Muted,
+                TextAnchor.MiddleCenter, new Vector2(0, 1), new Vector2(1, 1), new Vector2(320, 34), Vector2.zero);
+    }
+
+    private void RefreshSceneTransitions(bool force = false)
+    {
+        if (_transitionList == null) return;
+        RefreshTransitionTargetLabel();
+        var transitions = SceneFileStore.GetActiveSceneTransitions();
+        var signature = new System.Text.StringBuilder();
+        foreach (var item in transitions)
+        {
+            if (item == null) continue;
+            string targetName = Array.Find(SceneFileStore.GetCampaignScenes(), scene => scene != null
+                && scene.sceneId == item.targetSceneId)?.title;
+            signature.Append(item.id).Append(':').Append(item.title).Append(':').Append(targetName)
+                .Append(':').Append(item.x).Append(':').Append(item.y).Append(':').Append(item.markerEnabled).Append(';');
+        }
+        string snapshot = signature.ToString();
+        if (!force && snapshot == _transitionSignature) return;
+        _transitionSignature = snapshot;
+        foreach (Transform child in _transitionList) Destroy(child.gameObject);
+        _transitionList.sizeDelta = new Vector2(0, Mathf.Max(254, transitions.Length * 42));
+        foreach (var transition in transitions)
+        {
+            if (transition == null) continue;
+            string targetTitle = Array.Find(SceneFileStore.GetCampaignScenes(), item => item != null
+                && item.sceneId == transition.targetSceneId)?.title ?? "Сцена удалена";
+            int row = Array.IndexOf(transitions, transition);
+            Button(_transitionList, $"{transition.title} → {targetTitle} ({transition.x},{transition.y})", 178, 34, 0, -row * 42,
+                () => { SceneFileStore.UseSceneTransition(transition.id); RefreshSceneTransitions(true); }, VttUiSkin.Button);
+            Button(_transitionList, "✎", 32, 34, 182, -row * 42,
+                () => BeginEditSceneTransition(transition), VttUiSkin.Button);
+            Button(_transitionList, transition.markerEnabled ? "Марк.✓" : "Марк.", 80, 34, 216, -row * 42,
+                () => { SceneFileStore.ToggleSceneTransitionMarker(transition.id); RefreshSceneTransitions(true); },
+                transition.markerEnabled ? new Color(0.10f, 0.35f, 0.37f) : VttUiSkin.Button);
+            Button(_transitionList, "×", 40, 34, 300, -row * 42,
+                () => { SceneFileStore.DeleteSceneTransition(transition.id); RefreshSceneTransitions(true); },
+                new Color(0.28f, 0.11f, 0.14f));
+        }
+        RefreshTokenTransferList(false);
     }
 
     private void AdjustColumn(float delta)
@@ -248,12 +1096,14 @@ public class DmPanelUI : MonoBehaviour
         scroll.movementType = ScrollRect.MovementType.Clamped;
         scroll.scrollSensitivity = 28;
         Label(parent, "Массовое удаление", 12, VttUiSkin.Muted, TextAnchor.MiddleLeft,
-            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 22), new Vector2(0, -445));
-        Button(parent, "Все…", 110, 30, 0, -470,
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 22), new Vector2(0, -458));
+        Button(parent, "Добавить выбранные в бой", 350, 30, 0, -425, AddSelectedTokensToInitiative,
+            new Color(0.10f, 0.30f, 0.48f));
+        Button(parent, "Все…", 110, 30, 0, -474,
             () => ConfirmDeleteTokens(0), new Color(0.28f, 0.11f, 0.14f));
-        Button(parent, "Мои…", 110, 30, 120, -470,
+        Button(parent, "Мои…", 110, 30, 120, -474,
             () => ConfirmDeleteTokens(1), new Color(0.28f, 0.11f, 0.14f));
-        Button(parent, "Игроков…", 110, 30, 240, -470,
+        Button(parent, "Игроков…", 110, 30, 240, -474,
             () => ConfirmDeleteTokens(2), new Color(0.28f, 0.11f, 0.14f));
     }
 
@@ -273,6 +1123,9 @@ public class DmPanelUI : MonoBehaviour
         foreach (var token in FindObjectsByType<TokenController>(FindObjectsInactive.Exclude))
             if (token.IsSpawned) tokens.Add(token);
         tokens.Sort((a, b) => a.NetworkObjectId.CompareTo(b.NetworkObjectId));
+        var liveIds = new HashSet<string>();
+        foreach (var token in tokens) liveIds.Add(token.SceneId);
+        _selectedInitiativeTokenIds.RemoveWhere(id => !liveIds.Contains(id));
         var signature = new System.Text.StringBuilder();
         foreach (var token in tokens)
             signature.Append(token.NetworkObjectId).Append(':').Append(token.TokenName).Append(':')
@@ -293,12 +1146,18 @@ public class DmPanelUI : MonoBehaviour
             var token = tokens[i];
             var row = Box(_tokensContent, "Token " + token.NetworkObjectId, VttUiSkin.Raised, 7, false);
             Place(row, new Vector2(0, 1), new Vector2(0, 1), new Vector2(340, 90), new Vector2(0, -i * 96));
+            Button(row.transform, _selectedInitiativeTokenIds.Contains(token.SceneId) ? "✓" : "○", 24, 24, 7, -3,
+                () => {
+                    if (_selectedInitiativeTokenIds.Contains(token.SceneId)) _selectedInitiativeTokenIds.Remove(token.SceneId);
+                    else _selectedInitiativeTokenIds.Add(token.SceneId);
+                    RefreshTokens(true);
+                }, VttUiSkin.Button);
             Label(row.transform, token.TokenName, 13, VttUiSkin.Text, TextAnchor.MiddleLeft,
-                new Vector2(0, 1), new Vector2(0, 1), new Vector2(200, 24), new Vector2(10, -3), true);
+                new Vector2(0, 1), new Vector2(0, 1), new Vector2(172, 24), new Vector2(36, -3), true);
             string status = (token.IsHidden ? "Скрыт" : "Виден") + (token.IsHero ? " · герой" : "") +
                 $" · {token.VisionFeet} фт";
             Label(row.transform, status, 11, VttUiSkin.Muted, TextAnchor.MiddleLeft,
-                new Vector2(0, 1), new Vector2(0, 1), new Vector2(200, 22), new Vector2(10, -28));
+                new Vector2(0, 1), new Vector2(0, 1), new Vector2(172, 22), new Vector2(36, -28));
             Button(row.transform, token.IsHidden ? "Показать" : "Скрыть", 64, 30, 214, -12,
                 () => {
                     if (!IsLocalHost || token == null || !token.IsSpawned) return;
@@ -371,6 +1230,7 @@ public class DmPanelUI : MonoBehaviour
             _pages[i].SetActive(i == index);
             _tabs[i].color = i == index ? new Color(0.11f, 0.29f, 0.48f) : VttUiSkin.Button;
         }
+        if (index == 7) RefreshReferences(true);
         Refresh();
     }
 
@@ -421,6 +1281,148 @@ public class DmPanelUI : MonoBehaviour
             () => DiceUI.Instance?.ConfirmAction("Очистить все отметки?",
                 "Будут удалены отметки всех игроков на карте. Отменить удаление нельзя.",
                 CellMarker.ClearAllMarkersAsHost), new Color(0.28f, 0.11f, 0.14f));
+        Button(parent, "Каталог карт сессии…", 350, 34, 0, -494, () =>
+        {
+            _mapCatalogPanel.SetActive(true);
+            RefreshMapCatalog(true);
+        }, VttUiSkin.Button);
+        BuildMapCatalogOverlay(parent);
+    }
+
+    private void AddSelectedTokensToInitiative()
+    {
+        if (!IsLocalHost) return;
+        var selected = new List<TokenController>();
+        foreach (var token in FindObjectsByType<TokenController>(FindObjectsInactive.Exclude))
+            if (token != null && token.IsSpawned && _selectedInitiativeTokenIds.Contains(token.SceneId)) selected.Add(token);
+        selected.Sort((a, b) => a.NetworkObjectId.CompareTo(b.NetworkObjectId));
+        int added = InitiativeTracker.Instance?.AddTokensAndArmInitiative(selected) ?? 0;
+        _selectedInitiativeTokenIds.Clear();
+        _tokenNotice.text = added == 0 ? "Нет выбранных токенов, которых ещё нет в инициативе." : $"Добавлено в инициативу: {added}. Бросайте d20 по очереди.";
+        RefreshTokens(true);
+    }
+
+    private void BuildMapCatalogOverlay(Transform parent)
+    {
+        _mapCatalogPanel = Box(parent, "MapCatalog", VttUiSkin.Panel, 10);
+        Place(_mapCatalogPanel, new Vector2(0, 1), new Vector2(0, 1), new Vector2(358, 490), new Vector2(0, -6));
+        Label(_mapCatalogPanel.transform, "КАТАЛОГ КАРТ", 15, VttUiSkin.Text, TextAnchor.MiddleLeft,
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(280, 28), new Vector2(12, -4), true);
+        Button(_mapCatalogPanel.transform, "×", 30, 28, 320, -4,
+            () => _mapCatalogPanel.SetActive(false), VttUiSkin.Button);
+        var nameBox = Box(_mapCatalogPanel.transform, "MapAssetName", VttUiSkin.Button, 6, false);
+        Place(nameBox, new Vector2(0, 1), new Vector2(0, 1), new Vector2(334, 32), new Vector2(12, -38));
+        _mapAssetNameInput = nameBox.AddComponent<InputField>();
+        _mapAssetNameInput.textComponent = Label(nameBox.transform, "", 13, VttUiSkin.Text,
+            TextAnchor.MiddleLeft, new Vector2(0, 0.5f), new Vector2(0, 0.5f), new Vector2(316, 28), new Vector2(8, 0));
+        _mapAssetNameInput.placeholder = Label(nameBox.transform, "Название новой карты", 12, VttUiSkin.Muted,
+            TextAnchor.MiddleLeft, new Vector2(0, 0.5f), new Vector2(0, 0.5f), new Vector2(316, 28), new Vector2(8, 0));
+        _mapAssetNameInput.characterLimit = 128;
+        _mapAssetNameInput.lineType = InputField.LineType.SingleLine;
+        _mapAssetNameInput.targetGraphic = nameBox.GetComponent<Image>();
+        Button(_mapCatalogPanel.transform, "Импортировать файлы", 162, 32, 12, -76,
+            ImportMapAsset, new Color(0.10f, 0.30f, 0.48f));
+        Button(_mapCatalogPanel.transform, "Добавить текущую", 162, 32, 184, -76,
+            AddCurrentMapAsset, VttUiSkin.Button);
+        var viewport = Box(_mapCatalogPanel.transform, "MapAssetsViewport", new Color(0, 0, 0, 0.01f), 0, false);
+        Place(viewport, new Vector2(0, 1), new Vector2(0, 1), new Vector2(334, 264), new Vector2(12, -116));
+        viewport.AddComponent<RectMask2D>();
+        var rows = new GameObject("MapAssets", typeof(RectTransform));
+        rows.transform.SetParent(viewport.transform, false);
+        _mapAssetsContent = rows.GetComponent<RectTransform>();
+        _mapAssetsContent.anchorMin = new Vector2(0, 1);
+        _mapAssetsContent.anchorMax = new Vector2(1, 1);
+        _mapAssetsContent.pivot = new Vector2(0.5f, 1);
+        var scroll = viewport.AddComponent<ScrollRect>();
+        scroll.viewport = viewport.GetComponent<RectTransform>();
+        scroll.content = _mapAssetsContent;
+        scroll.horizontal = false;
+        scroll.vertical = true;
+        scroll.scrollSensitivity = 28;
+        Button(_mapCatalogPanel.transform, "Применить к активной сцене", 220, 32, 12, -388,
+            ApplySelectedMapAsset, VttUiSkin.Button);
+        Button(_mapCatalogPanel.transform, "Удалить", 104, 32, 242, -388,
+            DeleteSelectedMapAsset, new Color(0.28f, 0.11f, 0.14f));
+        _mapCatalogNotice = Label(_mapCatalogPanel.transform, "", 12, VttUiSkin.Muted,
+            TextAnchor.UpperLeft, new Vector2(0, 1), new Vector2(0, 1), new Vector2(334, 45), new Vector2(12, -428));
+        _mapCatalogPanel.SetActive(false);
+    }
+
+    public void RefreshMapCatalog(bool force = false)
+    {
+        if (_mapAssetsContent == null) return;
+        var maps = SceneFileStore.GetMapAssets();
+        if (!string.IsNullOrEmpty(_selectedMapAssetId)
+            && !Array.Exists(maps, item => item.id == _selectedMapAssetId)) _selectedMapAssetId = null;
+        var signature = new System.Text.StringBuilder();
+        foreach (var map in maps) signature.Append(map.id).Append(':').Append(map.name).Append(';');
+        string snapshot = signature.ToString();
+        if (!force && snapshot == _mapAssetsSignature) return;
+        _mapAssetsSignature = snapshot;
+        foreach (Transform child in _mapAssetsContent) Destroy(child.gameObject);
+        _mapAssetsContent.sizeDelta = new Vector2(0, Mathf.Max(36, maps.Length * 38));
+        for (int i = 0; i < maps.Length; i++)
+        {
+            var map = maps[i];
+            Button(_mapAssetsContent, map.name, 322, 34, 0, -i * 38,
+                () =>
+                {
+                    _selectedMapAssetId = map.id;
+                    _mapCatalogNotice.text = "Выбрана: " + map.name;
+                }, map.id == _selectedMapAssetId ? new Color(0.11f, 0.29f, 0.48f) : VttUiSkin.Button);
+        }
+        if (maps.Length == 0 && _mapCatalogNotice != null)
+            _mapCatalogNotice.text = "Каталог пуст. Импортируйте файл или добавьте текущую карту.";
+    }
+
+    private void ImportMapAsset()
+    {
+        MapController.Instance?.ImportImageFilesToLibrary();
+    }
+
+    private void AddCurrentMapAsset()
+    {
+        try
+        {
+            SceneFileStore.AddCurrentMapAsset(_mapAssetNameInput.text);
+            _mapCatalogNotice.text = "Текущая карта добавлена. Сохраните сессию, чтобы записать каталог.";
+            _mapAssetNameInput.text = string.Empty;
+            _selectedMapAssetId = null;
+            RefreshMapCatalog(true);
+        }
+        catch (Exception ex) { _mapCatalogNotice.text = ex.Message; }
+    }
+
+    private void ApplySelectedMapAsset()
+    {
+        if (string.IsNullOrEmpty(_selectedMapAssetId))
+        {
+            _mapCatalogNotice.text = "Выберите карту в списке.";
+            return;
+        }
+        try
+        {
+            SceneFileStore.SelectMapAsset(_selectedMapAssetId);
+            _mapCatalogNotice.text = "Карта применена к сцене. Сохраните сессию, чтобы закрепить изменение.";
+        }
+        catch (Exception ex) { _mapCatalogNotice.text = ex.Message; }
+    }
+
+    private void DeleteSelectedMapAsset()
+    {
+        if (string.IsNullOrEmpty(_selectedMapAssetId)) return;
+        string id = _selectedMapAssetId;
+        DiceUI.Instance?.ConfirmAction("Удалить карту из каталога?", "Карту, используемую сценой, удалить нельзя.", () =>
+        {
+            try
+            {
+                SceneFileStore.DeleteMapAsset(id);
+                _selectedMapAssetId = null;
+                _mapCatalogNotice.text = "Карта удалена из сессии.";
+                RefreshMapCatalog(true);
+            }
+            catch (Exception ex) { _mapCatalogNotice.text = ex.Message; }
+        });
     }
 
     private void AdjustScale(float amount)
@@ -571,7 +1573,7 @@ public class DmPanelUI : MonoBehaviour
         if (_page == 4 && SceneEditor.Instance != null)
         {
             var editor = SceneEditor.Instance;
-            _sceneNotice.text = editor.Notice;
+            _sceneNotice.text = SceneFileStore.ActiveSceneLabel + "\n" + editor.Notice;
             _sceneMarkupText.text = editor.ShowMarkup ? "Скрыть разметку" : "Показать разметку";
             _sceneDiameterText.text = $"Диаметр: {editor.ColumnDiameter:0.0} клетки";
         }
@@ -586,6 +1588,7 @@ public class DmPanelUI : MonoBehaviour
             _fogAutosaveText.text = fog.Autosave ? "Автосохранение: включено (2 минуты)" : "Автосохранение: выключено";
             _fogStatus.text = fog.Status + "\nОтмена: " + GameMasterUndo.NextLabel + "\nИгрок открывает ближайшую видимую дверь клавишей E.";
         }
+        if (_page == 6) RefreshStatBlocks();
     }
 
     private GameObject Box(Transform parent, string name, Color color, int radius, bool outline = true)

@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Text;
 using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
@@ -29,6 +30,7 @@ public class TokenController : NetworkDraggable
     private Bounds _labelBounds;
     private GridManager _labelGrid;
     private GUIStyle _labelStyle;
+    private GUIStyle _statsLabelStyle;
     private bool _hasInitialServerState;
     private ulong _initialCreator;
     private bool _initialHero;
@@ -47,7 +49,14 @@ public class TokenController : NetworkDraggable
     public Vector3 CommittedPosition => _netCommitted.Value;
     public ulong ControllerClientId => _netController.Value;
     public bool EveryoneCanMove => _netSharedMove.Value;
-    public string SceneId { get; private set; } = Guid.NewGuid().ToString("N");
+    private string _localSceneId = Guid.NewGuid().ToString("N");
+    private readonly NetworkVariable<FixedString512Bytes> _netSceneId = new(
+        default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    public string SceneId
+    {
+        get => _netSceneId.Value.IsEmpty ? _localSceneId : _netSceneId.Value.ToString();
+        private set => _localSceneId = value;
+    }
     private readonly NetworkVariable<FixedString128Bytes> _netName = new(new FixedString128Bytes(""),
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     public const int MaxVisionFeet = 1000;
@@ -57,12 +66,36 @@ public class TokenController : NetworkDraggable
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     private readonly NetworkVariable<int> _netVisionFeet = new(0,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    private readonly NetworkVariable<int> _netVisibleCurrentHp = new(-1,
+        NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    private readonly NetworkVariable<int> _netVisibleMaxHp = new(-1,
+        NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    private readonly NetworkVariable<int> _netArmorClass = new(10,
+        NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    private readonly NetworkVariable<FixedString4096Bytes> _netVisibleConditions = new(
+        new FixedString4096Bytes(""), NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+    private readonly NetworkVariable<FixedString4096Bytes> _netPublicStatBlock = new(
+        new FixedString4096Bytes(""), NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+    private MasterTokenData _masterData = new() { armorClass = 10, hideHp = true, hideConditions = true };
 
     public bool IsHero => _netHero.Value;
     public string TokenName => _netName.Value.IsEmpty ? (IsHero ? "Герой" : "Токен") : _netName.Value.ToString();
     public string NameBase => string.IsNullOrEmpty(_nameBase) ? TokenName : _nameBase;
     public bool IsHidden => _netHidden.Value;
     public int VisionFeet => _netVisionFeet.Value;
+    private bool ShowMasterStats => IsServer && FogManager.Instance?.ShowingPlayerView != true;
+    public int VisibleCurrentHp => IsServer ? _masterData.currentHp : _netVisibleCurrentHp.Value;
+    public int VisibleMaxHp => IsServer ? _masterData.maxHp : _netVisibleMaxHp.Value;
+    public int DisplayedCurrentHp => ShowMasterStats ? _masterData.currentHp : _netVisibleCurrentHp.Value;
+    public int DisplayedMaxHp => ShowMasterStats ? _masterData.maxHp : _netVisibleMaxHp.Value;
+    public int NetworkVisibleCurrentHp => _netVisibleCurrentHp.Value;
+    public int ArmorClass => IsServer ? _masterData.armorClass : _netArmorClass.Value;
+    public string[] VisibleConditionIds => ShowMasterStats ? (string[])_masterData.conditionIds.Clone()
+        : string.IsNullOrEmpty(_netVisibleConditions.Value.ToString())
+            ? Array.Empty<string>() : _netVisibleConditions.Value.ToString().Split('|');
+    public string PublicStatBlockJson => _netPublicStatBlock.Value.ToString();
     public bool IsVisibleToLocalPlayer => FogManager.Instance != null && FogManager.Instance.ShowingPlayerView
         ? FogManager.Instance.CanSeeToken(NetworkManager.LocalClientId, this, IsHost && FogManager.Instance.Preview) : !IsHidden || IsHost;
     protected override bool CanStartLocalDrag => IsVisibleToLocalPlayer && CanControlClient(NetworkManager.LocalClientId)
@@ -134,6 +167,7 @@ public class TokenController : NetworkDraggable
 
         if (IsServer)
         {
+            _netSceneId.Value = new FixedString512Bytes(_localSceneId);
             bool initialized = _hasInitialServerState;
             if (_hasInitialServerState)
             {
@@ -150,6 +184,7 @@ public class TokenController : NetworkDraggable
             if (!initialized && _netController.Value == ulong.MaxValue && string.IsNullOrEmpty(SavedOwnerNickname))
                 _netController.Value = _netSpawnerClientId.Value;
             _netCommitted.Value = transform.position;
+            PublishMasterData();
             ServerRefreshPlayerColor();
         }
 
@@ -298,6 +333,223 @@ public class TokenController : NetworkDraggable
     public void ServerRestoreAssignment(ulong client)
     {
         if (IsServer) { _netController.Value = client; _netSpawnerClientId.Value = client; }
+    }
+
+    public MasterTokenData CaptureMasterData()
+    {
+        if (!IsServer) return null;
+        return new MasterTokenData
+        {
+            tokenId = SceneId,
+            currentHp = _masterData.currentHp,
+            maxHp = _masterData.maxHp,
+            armorClass = _masterData.armorClass,
+            hideHp = _masterData.hideHp,
+            hideConditions = _masterData.hideConditions,
+            conditionIds = (string[])_masterData.conditionIds.Clone(),
+            statBlockId = _masterData.statBlockId
+        };
+    }
+
+    public void ServerApplyMasterData(MasterTokenData data)
+    {
+        if (!IsServer) return;
+        _masterData = data == null
+            ? new MasterTokenData { tokenId = SceneId, armorClass = 10, hideHp = true, hideConditions = true }
+            : new MasterTokenData
+            {
+                tokenId = SceneId,
+                currentHp = Mathf.Clamp(data.currentHp, 0, 999999),
+                maxHp = Mathf.Clamp(data.maxHp, 0, 999999),
+                armorClass = Mathf.Clamp(data.armorClass, 0, 999),
+                hideHp = data.hideHp,
+                hideConditions = data.hideConditions,
+                conditionIds = data.conditionIds == null ? Array.Empty<string>() : (string[])data.conditionIds.Clone(),
+                statBlockId = data.statBlockId
+            };
+        _masterData.currentHp = Mathf.Min(_masterData.currentHp, _masterData.maxHp);
+        PublishMasterData();
+        PublishPublicStatBlock();
+    }
+
+    public bool ServerSetHealth(int current, int maximum, bool recordUndo = true)
+    {
+        if (!IsServer || current < 0 || current > 999999 || maximum < 0 || maximum > 999999
+            || current > maximum) return false;
+        if (_masterData.currentHp == current && _masterData.maxHp == maximum) return true;
+        if (recordUndo)
+        {
+            int previousCurrent = _masterData.currentHp;
+            int previousMaximum = _masterData.maxHp;
+            string tokenId = SceneId;
+            GameMasterUndo.Record("ХП токена", () => FindSceneToken(tokenId)?.ServerSetHealth(previousCurrent, previousMaximum, false));
+        }
+        _masterData.currentHp = current;
+        _masterData.maxHp = maximum;
+        PublishMasterData();
+        return true;
+    }
+
+    public bool ServerSetArmorClass(int armorClass, bool recordUndo = true)
+    {
+        if (!IsServer || armorClass < 0 || armorClass > 999) return false;
+        if (_masterData.armorClass == armorClass) return true;
+        if (recordUndo)
+        {
+            int previous = _masterData.armorClass;
+            string tokenId = SceneId;
+            GameMasterUndo.Record("КД токена", () => FindSceneToken(tokenId)?.ServerSetArmorClass(previous, false));
+        }
+        _masterData.armorClass = armorClass;
+        PublishMasterData();
+        return true;
+    }
+
+    public bool ServerSetStatBlock(string statBlockId)
+    {
+        if (!IsServer || statBlockId == null || statBlockId.Length > 64
+            || statBlockId.Contains("|") || statBlockId.Contains(",")) return false;
+        _masterData.statBlockId = string.IsNullOrWhiteSpace(statBlockId) ? null : statBlockId;
+        PublishPublicStatBlock();
+        return true;
+    }
+
+    public void RefreshPublicStatBlock()
+    {
+        if (IsServer) PublishPublicStatBlock();
+    }
+
+    private void PublishPublicStatBlock()
+    {
+        if (!IsServer) return;
+        if (_masterData == null || string.IsNullOrEmpty(_masterData.statBlockId))
+        {
+            _netPublicStatBlock.Value = new FixedString4096Bytes("");
+            return;
+        }
+        var block = Array.Find(SceneFileStore.GetStatBlocks(), item => item != null && item.id == _masterData.statBlockId);
+        if (block == null || block.publicFieldsMask == 0)
+        {
+            _netPublicStatBlock.Value = new FixedString4096Bytes("");
+            return;
+        }
+
+        int mask = block.publicFieldsMask;
+        var view = new PublicStatBlockView { visibleFields = mask };
+        if ((mask & StatBlockPublicFields.Name) != 0) view.name = block.name;
+        if ((mask & StatBlockPublicFields.Size) != 0) view.size = block.size;
+        if ((mask & StatBlockPublicFields.CreatureType) != 0) view.creatureType = block.creatureType;
+        if ((mask & StatBlockPublicFields.Alignment) != 0) view.alignment = block.alignment;
+        if ((mask & StatBlockPublicFields.ArmorClass) != 0) view.armorClass = block.armorClass;
+        if ((mask & StatBlockPublicFields.HitPoints) != 0) view.hitPoints = block.hitPoints;
+        if ((mask & StatBlockPublicFields.Speed) != 0) view.speed = block.speed;
+        if ((mask & StatBlockPublicFields.Abilities) != 0)
+        {
+            view.strength = block.strength; view.dexterity = block.dexterity; view.constitution = block.constitution;
+            view.intelligence = block.intelligence; view.wisdom = block.wisdom; view.charisma = block.charisma;
+        }
+        if ((mask & StatBlockPublicFields.ChallengeRating) != 0) view.challengeRating = block.challengeRating;
+        if ((mask & StatBlockPublicFields.Description) != 0) view.description = block.description ?? string.Empty;
+        if ((mask & StatBlockPublicFields.Actions) != 0)
+        {
+            int length = Mathf.Min(block.actions?.Length ?? 0, 24);
+            view.actions = new StatBlockPublicAction[length];
+            for (int i = 0; i < length; i++)
+            {
+                var action = block.actions[i];
+                view.actions[i] = new StatBlockPublicAction
+                {
+                    name = ClampPublicText(action?.name, 96),
+                    description = ClampPublicText(action?.description, 320)
+                };
+            }
+            view.truncated = block.actions != null && block.actions.Length > length;
+        }
+
+        string json = JsonUtility.ToJson(view);
+        const int maxBytes = 3000;
+        while (Encoding.UTF8.GetByteCount(json) > maxBytes)
+        {
+            if (view.actions != null && view.actions.Length > 0)
+            {
+                Array.Resize(ref view.actions, view.actions.Length - 1);
+                view.truncated = true;
+            }
+            else if (!string.IsNullOrEmpty(view.description))
+            {
+                int newLength = Mathf.Max(0, view.description.Length - 128);
+                view.description = view.description.Substring(0, newLength);
+                view.truncated = true;
+            }
+            else
+            {
+                _netPublicStatBlock.Value = new FixedString4096Bytes("");
+                return;
+            }
+            json = JsonUtility.ToJson(view);
+        }
+        _netPublicStatBlock.Value = new FixedString4096Bytes(json);
+    }
+
+    private static string ClampPublicText(string value, int maxLength)
+    {
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+        return value.Length <= maxLength ? value : value.Substring(0, maxLength);
+    }
+
+    public void ServerSetMasterVisibility(bool hideHp, bool hideConditions)
+    {
+        if (!IsServer) return;
+        if (_masterData.hideHp == hideHp && _masterData.hideConditions == hideConditions) return;
+        bool previousHideHp = _masterData.hideHp;
+        bool previousHideConditions = _masterData.hideConditions;
+        string tokenId = SceneId;
+        GameMasterUndo.Record("видимость параметров токена", () =>
+            FindSceneToken(tokenId)?.ServerSetMasterVisibility(previousHideHp, previousHideConditions));
+        _masterData.hideHp = hideHp;
+        _masterData.hideConditions = hideConditions;
+        PublishMasterData();
+    }
+
+    public bool ServerToggleCondition(string conditionId)
+    {
+        if (!IsServer || string.IsNullOrWhiteSpace(conditionId) || conditionId.Length > 64
+            || conditionId.Contains("|")) return false;
+        var previous = (string[])(_masterData.conditionIds ?? Array.Empty<string>()).Clone();
+        var conditions = new System.Collections.Generic.List<string>(previous);
+        int existing = conditions.IndexOf(conditionId);
+        if (existing >= 0) conditions.RemoveAt(existing);
+        else
+        {
+            if (conditions.Count >= 64) return false;
+            conditions.Add(conditionId);
+        }
+        string encoded = string.Join("|", conditions);
+        if (Encoding.UTF8.GetByteCount(encoded) > FixedString4096Bytes.UTF8MaxLengthInBytes) return false;
+        string tokenId = SceneId;
+        GameMasterUndo.Record("состояние токена", () => FindSceneToken(tokenId)?.ServerSetConditions(previous));
+        _masterData.conditionIds = conditions.ToArray();
+        PublishMasterData();
+        return true;
+    }
+
+    private void ServerSetConditions(string[] conditionIds)
+    {
+        if (!IsServer) return;
+        _masterData.conditionIds = conditionIds == null ? Array.Empty<string>() : (string[])conditionIds.Clone();
+        PublishMasterData();
+    }
+
+    private void PublishMasterData()
+    {
+        if (!IsServer || _masterData == null) return;
+        _netVisibleCurrentHp.Value = _masterData.hideHp ? -1 : _masterData.currentHp;
+        _netVisibleMaxHp.Value = _masterData.hideHp ? -1 : _masterData.maxHp;
+        _netArmorClass.Value = _masterData.armorClass;
+        string conditions = _masterData.hideConditions || _masterData.conditionIds == null
+            ? string.Empty : string.Join("|", _masterData.conditionIds);
+        _netVisibleConditions.Value = new FixedString4096Bytes(conditions);
+        InitiativeTracker.Instance?.RefreshToken(SceneId);
     }
 
     public void RequestSetHidden(bool hidden)
@@ -514,14 +766,16 @@ public class TokenController : NetworkDraggable
     {
         var grid = FindAnyObjectByType<GridManager>(); if (grid == null) return;
         var data = SceneFileStore.CaptureToken(this, grid);
+        var masterData = CaptureMasterData();
         GameMasterUndo.Record("удаление токена", () => {
-            var token = TokenManager.Instance?.RestoreSceneToken(data, grid);
+            var token = TokenManager.Instance?.RestoreSceneToken(data, grid, masterData);
             if (token != null && !string.IsNullOrEmpty(data.portrait)) token.LoadImage(Convert.FromBase64String(data.portrait));
         });
     }
 
     public override void OnNetworkDespawn()
     {
+        if (IsServer) InitiativeTracker.Instance?.RemoveToken(SceneId);
         _netColor.OnValueChanged -= OnColorChanged;
         _netHidden.OnValueChanged -= OnHiddenChanged;
         _netVisionFeet.OnValueChanged -= OnVisionChanged;
@@ -585,6 +839,18 @@ public class TokenController : NetworkDraggable
     private string _visionError;
     private bool _visionEditing;
     private static int _menuClosedFrame = -1;
+    private string _masterCurrentHpInput = "0", _masterMaxHpInput = "0", _masterArmorClassInput = "10";
+    private string _masterStatBlockInput = "";
+    private bool _statBlockPopup;
+    private Vector2 _statBlockScroll;
+    private Rect _statBlockPopupRect;
+    private bool _showPublicStatBlock;
+    private Vector2 _publicStatBlockScroll;
+    private Rect _publicStatBlockRect;
+    private bool _conditionsPopup;
+    private Vector2 _conditionsScroll;
+    private Rect _conditionsRect;
+    private bool HasPublicStatBlock => !IsHost && !string.IsNullOrEmpty(PublicStatBlockJson);
 
     public static bool IsMenuTextFocused => _activeMenuToken != null &&
         _activeMenuToken._showMenu && _activeMenuToken._visionEditing;
@@ -596,7 +862,10 @@ public class TokenController : NetworkDraggable
             if (_activeMenuToken == null || !_activeMenuToken._showMenu || Mouse.current == null) return false;
             Vector2 pointer = Mouse.current.position.ReadValue();
             pointer.y = Screen.height - pointer.y;
-            return _activeMenuToken._menuRect.Contains(pointer);
+            return _activeMenuToken._menuRect.Contains(pointer)
+                || _activeMenuToken._conditionsPopup && _activeMenuToken._conditionsRect.Contains(pointer)
+                || _activeMenuToken._statBlockPopup && _activeMenuToken._statBlockPopupRect.Contains(pointer)
+                || _activeMenuToken._showPublicStatBlock && _activeMenuToken._publicStatBlockRect.Contains(pointer);
         }
     }
 
@@ -605,6 +874,9 @@ public class TokenController : NetworkDraggable
         if (_showMenu) _menuClosedFrame = Time.frameCount;
         _showMenu = false;
         _visionEditing = false;
+        _conditionsPopup = false;
+        _statBlockPopup = false;
+        _showPublicStatBlock = false;
         if (_activeMenuToken == this) _activeMenuToken = null;
     }
 
@@ -618,7 +890,7 @@ public class TokenController : NetworkDraggable
     {
         if (SceneEditor.IsEditing || FogManager.IsManualEditing) return;
         if (!IsSpawned || !IsVisibleToLocalPlayer) return;
-        if (!IsSpawner && !IsHost) return;
+        if (!IsSpawner && !IsHost && !HasPublicStatBlock) return;
         if (MeasurementTool.Instance != null && MeasurementTool.Instance.IsLocalActive) return;
         if (EffectPaintTool.Instance != null && EffectPaintTool.Instance.IsActive) return;
 
@@ -637,8 +909,14 @@ public class TokenController : NetworkDraggable
             _visionInput = VisionFeet.ToString();
             _visionError = null;
             _visionEditing = false;
+            _masterCurrentHpInput = _masterData.currentHp.ToString();
+            _masterMaxHpInput = _masterData.maxHp.ToString();
+            _masterArmorClassInput = _masterData.armorClass.ToString();
+            _masterStatBlockInput = _masterData.statBlockId ?? "";
+            _conditionsPopup = false;
+            _statBlockPopup = false;
             Vector2 mousePos = mouse.position.ReadValue();
-            float height = IsHost ? 320 : 196;
+            float height = IsHost ? 610 : (HasPublicStatBlock ? 230 : 196);
             _menuRect = new Rect(
                 Mathf.Clamp(mousePos.x, 4, Mathf.Max(4, Screen.width - 264)),
                 Mathf.Clamp(Screen.height - mousePos.y, 4, Mathf.Max(4, Screen.height - height - 4)),
@@ -724,7 +1002,8 @@ public class TokenController : NetworkDraggable
         bool canLoad = IsSpawner || IsHost;
         bool canCopy = IsSpawner || IsHost;
         bool canDelete = IsSpawner || IsHost;
-        if (!canLoad && !canCopy && !canDelete)
+        bool hasPublicStatBlock = HasPublicStatBlock;
+        if (!canLoad && !canCopy && !canDelete && !hasPublicStatBlock)
         {
             CloseMenu();
             return;
@@ -769,6 +1048,15 @@ public class TokenController : NetworkDraggable
         if (IsHost)
         {
             if (GUI.Button(new Rect(_menuRect.x + 10, y, 240, 30),
+                InitiativeTracker.Instance != null && InitiativeTracker.Instance.ContainsToken(SceneId)
+                    ? "Уже в инициативе" : "Добавить в инициативу", VttUiSkin.ImGuiButton))
+            {
+                InitiativeTracker.Instance?.AddToken(this);
+                CloseMenu();
+                return;
+            }
+            y += 36;
+            if (GUI.Button(new Rect(_menuRect.x + 10, y, 240, 30),
                 IsHidden ? "Показать игрокам" : "Скрыть от игроков", VttUiSkin.ImGuiButton))
                 RequestSetHidden(!IsHidden);
             y += 36;
@@ -792,12 +1080,47 @@ public class TokenController : NetworkDraggable
             GUI.Label(new Rect(_menuRect.x + 12, y, 238, 22),
                 _visionError ?? $"0 — без зрения · до {MaxVisionFeet} футов", titleStyle);
             y += 26;
+            GUI.Label(new Rect(_menuRect.x + 12, y, 238, 20), "HP · максимум · КД", titleStyle);
+            y += 20;
+            _masterCurrentHpInput = GUI.TextField(new Rect(_menuRect.x + 10, y, 66, 28), _masterCurrentHpInput);
+            _masterMaxHpInput = GUI.TextField(new Rect(_menuRect.x + 82, y, 66, 28), _masterMaxHpInput);
+            _masterArmorClassInput = GUI.TextField(new Rect(_menuRect.x + 154, y, 42, 28), _masterArmorClassInput);
+            if (GUI.Button(new Rect(_menuRect.x + 200, y, 50, 28), "OK", VttUiSkin.ImGuiButton))
+                ApplyMasterInputs();
+            y += 32;
+            bool hideHp = GUI.Toggle(new Rect(_menuRect.x + 10, y, 240, 22), _masterData.hideHp,
+                "Скрыть HP от игроков");
+            if (hideHp != _masterData.hideHp) ServerSetMasterVisibility(hideHp, _masterData.hideConditions);
+            y += 22;
+            bool hideConditions = GUI.Toggle(new Rect(_menuRect.x + 10, y, 240, 22), _masterData.hideConditions,
+                "Скрыть состояния от игроков");
+            if (hideConditions != _masterData.hideConditions) ServerSetMasterVisibility(_masterData.hideHp, hideConditions);
+            y += 24;
+            if (GUI.Button(new Rect(_menuRect.x + 10, y, 240, 28), "Состояния…", VttUiSkin.ImGuiButton))
+                _conditionsPopup = !_conditionsPopup;
+            y += 32;
+            var statBlock = Array.Find(SceneFileStore.GetStatBlocks(), item => item.id == _masterData.statBlockId);
+            GUI.Label(new Rect(_menuRect.x + 12, y, 238, 20),
+                statBlock == null ? "Статблок не назначен" : "Статблок: " + statBlock.name, titleStyle);
+            y += 20;
+            GUI.SetNextControlName("TokenStatBlockId");
+            _masterStatBlockInput = GUI.TextField(new Rect(_menuRect.x + 10, y, 180, 28), _masterStatBlockInput, 64);
+            if (GUI.Button(new Rect(_menuRect.x + 196, y, 54, 28), "Список", VttUiSkin.ImGuiButton))
+                _statBlockPopup = !_statBlockPopup;
+            if (Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Return
+                && GUI.GetNameOfFocusedControl() == "TokenStatBlockId")
+                ApplyStatBlockInput();
+        }
+        else if (hasPublicStatBlock)
+        {
+            if (GUI.Button(new Rect(_menuRect.x + 10, y, 240, 30),
+                _showPublicStatBlock ? "Скрыть статблок" : "Открыть статблок", VttUiSkin.ImGuiButton))
+                _showPublicStatBlock = !_showPublicStatBlock;
+            y += 36;
         }
         else
-        {
             GUI.Label(new Rect(_menuRect.x + 12, y, 238, 22), $"Зрение: {VisionFeet} футов · задаёт GM", titleStyle);
-            y += 26;
-        }
+        y += 26;
 
         if (canDelete && GUI.Button(new Rect(_menuRect.x + 10, y, 240, 30),
             "Удалить токен", VttUiSkin.ImGuiDangerButton))
@@ -808,8 +1131,179 @@ public class TokenController : NetworkDraggable
                 RequestDespawn);
         }
 
-        if (Event.current.type == EventType.MouseDown && !_menuRect.Contains(Event.current.mousePosition))
+        if (_conditionsPopup) DrawConditionPopup();
+        if (_statBlockPopup) DrawStatBlockPopup();
+        if (_showPublicStatBlock && hasPublicStatBlock) DrawPublicStatBlock();
+        else if (_showPublicStatBlock) _showPublicStatBlock = false;
+
+        if (Event.current.type == EventType.MouseDown && !_menuRect.Contains(Event.current.mousePosition)
+            && (!_conditionsPopup || !_conditionsRect.Contains(Event.current.mousePosition))
+            && (!_statBlockPopup || !_statBlockPopupRect.Contains(Event.current.mousePosition))
+            && (!_showPublicStatBlock || !_publicStatBlockRect.Contains(Event.current.mousePosition)))
             CloseMenu();
+    }
+
+    private void DrawPublicStatBlock()
+    {
+        var data = JsonUtility.FromJson<PublicStatBlockView>(PublicStatBlockJson);
+        if (data == null) { _showPublicStatBlock = false; return; }
+        const float width = 300;
+        float height = Mathf.Min(440, Screen.height - 16);
+        float x = _menuRect.xMax + 8;
+        if (x + width > Screen.width) x = Mathf.Max(4, _menuRect.x - width - 8);
+        float y = Mathf.Clamp(_menuRect.y, 4, Mathf.Max(4, Screen.height - height - 4));
+        _publicStatBlockRect = new Rect(x, y, width, height);
+        GUI.Box(_publicStatBlockRect, "Статблок", VttUiSkin.ImGuiPanel);
+        var viewport = new Rect(x + 8, y + 30, width - 16, height - 38);
+        const float line = 24;
+        float contentHeight = 44;
+        if ((data.visibleFields & StatBlockPublicFields.Description) != 0) contentHeight += 120;
+        if ((data.visibleFields & StatBlockPublicFields.Actions) != 0)
+            foreach (var action in data.actions ?? Array.Empty<StatBlockPublicAction>())
+                contentHeight += 48 + Mathf.Min(4, (action?.description?.Length ?? 0) / 48) * 16;
+        contentHeight += line * 7;
+        var content = new Rect(0, 0, viewport.width - 16, contentHeight);
+        _publicStatBlockScroll = GUI.BeginScrollView(viewport, _publicStatBlockScroll, content);
+        float cy = 0;
+        void Row(string label) { GUI.Label(new Rect(4, cy, content.width - 8, line), label); cy += line; }
+        if ((data.visibleFields & StatBlockPublicFields.Name) != 0) Row(data.name);
+        if ((data.visibleFields & StatBlockPublicFields.Size) != 0) Row("Размер: " + data.size);
+        if ((data.visibleFields & StatBlockPublicFields.CreatureType) != 0) Row("Тип: " + data.creatureType);
+        if ((data.visibleFields & StatBlockPublicFields.Alignment) != 0) Row("Мировоззрение: " + data.alignment);
+        if ((data.visibleFields & StatBlockPublicFields.ArmorClass) != 0) Row("КД: " + data.armorClass);
+        if ((data.visibleFields & StatBlockPublicFields.HitPoints) != 0) Row("ХП: " + data.hitPoints);
+        if ((data.visibleFields & StatBlockPublicFields.Speed) != 0) Row("Скорость: " + data.speed);
+        if ((data.visibleFields & StatBlockPublicFields.Abilities) != 0)
+            Row($"СИЛ {data.strength}  ЛОВ {data.dexterity}  ТЕЛ {data.constitution}  ИНТ {data.intelligence}  МДР {data.wisdom}  ХАР {data.charisma}");
+        if ((data.visibleFields & StatBlockPublicFields.ChallengeRating) != 0) Row("Опасность: " + data.challengeRating);
+        if ((data.visibleFields & StatBlockPublicFields.Description) != 0 && !string.IsNullOrEmpty(data.description))
+        {
+            float descHeight = Mathf.Min(120, 28 + data.description.Length / 48f * 16);
+            GUI.Label(new Rect(4, cy, content.width - 8, descHeight), data.description, GUI.skin.textArea);
+            cy += descHeight + 4;
+        }
+        if ((data.visibleFields & StatBlockPublicFields.Actions) != 0)
+        {
+            foreach (var action in data.actions ?? Array.Empty<StatBlockPublicAction>())
+            {
+                Row(action?.name ?? "Действие");
+                string description = action?.description ?? string.Empty;
+                float textHeight = Mathf.Min(72, 20 + description.Length / 48f * 16);
+                GUI.Label(new Rect(8, cy, content.width - 12, textHeight), description, GUI.skin.label);
+                cy += textHeight;
+            }
+        }
+        if (data.truncated) Row("… текст статблока сокращён");
+        GUI.EndScrollView();
+    }
+
+    private void ApplyMasterInputs()
+    {
+        if (!int.TryParse(_masterCurrentHpInput, out int current)
+            || !int.TryParse(_masterMaxHpInput, out int maximum)
+            || !int.TryParse(_masterArmorClassInput, out int armorClass)
+            || current < 0 || maximum < 0 || current > maximum
+            || current > 999999 || maximum > 999999 || armorClass < 0 || armorClass > 999)
+        {
+            DiceUI.Instance?.ShowToolNotice("Проверьте HP, максимум HP и КД.");
+            return;
+        }
+        if (_masterData.currentHp != current || _masterData.maxHp != maximum || _masterData.armorClass != armorClass)
+        {
+            int previousCurrent = _masterData.currentHp;
+            int previousMaximum = _masterData.maxHp;
+            int previousArmorClass = _masterData.armorClass;
+            string tokenId = SceneId;
+            GameMasterUndo.Record("ХП и КД токена", () =>
+            {
+                var token = FindSceneToken(tokenId);
+                if (token == null) return;
+                token.ServerSetHealth(previousCurrent, previousMaximum, false);
+                token.ServerSetArmorClass(previousArmorClass, false);
+            });
+            ServerSetHealth(current, maximum, false);
+            ServerSetArmorClass(armorClass, false);
+        }
+        GUI.FocusControl(null);
+    }
+
+    private void ApplyStatBlockInput()
+    {
+        string id = _masterStatBlockInput.Trim();
+        if (id.Length > 64 || id.Contains("|") || id.Contains(","))
+        {
+            DiceUI.Instance?.ShowToolNotice("Некорректный ID статблока.");
+            return;
+        }
+        if (!string.IsNullOrEmpty(id) && !SceneFileStore.HasStatBlock(id))
+        {
+            DiceUI.Instance?.ShowToolNotice("Такого статблока нет в каталоге кампании.");
+            return;
+        }
+        if (_masterData.statBlockId == id) return;
+        string previous = _masterData.statBlockId;
+        string tokenId = SceneId;
+        GameMasterUndo.Record("статблок токена", () => FindSceneToken(tokenId)?.ServerSetStatBlock(previous));
+        ServerSetStatBlock(id);
+        GUI.FocusControl(null);
+    }
+
+    private void DrawStatBlockPopup()
+    {
+        const float width = 280;
+        float height = Mathf.Min(300, Screen.height - 16);
+        float x = _menuRect.xMax + 8;
+        if (x + width > Screen.width) x = Mathf.Max(4, _menuRect.x - width - 8);
+        float y = Mathf.Clamp(_menuRect.y + 330, 4, Mathf.Max(4, Screen.height - height - 4));
+        _statBlockPopupRect = new Rect(x, y, width, height);
+        GUI.Box(_statBlockPopupRect, "Статблоки кампании", VttUiSkin.ImGuiPanel);
+        var blocks = SceneFileStore.GetStatBlocks();
+        float rowHeight = 30;
+        float contentHeight = Mathf.Max(height - 44, (blocks.Length + 1) * rowHeight);
+        var viewport = new Rect(_statBlockPopupRect.x + 8, _statBlockPopupRect.y + 30,
+            width - 16, height - 38);
+        var content = new Rect(0, 0, viewport.width - 16, contentHeight);
+        _statBlockScroll = GUI.BeginScrollView(viewport, _statBlockScroll, content);
+        if (GUI.Button(new Rect(0, 0, content.width, rowHeight), "Снять статблок", VttUiSkin.ImGuiButton))
+        {
+            _masterStatBlockInput = string.Empty;
+            ApplyStatBlockInput();
+            _statBlockPopup = false;
+        }
+        for (int i = 0; i < blocks.Length; i++)
+        {
+            var block = blocks[i];
+            if (!GUI.Button(new Rect(0, (i + 1) * rowHeight, content.width, rowHeight),
+                block.name + $" · КД {block.armorClass}, ХП {block.hitPoints}", VttUiSkin.ImGuiButton)) continue;
+            _masterStatBlockInput = block.id;
+            ApplyStatBlockInput();
+            _statBlockPopup = false;
+        }
+        GUI.EndScrollView();
+    }
+
+    private void DrawConditionPopup()
+    {
+        int width = 260;
+        float height = Mathf.Min(350, Screen.height - 16);
+        float x = _menuRect.xMax + 8;
+        if (x + width > Screen.width) x = Mathf.Max(4, _menuRect.x - width - 8);
+        float y = Mathf.Clamp(_menuRect.y + 180, 4, Mathf.Max(4, Screen.height - height - 4));
+        _conditionsRect = new Rect(x, y, width, height);
+        GUI.Box(_conditionsRect, "Состояния", VttUiSkin.ImGuiPanel);
+        var viewport = new Rect(_conditionsRect.x + 8, _conditionsRect.y + 28,
+            _conditionsRect.width - 16, _conditionsRect.height - 36);
+        var content = new Rect(0, 0, viewport.width - 18, TokenConditionCatalog.Ids.Length * 28);
+        _conditionsScroll = GUI.BeginScrollView(viewport, _conditionsScroll, content);
+        for (int i = 0; i < TokenConditionCatalog.Ids.Length; i++)
+        {
+            string id = TokenConditionCatalog.Ids[i];
+            bool selected = Array.IndexOf(_masterData.conditionIds, id) >= 0;
+            if (GUI.Button(new Rect(0, i * 28, content.width, 26),
+                (selected ? "✓  " : "　 ") + TokenConditionCatalog.DisplayName(id), VttUiSkin.ImGuiButton))
+                ServerToggleCondition(id);
+        }
+        GUI.EndScrollView();
     }
 
     private void StepVision(int step)
@@ -873,8 +1367,35 @@ public class TokenController : NetworkDraggable
             Quaternion.identity, new Vector3(scale, scale, 1));
         Color previousColor = GUI.color;
         if (IsHidden) GUI.color = new Color(previousColor.r, previousColor.g, previousColor.b, previousColor.a * 0.35f);
-        GUI.Label(new Rect(0, 0, TokenLabelLayout.DesignWidth, TokenLabelLayout.DesignHeight),
-            IsHero ? TokenName + " · герой" : TokenName, _labelStyle);
+        GUI.Label(new Rect(0, 0, TokenLabelLayout.DesignWidth, TokenLabelLayout.DesignHeight), "", _labelStyle);
+        _statsLabelStyle ??= new GUIStyle(GUI.skin.label)
+        {
+            fontSize = 10,
+            alignment = TextAnchor.MiddleCenter,
+            clipping = TextClipping.Clip,
+            padding = new RectOffset(2, 2, 0, 0)
+        };
+        _statsLabelStyle.normal.textColor = VttUiSkin.Text;
+        GUI.Label(new Rect(3, 1, 154, 19), IsHero ? TokenName + " · герой" : TokenName, _statsLabelStyle);
+        int currentHp = DisplayedCurrentHp;
+        int maxHp = DisplayedMaxHp;
+        string conditions = string.Join(" · ", Array.ConvertAll(VisibleConditionIds,
+            TokenConditionCatalog.DisplayName));
+        if (currentHp >= 0 && maxHp > 0)
+        {
+            Rect bar = new Rect(5, 21, 150, 12);
+            GUI.color = new Color(0.06f, 0.07f, 0.09f, 0.94f);
+            GUI.DrawTexture(bar, Texture2D.whiteTexture);
+            float ratio = Mathf.Clamp01((float)currentHp / maxHp);
+            GUI.color = Color.Lerp(new Color(0.8f, 0.18f, 0.18f), new Color(0.2f, 0.72f, 0.34f), ratio);
+            if (ratio > 0) GUI.DrawTexture(new Rect(bar.x, bar.y, bar.width * ratio, bar.height), Texture2D.whiteTexture);
+            GUI.color = previousColor;
+            GUI.Label(new Rect(4, 20, 152, 14), $"{currentHp}/{maxHp} HP · КД {ArmorClass}", _statsLabelStyle);
+        }
+        else
+            GUI.Label(new Rect(3, 20, 154, 15), $"КД {ArmorClass}", _statsLabelStyle);
+        if (!string.IsNullOrEmpty(conditions))
+            GUI.Label(new Rect(3, 34, 154, 16), conditions, _statsLabelStyle);
         GUI.color = previousColor;
         GUI.matrix = previousMatrix;
     }

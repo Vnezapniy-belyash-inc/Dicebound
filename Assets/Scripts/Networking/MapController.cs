@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using Unity.Netcode;
 using UnityEngine;
@@ -147,6 +148,143 @@ public class MapController : NetworkBehaviour
         });
     }
 
+    public void LoadImageToLibrary(string name)
+    {
+        if (!IsHost) return;
+        try { name = SceneFileStore.ValidateNewMapAssetName(name); }
+        catch (Exception ex) { DiceUI.Instance?.ShowToolNotice("Каталог карт: " + ex.Message); return; }
+        PickImageFile(path =>
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            byte[] data = File.ReadAllBytes(path);
+            if (data.Length == 0 || data.Length > 96 * 1024 * 1024)
+            {
+                DiceUI.Instance?.ShowToolNotice("Исходная карта превышает 96 МБ.");
+                return;
+            }
+            if (!ApplyImageInternal(data)) return;
+            MapSync.Instance?.SendMapToAll(_currentImageBytes);
+            SceneFileStore.ResetCurrentMapAssetLink();
+            try
+            {
+                SceneFileStore.AddCurrentMapAsset(name);
+                DmPanelUI.Instance?.RefreshMapCatalog();
+                DiceUI.Instance?.ShowToolNotice("Карта добавлена в каталог: " + name);
+            }
+            catch (Exception ex) { DiceUI.Instance?.ShowToolNotice("Каталог карт: " + ex.Message); }
+        });
+    }
+
+    public void ImportImageFilesToLibrary()
+    {
+        if (!IsHost) return;
+        PickImageFiles(paths =>
+        {
+            if (paths == null || paths.Length == 0) return;
+            if (paths.Length > 32)
+            {
+                DiceUI.Instance?.ShowToolNotice("За один импорт можно выбрать не более 32 изображений.");
+                return;
+            }
+            var names = new List<string>();
+            var prepared = new List<byte[]>();
+            int skipped = 0;
+            long totalPreparedBytes = 0;
+            foreach (string path in paths)
+            {
+                try
+                {
+                    var info = new FileInfo(path);
+                    if (!info.Exists || info.Length <= 0 || info.Length > 96L * 1024 * 1024)
+                        throw new FormatException("Исходный файл пуст или превышает 96 МБ.");
+                    byte[] bytes = PrepareImageForStorage(File.ReadAllBytes(path));
+                    if (bytes == null) throw new FormatException("Файл не удалось обработать как изображение карты.");
+                    totalPreparedBytes += bytes.Length;
+                    if (totalPreparedBytes > 96L * 1024 * 1024)
+                    {
+                        DiceUI.Instance?.ShowToolNotice("Пакет превышает 96 МБ. Импортируйте карты несколькими наборами.");
+                        return;
+                    }
+                    names.Add(Path.GetFileName(path));
+                    prepared.Add(bytes);
+                }
+                catch (Exception ex)
+                {
+                    skipped++;
+                    Debug.LogWarning("[Map] Skipped catalog image " + path + ": " + ex.Message);
+                }
+            }
+            if (prepared.Count == 0)
+            {
+                DiceUI.Instance?.ShowToolNotice("Не удалось импортировать ни одного изображения.");
+                return;
+            }
+            try
+            {
+                int count = SceneFileStore.ImportMapAssets(names.ToArray(), prepared.ToArray());
+                DmPanelUI.Instance?.RefreshMapCatalog(true);
+                string message = "В каталог добавлено карт: " + count;
+                if (skipped > 0) message += "; пропущено файлов: " + skipped;
+                DiceUI.Instance?.ShowToolNotice(message + ". Сохраните сессию, чтобы записать изменения.");
+            }
+            catch (Exception ex) { DiceUI.Instance?.ShowToolNotice("Каталог карт: " + ex.Message); }
+        });
+    }
+
+    private static byte[] PrepareImageForStorage(byte[] source)
+    {
+        if (source == null || source.Length == 0 || source.Length > 96 * 1024 * 1024) return null;
+        var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+        try
+        {
+            if (!texture.LoadImage(source)) return null;
+            if (texture.width > 16384 || texture.height > 16384) return null;
+            if (Mathf.Max(texture.width, texture.height) > MapTextureUtility.MaxDimension)
+            {
+                var resized = MapTextureUtility.Resize(texture);
+                Destroy(texture);
+                texture = resized;
+            }
+            byte[] stored = texture.EncodeToPNG();
+            while (stored.Length > MapSync.MaxMapBytes)
+            {
+                byte[] jpeg = MapTextureUtility.TryJpegWithinBudget(texture, MapSync.MaxMapBytes);
+                if (jpeg != null) return jpeg;
+                int next = Mathf.Max(texture.width, texture.height) / 2;
+                if (next < 64) return null;
+                var resized = MapTextureUtility.ResizeTo(texture, next);
+                Destroy(texture);
+                texture = resized;
+                stored = texture.EncodeToPNG();
+            }
+            return stored;
+        }
+        finally { if (texture != null) Destroy(texture); }
+    }
+
+    private static void PickImageFiles(Action<string[]> onPicked)
+    {
+#if UNITY_EDITOR
+        string folder = EditorUtility.OpenFolderPanel("Выберите папку с картами", "", "");
+        if (string.IsNullOrEmpty(folder)) { onPicked(null); return; }
+        string[] files = Directory.GetFiles(folder);
+        var images = new List<string>();
+        foreach (string path in files)
+        {
+            string extension = Path.GetExtension(path).ToLowerInvariant();
+            if (extension == ".png" || extension == ".jpg" || extension == ".jpeg"
+                || extension == ".bmp" || extension == ".tga") images.Add(path);
+        }
+        images.Sort(StringComparer.OrdinalIgnoreCase);
+        onPicked(images.ToArray());
+#else
+        SimpleFileBrowser.FileBrowser.ShowLoadDialog(
+            paths => onPicked(paths), () => onPicked(null),
+            SimpleFileBrowser.FileBrowser.PickMode.Files, true, null, null,
+            "Выберите несколько карт", "Импортировать");
+#endif
+    }
+
     private static void PickImageFile(Action<string> onPicked)
     {
 #if UNITY_EDITOR
@@ -173,6 +311,7 @@ public class MapController : NetworkBehaviour
         }
         if (!ApplyImageInternal(pngData)) return;
         MapSync.Instance?.SendMapToAll(_currentImageBytes);
+        SceneFileStore.ResetCurrentMapAssetLink();
     }
 
     /// <summary>Клиент получает картинку от хоста.</summary>
@@ -424,11 +563,11 @@ public class MapController : NetworkBehaviour
     }
 
     public bool HasImage => _currentTexture != null;
-    public void ApplyFog(Texture2D mask, bool enabled, GridManager grid)
+    public bool ApplyFog(Texture2D mask, bool enabled, GridManager grid)
     {
-        if (_mapMaterial == null) return;
+        if (_mapMaterial == null || grid == null) return false;
         var shader = _fogShader != null ? _fogShader : _fogShader = Resources.Load<Shader>("DiceboundFog");
-        if (shader == null) return;
+        if (shader == null) return false;
         if (_mapMaterial.shader != shader)
         {
             _mapMaterial.shader = shader;
@@ -439,6 +578,7 @@ public class MapController : NetworkBehaviour
         _mapMaterial.SetFloat("_FogEnabled", enabled ? 1 : 0);
         _mapMaterial.SetVector("_GridSize", new Vector4(grid.Width * grid.CellSize, grid.Height * grid.CellSize, 0, 0));
         _mapMaterial.SetMatrix("_GridWorldToLocal", Matrix4x4.TRS(grid.GridOrigin, grid.GridRotation, Vector3.one).inverse);
+        return true;
     }
 
     public void RestoreSceneMap(byte[] data, Vector3 position, Vector3 rotation, float scale)

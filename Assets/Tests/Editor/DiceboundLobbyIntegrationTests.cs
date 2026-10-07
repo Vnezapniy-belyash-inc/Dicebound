@@ -16,6 +16,7 @@ public class DiceboundLobbyIntegrationTests
     private NetworkManager _host, _client;
     private Component _registry;
     private string _reply;
+    private string _initiativeReceived;
     private GameObject _scene;
     private Texture2D _mapTexture;
     private int _transferTotal, _transferReceived, _fogChanges;
@@ -126,6 +127,124 @@ public class DiceboundLobbyIntegrationTests
         while (!task.IsCompleted && Time.realtimeSinceStartup < deadline) yield return null;
         Assert.That(task.IsCompleted, Is.True, "Relay HTTP operation timed out.");
         if (task.IsFaulted) throw task.Exception;
+    }
+
+    [UnityTest]
+    public IEnumerator TokenPrivacyAndLargeInitiativeReachConnectedClient()
+    {
+        yield return new EnterPlayMode();
+        _host = Manager("Token state host");
+        _scene = new GameObject("Token state scene");
+        _scene.AddComponent(RuntimeType("GridManager"));
+        var tokens = _scene.AddComponent(RuntimeType("TokenManager"));
+        var prefab = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Token.prefab");
+        tokens.GetType().GetField("tokenPrefab").SetValue(tokens, prefab.GetComponent<NetworkObject>());
+        _host.AddNetworkPrefab(prefab);
+        yield return null;
+        Assert.That(_host.StartHost(), Is.True);
+        _client = Manager("Token state client");
+        _client.AddNetworkPrefab(prefab);
+        Assert.That(_client.StartClient(), Is.True);
+        float deadline = Time.realtimeSinceStartup + 10;
+        while (!_client.IsConnectedClient && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(_client.IsConnectedClient, Is.True);
+
+        // Both managers share one Unity scene. Create the server-only tracker after
+        // client startup so NGO's initial scene-object cleanup cannot destroy it.
+        var trackerObject = new GameObject("State tracker");
+        trackerObject.transform.SetParent(_scene.transform);
+        var tracker = trackerObject.AddComponent(RuntimeType("InitiativeTracker"));
+        Assert.That(tracker, Is.Not.Null);
+        Assert.That(tracker.GetComponent<NetworkObject>(), Is.Not.Null, "Tracker must have its required NetworkObject.");
+        tracker.GetComponent<NetworkObject>().SpawnWithObservers = false;
+        tracker.GetComponent<NetworkObject>().Spawn();
+        _initiativeReceived = null;
+        Assert.That(_client.CustomMessagingManager, Is.Not.Null, "Connected client must have a messaging channel.");
+        _client.CustomMessagingManager.RegisterNamedMessageHandler("InitiativeStateV2", (sender, reader) =>
+        {
+            Assert.That(sender, Is.EqualTo(NetworkManager.ServerClientId));
+            reader.ReadValueSafe(out int revision); reader.ReadValueSafe(out int count);
+            var bytes = new byte[count]; reader.ReadBytesSafe(ref bytes, count);
+            _initiativeReceived = System.Text.Encoding.UTF8.GetString(bytes);
+            using var ack = new FastBufferWriter(4, Allocator.Temp);
+            ack.WriteValueSafe(revision);
+            _client.CustomMessagingManager.SendNamedMessage("InitiativeAckV2", NetworkManager.ServerClientId, ack);
+        });
+        var token = (Component)tokens.GetType().GetMethod("CreateTokenAsHost").Invoke(tokens, new object[] { "Private token", false });
+        Assert.That(token, Is.Not.Null, "Host token creation must succeed.");
+        var tokenType = token.GetType();
+        tokenType.GetMethod("ServerSetHealth").Invoke(token, new object[] { 137, 251, false });
+        tokenType.GetMethod("ServerSetArmorClass").Invoke(token, new object[] { 19, false });
+        tokenType.GetMethod("ServerToggleCondition").Invoke(token, new object[] { "poisoned" });
+        ulong objectId = token.GetComponent<NetworkObject>().NetworkObjectId;
+        deadline = Time.realtimeSinceStartup + 10;
+        while (!_client.SpawnManager.SpawnedObjects.ContainsKey(objectId) && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(_client.SpawnManager.SpawnedObjects.ContainsKey(objectId), Is.True, "Token must spawn on the actual connected client.");
+        var remote = _client.SpawnManager.SpawnedObjects[objectId].GetComponent(tokenType);
+        Assert.That(tokenType.GetProperty("SceneId").GetValue(remote), Is.EqualTo(tokenType.GetProperty("SceneId").GetValue(token)),
+            "Client tokens must retain the server's stable scene ID for initiative links.");
+        Assert.That((bool)tokenType.GetProperty("IsServer").GetValue(remote), Is.False);
+        Assert.That(tokenType.GetProperty("VisibleCurrentHp").GetValue(remote), Is.EqualTo(-1));
+        Assert.That(tokenType.GetProperty("VisibleConditionIds").GetValue(remote), Is.Empty);
+        Assert.That(tokenType.GetProperty("ArmorClass").GetValue(remote), Is.EqualTo(19));
+
+        tracker.GetType().GetMethod("AddToken").Invoke(tracker, new object[] { token });
+        for (int i = 0; i < 40; i++)
+            tracker.GetType().GetMethod("AddEntry").Invoke(tracker, new object[] { "Participant " + i + new string('Ж', 80), i, "#FFFFFF", 0 });
+        deadline = Time.realtimeSinceStartup + 15;
+        while (!(bool)tracker.GetType().GetProperty("AllClientsHaveCurrentState").GetValue(tracker) && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That((bool)tracker.GetType().GetProperty("AllClientsHaveCurrentState").GetValue(tracker), Is.True, "Client must acknowledge the current fragmented snapshot.");
+        var stateType = tracker.GetType().GetNestedType("InitiativeNetworkState", BindingFlags.NonPublic);
+        var state = JsonUtility.FromJson(_initiativeReceived, stateType);
+        var entries = (Array)stateType.GetField("entries").GetValue(state);
+        Assert.That(entries.Length, Is.EqualTo(41));
+        Assert.That(System.Text.Encoding.UTF8.GetByteCount(_initiativeReceived), Is.GreaterThan(4096));
+        object linked = null;
+        foreach (var entry in entries)
+            if ((string)entry.GetType().GetField("tokenId").GetValue(entry) == (string)tokenType.GetProperty("SceneId").GetValue(token)) linked = entry;
+        Assert.That(linked, Is.Not.Null);
+        Assert.That(linked.GetType().GetField("publicHp").GetValue(linked), Is.EqualTo(-1));
+
+        tokenType.GetMethod("ServerSetMasterVisibility").Invoke(token, new object[] { false, false });
+        deadline = Time.realtimeSinceStartup + 10;
+        while ((int)tokenType.GetProperty("VisibleCurrentHp").GetValue(remote) != 137 && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(tokenType.GetProperty("VisibleCurrentHp").GetValue(remote), Is.EqualTo(137));
+        Assert.That(tokenType.GetProperty("VisibleMaxHp").GetValue(remote), Is.EqualTo(251));
+        Assert.That((string[])tokenType.GetProperty("VisibleConditionIds").GetValue(remote), Does.Contain("poisoned"));
+        string stableId = (string)tokenType.GetProperty("SceneId").GetValue(token);
+        deadline = Time.realtimeSinceStartup + 10;
+        while (ReceivedInitiativeHp(tracker, stableId) != 137 && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(ReceivedInitiativeHp(tracker, stableId), Is.EqualTo(137), "Opening token HP must update the client's initiative projection.");
+        tokenType.GetMethod("ServerSetMasterVisibility").Invoke(token, new object[] { true, true });
+        deadline = Time.realtimeSinceStartup + 10;
+        while ((int)tokenType.GetProperty("VisibleCurrentHp").GetValue(remote) != -1 && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(tokenType.GetProperty("VisibleCurrentHp").GetValue(remote), Is.EqualTo(-1));
+        Assert.That((string[])tokenType.GetProperty("VisibleConditionIds").GetValue(remote), Is.Empty);
+        deadline = Time.realtimeSinceStartup + 10;
+        while (ReceivedInitiativeHp(tracker, stableId) != -1 && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(ReceivedInitiativeHp(tracker, stableId), Is.EqualTo(-1));
+        _initiativeReceived = null;
+        using (var request = new FastBufferWriter(1, Allocator.Temp))
+            _client.CustomMessagingManager.SendNamedMessage("InitiativeRequestV2", NetworkManager.ServerClientId, request);
+        deadline = Time.realtimeSinceStartup + 10;
+        while ((_initiativeReceived == null || !(bool)tracker.GetType().GetProperty("AllClientsHaveCurrentState").GetValue(tracker)) && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(_initiativeReceived, Is.Not.Null, "A newly ready client must be able to request the complete current snapshot.");
+        state = JsonUtility.FromJson(_initiativeReceived, stateType);
+        Assert.That(((Array)stateType.GetField("entries").GetValue(state)).Length, Is.EqualTo(41));
+        Assert.That(ReceivedInitiativeHp(tracker, stableId), Is.EqualTo(-1));
+        Assert.That((bool)tracker.GetType().GetProperty("AllClientsHaveCurrentState").GetValue(tracker), Is.True);
+        Assert.That(_client.IsConnectedClient, Is.True);
+    }
+
+    private int ReceivedInitiativeHp(Component tracker, string tokenId)
+    {
+        if (_initiativeReceived == null) return int.MinValue;
+        var type = tracker.GetType().GetNestedType("InitiativeNetworkState", BindingFlags.NonPublic);
+        var state = JsonUtility.FromJson(_initiativeReceived, type);
+        foreach (var entry in (Array)type.GetField("entries").GetValue(state))
+            if ((string)entry.GetType().GetField("tokenId").GetValue(entry) == tokenId)
+                return (int)entry.GetType().GetField("publicHp").GetValue(entry);
+        return int.MinValue;
     }
 
     private IEnumerator MapAndFog(bool relay, bool highResolution = false)
