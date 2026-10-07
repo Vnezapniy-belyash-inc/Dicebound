@@ -536,6 +536,7 @@ public class DmPanelUI : MonoBehaviour
         _statBlockInputs[8].text = "Уровень " + character.level;
         _statBlockInputs[9].text = string.Join("\n", new[]
         {
+            BuildCharacterStatDetails(character),
             character.otherProficiencies, character.featuresAndTraits, character.extraAbilities,
             character.traits, character.equipment, character.treasure,
             character.note1, character.note2, character.note3, character.note4, character.note5, character.note6
@@ -545,6 +546,31 @@ public class DmPanelUI : MonoBehaviour
         AppendCharacterActionLines(actionLines, "Особенности", character.featuresAndTraits);
         _statBlockInputs[10].text = string.Join("\n", actionLines);
         _statBlockHint.text = "Поля листа скопированы. Проверьте их и сохраните статблок.";
+    }
+
+    private static string BuildCharacterStatDetails(CharacterData character)
+    {
+        var lines = new List<string> { "Бонус мастерства: " + CharacterData.ModString(character.proficiencyBonus) };
+        lines.Add("Спасброски: " + string.Join(", ", new[]
+        {
+            "СИЛ " + CharacterData.ModString(character.StrSave), "ЛОВ " + CharacterData.ModString(character.DexSave),
+            "ТЕЛ " + CharacterData.ModString(character.ConSave), "ИНТ " + CharacterData.ModString(character.IntSave),
+            "МДР " + CharacterData.ModString(character.WisSave), "ХАР " + CharacterData.ModString(character.ChaSave)
+        }));
+        var skills = new List<string>();
+        int perception = 10 + character.WisMod, insight = 10 + character.WisMod, analysis = 10 + character.IntMod;
+        foreach (var skill in character.skills ?? Array.Empty<CharacterData.SkillEntry>())
+        {
+            if (skill == null || string.IsNullOrWhiteSpace(skill.name)) continue;
+            int bonus = character.GetSkillBonus(skill);
+            skills.Add(skill.name + " " + CharacterData.ModString(bonus) + (skill.expertise ? " (экспертиза)" : ""));
+            if (skill.name == "Восприятие") perception = 10 + bonus;
+            else if (skill.name == "Проницательность") insight = 10 + bonus;
+            else if (skill.name == "Анализ") analysis = 10 + bonus;
+        }
+        if (skills.Count > 0) lines.Add("Навыки: " + string.Join(", ", skills));
+        lines.Add($"Пассивные чувства: Восприятие {perception}, Проницательность {insight}, Анализ {analysis}");
+        return string.Join("\n", lines);
     }
 
     private static void AppendCharacterActionLines(List<string> output, string title, string source)

@@ -25,6 +25,28 @@ public class DiceboundCampaignModelTests
     }
 
     [Test]
+    public void CharacterStatDetailsIncludeExpertiseInPassivePerception()
+    {
+        var root = new GameObject("Character import test");
+        try
+        {
+            var character = root.AddComponent(TypeOf("CharacterData"));
+            Set(character, "wisdom", 16);
+            Set(character, "proficiencyBonus", 3);
+            Set(character, "wisSaveProficient", true);
+            var skills = Get<Array>(character, "skills");
+            foreach (object skill in skills)
+                if (Get<string>(skill, "name") == "Восприятие") Set(skill, "expertise", true);
+            string details = (string)TypeOf("DmPanelUI").GetMethod("BuildCharacterStatDetails",
+                BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, new object[] { character });
+            Assert.That(details, Does.Contain("МДР +6"));
+            Assert.That(details, Does.Contain("Восприятие +9 (экспертиза)"));
+            Assert.That(details, Does.Contain("Восприятие 19"));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(root); }
+    }
+
+    [Test]
     public void LegacySceneUpgradesWithoutLosingExistingSceneData()
     {
         var scene = ValidScene("legacy");
