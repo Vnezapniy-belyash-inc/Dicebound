@@ -161,6 +161,8 @@ public static class SceneFileStore
         try { SceneValidation.Validate(_campaign); }
         catch { _campaign.statBlocks = previous; throw; }
         _campaignDirty = true;
+        foreach (var token in FindObjectsByType<TokenController>(FindObjectsSortMode.None))
+            if (token != null && token.IsSpawned) token.RefreshPublicStatBlock();
     }
 
     public static void DeleteStatBlock(string statBlockId)

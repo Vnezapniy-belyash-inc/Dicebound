@@ -155,6 +155,7 @@ public class DiceboundCampaignModelTests
         Set(statBlock, "speed", "30 футов");
         Set(statBlock, "challengeRating", "1/4");
         Set(statBlock, "description", "");
+        Set(statBlock, "publicFieldsMask", 17);
         var statBlocks = Array.CreateInstance(TypeOf("StatBlockDefinition"), 1);
         statBlocks.SetValue(statBlock, 0);
         Set(campaign, "statBlocks", statBlocks);
@@ -187,6 +188,7 @@ public class DiceboundCampaignModelTests
             Assert.That(Get<string>(restoredBattle, "activeParticipantId"), Is.EqualTo("7"));
             Assert.That(Get<Array>(restored, "statBlocks").Length, Is.EqualTo(1));
             Assert.That(Get<string>(Get<Array>(restored, "statBlocks").GetValue(0), "name"), Is.EqualTo("Гоблин"));
+            Assert.That(Get<int>(Get<Array>(restored, "statBlocks").GetValue(0), "publicFieldsMask"), Is.EqualTo(17));
             Assert.That(Get<Array>(restored, "referenceEntries").Length, Is.EqualTo(1));
             var restoredReference = Get<Array>(restored, "referenceEntries").GetValue(0);
             Assert.That(Get<string>(restoredReference, "title"), Is.EqualTo("Отдых"));

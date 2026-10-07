@@ -68,6 +68,9 @@ public class TokenController : NetworkDraggable
     private readonly NetworkVariable<FixedString4096Bytes> _netVisibleConditions = new(
         new FixedString4096Bytes(""), NetworkVariableReadPermission.Everyone,
         NetworkVariableWritePermission.Server);
+    private readonly NetworkVariable<FixedString4096Bytes> _netPublicStatBlock = new(
+        new FixedString4096Bytes(""), NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
     private MasterTokenData _masterData = new() { armorClass = 10, hideHp = true, hideConditions = true };
 
     public bool IsHero => _netHero.Value;
@@ -82,6 +85,7 @@ public class TokenController : NetworkDraggable
     public string[] VisibleConditionIds => IsServer ? (string[])_masterData.conditionIds.Clone()
         : string.IsNullOrEmpty(_netVisibleConditions.Value.ToString())
             ? Array.Empty<string>() : _netVisibleConditions.Value.ToString().Split('|');
+    public string PublicStatBlockJson => _netPublicStatBlock.Value.ToString();
     public bool IsVisibleToLocalPlayer => FogManager.Instance != null && FogManager.Instance.ShowingPlayerView
         ? FogManager.Instance.CanSeeToken(NetworkManager.LocalClientId, this, IsHost && FogManager.Instance.Preview) : !IsHidden || IsHost;
     protected override bool CanStartLocalDrag => IsVisibleToLocalPlayer && CanControlClient(NetworkManager.LocalClientId)
@@ -394,7 +398,91 @@ public class TokenController : NetworkDraggable
         if (!IsServer || statBlockId == null || statBlockId.Length > 64
             || statBlockId.Contains("|") || statBlockId.Contains(",")) return false;
         _masterData.statBlockId = string.IsNullOrWhiteSpace(statBlockId) ? null : statBlockId;
+        PublishPublicStatBlock();
         return true;
+    }
+
+    public void RefreshPublicStatBlock()
+    {
+        if (IsServer) PublishPublicStatBlock();
+    }
+
+    private void PublishPublicStatBlock()
+    {
+        if (!IsServer) return;
+        if (_masterData == null || string.IsNullOrEmpty(_masterData.statBlockId))
+        {
+            _netPublicStatBlock.Value = new FixedString4096Bytes("");
+            return;
+        }
+        var block = Array.Find(SceneFileStore.GetStatBlocks(), item => item != null && item.id == _masterData.statBlockId);
+        if (block == null || block.publicFieldsMask == 0)
+        {
+            _netPublicStatBlock.Value = new FixedString4096Bytes("");
+            return;
+        }
+
+        int mask = block.publicFieldsMask;
+        var view = new PublicStatBlockView { visibleFields = mask };
+        if ((mask & StatBlockPublicFields.Name) != 0) view.name = block.name;
+        if ((mask & StatBlockPublicFields.Size) != 0) view.size = block.size;
+        if ((mask & StatBlockPublicFields.CreatureType) != 0) view.creatureType = block.creatureType;
+        if ((mask & StatBlockPublicFields.Alignment) != 0) view.alignment = block.alignment;
+        if ((mask & StatBlockPublicFields.ArmorClass) != 0) view.armorClass = block.armorClass;
+        if ((mask & StatBlockPublicFields.HitPoints) != 0) view.hitPoints = block.hitPoints;
+        if ((mask & StatBlockPublicFields.Speed) != 0) view.speed = block.speed;
+        if ((mask & StatBlockPublicFields.Abilities) != 0)
+        {
+            view.strength = block.strength; view.dexterity = block.dexterity; view.constitution = block.constitution;
+            view.intelligence = block.intelligence; view.wisdom = block.wisdom; view.charisma = block.charisma;
+        }
+        if ((mask & StatBlockPublicFields.ChallengeRating) != 0) view.challengeRating = block.challengeRating;
+        if ((mask & StatBlockPublicFields.Description) != 0) view.description = block.description ?? string.Empty;
+        if ((mask & StatBlockPublicFields.Actions) != 0)
+        {
+            int length = Mathf.Min(block.actions?.Length ?? 0, 24);
+            view.actions = new StatBlockPublicAction[length];
+            for (int i = 0; i < length; i++)
+            {
+                var action = block.actions[i];
+                view.actions[i] = new StatBlockPublicAction
+                {
+                    name = ClampPublicText(action?.name, 96),
+                    description = ClampPublicText(action?.description, 320)
+                };
+            }
+            view.truncated = block.actions != null && block.actions.Length > length;
+        }
+
+        string json = JsonUtility.ToJson(view);
+        const int maxBytes = 3000;
+        while (Encoding.UTF8.GetByteCount(json) > maxBytes)
+        {
+            if (view.actions != null && view.actions.Length > 0)
+            {
+                Array.Resize(ref view.actions, view.actions.Length - 1);
+                view.truncated = true;
+            }
+            else if (!string.IsNullOrEmpty(view.description))
+            {
+                int newLength = Mathf.Max(0, view.description.Length - 128);
+                view.description = view.description.Substring(0, newLength);
+                view.truncated = true;
+            }
+            else
+            {
+                _netPublicStatBlock.Value = new FixedString4096Bytes("");
+                return;
+            }
+            json = JsonUtility.ToJson(view);
+        }
+        _netPublicStatBlock.Value = new FixedString4096Bytes(json);
+    }
+
+    private static string ClampPublicText(string value, int maxLength)
+    {
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+        return value.Length <= maxLength ? value : value.Substring(0, maxLength);
     }
 
     public void ServerSetMasterVisibility(bool hideHp, bool hideConditions)
@@ -744,9 +832,13 @@ public class TokenController : NetworkDraggable
     private bool _statBlockPopup;
     private Vector2 _statBlockScroll;
     private Rect _statBlockPopupRect;
+    private bool _showPublicStatBlock;
+    private Vector2 _publicStatBlockScroll;
+    private Rect _publicStatBlockRect;
     private bool _conditionsPopup;
     private Vector2 _conditionsScroll;
     private Rect _conditionsRect;
+    private bool HasPublicStatBlock => !IsHost && !string.IsNullOrEmpty(PublicStatBlockJson);
 
     public static bool IsMenuTextFocused => _activeMenuToken != null &&
         _activeMenuToken._showMenu && _activeMenuToken._visionEditing;
@@ -760,7 +852,8 @@ public class TokenController : NetworkDraggable
             pointer.y = Screen.height - pointer.y;
             return _activeMenuToken._menuRect.Contains(pointer)
                 || _activeMenuToken._conditionsPopup && _activeMenuToken._conditionsRect.Contains(pointer)
-                || _activeMenuToken._statBlockPopup && _activeMenuToken._statBlockPopupRect.Contains(pointer);
+                || _activeMenuToken._statBlockPopup && _activeMenuToken._statBlockPopupRect.Contains(pointer)
+                || _activeMenuToken._showPublicStatBlock && _activeMenuToken._publicStatBlockRect.Contains(pointer);
         }
     }
 
@@ -771,6 +864,7 @@ public class TokenController : NetworkDraggable
         _visionEditing = false;
         _conditionsPopup = false;
         _statBlockPopup = false;
+        _showPublicStatBlock = false;
         if (_activeMenuToken == this) _activeMenuToken = null;
     }
 
@@ -784,7 +878,7 @@ public class TokenController : NetworkDraggable
     {
         if (SceneEditor.IsEditing || FogManager.IsManualEditing) return;
         if (!IsSpawned || !IsVisibleToLocalPlayer) return;
-        if (!IsSpawner && !IsHost) return;
+        if (!IsSpawner && !IsHost && !HasPublicStatBlock) return;
         if (MeasurementTool.Instance != null && MeasurementTool.Instance.IsLocalActive) return;
         if (EffectPaintTool.Instance != null && EffectPaintTool.Instance.IsActive) return;
 
@@ -810,7 +904,7 @@ public class TokenController : NetworkDraggable
             _conditionsPopup = false;
             _statBlockPopup = false;
             Vector2 mousePos = mouse.position.ReadValue();
-            float height = IsHost ? 570 : 196;
+            float height = IsHost ? 610 : (HasPublicStatBlock ? 230 : 196);
             _menuRect = new Rect(
                 Mathf.Clamp(mousePos.x, 4, Mathf.Max(4, Screen.width - 264)),
                 Mathf.Clamp(Screen.height - mousePos.y, 4, Mathf.Max(4, Screen.height - height - 4)),
@@ -896,7 +990,8 @@ public class TokenController : NetworkDraggable
         bool canLoad = IsSpawner || IsHost;
         bool canCopy = IsSpawner || IsHost;
         bool canDelete = IsSpawner || IsHost;
-        if (!canLoad && !canCopy && !canDelete)
+        bool hasPublicStatBlock = HasPublicStatBlock;
+        if (!canLoad && !canCopy && !canDelete && !hasPublicStatBlock)
         {
             CloseMenu();
             return;
@@ -1004,11 +1099,16 @@ public class TokenController : NetworkDraggable
                 && GUI.GetNameOfFocusedControl() == "TokenStatBlockId")
                 ApplyStatBlockInput();
         }
-        else
+        else if (hasPublicStatBlock)
         {
-            GUI.Label(new Rect(_menuRect.x + 12, y, 238, 22), $"Зрение: {VisionFeet} футов · задаёт GM", titleStyle);
-            y += 26;
+            if (GUI.Button(new Rect(_menuRect.x + 10, y, 240, 30),
+                _showPublicStatBlock ? "Скрыть статблок" : "Открыть статблок", VttUiSkin.ImGuiButton))
+                _showPublicStatBlock = !_showPublicStatBlock;
+            y += 36;
         }
+        else
+            GUI.Label(new Rect(_menuRect.x + 12, y, 238, 22), $"Зрение: {VisionFeet} футов · задаёт GM", titleStyle);
+        y += 26;
 
         if (canDelete && GUI.Button(new Rect(_menuRect.x + 10, y, 240, 30),
             "Удалить токен", VttUiSkin.ImGuiDangerButton))
@@ -1021,11 +1121,68 @@ public class TokenController : NetworkDraggable
 
         if (_conditionsPopup) DrawConditionPopup();
         if (_statBlockPopup) DrawStatBlockPopup();
+        if (_showPublicStatBlock && hasPublicStatBlock) DrawPublicStatBlock();
+        else if (_showPublicStatBlock) _showPublicStatBlock = false;
 
         if (Event.current.type == EventType.MouseDown && !_menuRect.Contains(Event.current.mousePosition)
             && (!_conditionsPopup || !_conditionsRect.Contains(Event.current.mousePosition))
-            && (!_statBlockPopup || !_statBlockPopupRect.Contains(Event.current.mousePosition)))
+            && (!_statBlockPopup || !_statBlockPopupRect.Contains(Event.current.mousePosition))
+            && (!_showPublicStatBlock || !_publicStatBlockRect.Contains(Event.current.mousePosition)))
             CloseMenu();
+    }
+
+    private void DrawPublicStatBlock()
+    {
+        var data = JsonUtility.FromJson<PublicStatBlockView>(PublicStatBlockJson);
+        if (data == null) { _showPublicStatBlock = false; return; }
+        const float width = 300;
+        float height = Mathf.Min(440, Screen.height - 16);
+        float x = _menuRect.xMax + 8;
+        if (x + width > Screen.width) x = Mathf.Max(4, _menuRect.x - width - 8);
+        float y = Mathf.Clamp(_menuRect.y, 4, Mathf.Max(4, Screen.height - height - 4));
+        _publicStatBlockRect = new Rect(x, y, width, height);
+        GUI.Box(_publicStatBlockRect, "Статблок", VttUiSkin.ImGuiPanel);
+        var viewport = new Rect(x + 8, y + 30, width - 16, height - 38);
+        const float line = 24;
+        float contentHeight = 44;
+        if ((data.visibleFields & StatBlockPublicFields.Description) != 0) contentHeight += 120;
+        if ((data.visibleFields & StatBlockPublicFields.Actions) != 0)
+            foreach (var action in data.actions ?? Array.Empty<StatBlockPublicAction>())
+                contentHeight += 48 + Mathf.Min(4, (action?.description?.Length ?? 0) / 48) * 16;
+        contentHeight += line * 7;
+        var content = new Rect(0, 0, viewport.width - 16, contentHeight);
+        _publicStatBlockScroll = GUI.BeginScrollView(viewport, _publicStatBlockScroll, content);
+        float cy = 0;
+        void Row(string label) { GUI.Label(new Rect(4, cy, content.width - 8, line), label); cy += line; }
+        if ((data.visibleFields & StatBlockPublicFields.Name) != 0) Row(data.name);
+        if ((data.visibleFields & StatBlockPublicFields.Size) != 0) Row("Размер: " + data.size);
+        if ((data.visibleFields & StatBlockPublicFields.CreatureType) != 0) Row("Тип: " + data.creatureType);
+        if ((data.visibleFields & StatBlockPublicFields.Alignment) != 0) Row("Мировоззрение: " + data.alignment);
+        if ((data.visibleFields & StatBlockPublicFields.ArmorClass) != 0) Row("КД: " + data.armorClass);
+        if ((data.visibleFields & StatBlockPublicFields.HitPoints) != 0) Row("ХП: " + data.hitPoints);
+        if ((data.visibleFields & StatBlockPublicFields.Speed) != 0) Row("Скорость: " + data.speed);
+        if ((data.visibleFields & StatBlockPublicFields.Abilities) != 0)
+            Row($"СИЛ {data.strength}  ЛОВ {data.dexterity}  ТЕЛ {data.constitution}  ИНТ {data.intelligence}  МДР {data.wisdom}  ХАР {data.charisma}");
+        if ((data.visibleFields & StatBlockPublicFields.ChallengeRating) != 0) Row("Опасность: " + data.challengeRating);
+        if ((data.visibleFields & StatBlockPublicFields.Description) != 0 && !string.IsNullOrEmpty(data.description))
+        {
+            float descHeight = Mathf.Min(120, 28 + data.description.Length / 48f * 16);
+            GUI.Label(new Rect(4, cy, content.width - 8, descHeight), data.description, GUI.skin.textArea);
+            cy += descHeight + 4;
+        }
+        if ((data.visibleFields & StatBlockPublicFields.Actions) != 0)
+        {
+            foreach (var action in data.actions ?? Array.Empty<StatBlockPublicAction>())
+            {
+                Row(action?.name ?? "Действие");
+                string description = action?.description ?? string.Empty;
+                float textHeight = Mathf.Min(72, 20 + description.Length / 48f * 16);
+                GUI.Label(new Rect(8, cy, content.width - 12, textHeight), description, GUI.skin.label);
+                cy += textHeight;
+            }
+        }
+        if (data.truncated) Row("… текст статблока сокращён");
+        GUI.EndScrollView();
     }
 
     private void ApplyMasterInputs()

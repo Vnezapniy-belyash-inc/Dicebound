@@ -132,6 +132,46 @@ using UnityEngine;
     public string challengeRating;
     public string description;
     public StatBlockAction[] actions = Array.Empty<StatBlockAction>();
+    public int publicFieldsMask;
+}
+
+public static class StatBlockPublicFields
+{
+    public const int Name = 1 << 0;
+    public const int Size = 1 << 1;
+    public const int CreatureType = 1 << 2;
+    public const int Alignment = 1 << 3;
+    public const int ArmorClass = 1 << 4;
+    public const int HitPoints = 1 << 5;
+    public const int Speed = 1 << 6;
+    public const int Abilities = 1 << 7;
+    public const int ChallengeRating = 1 << 8;
+    public const int Description = 1 << 9;
+    public const int Actions = 1 << 10;
+    public const int All = (1 << 11) - 1;
+}
+
+[Serializable] public sealed class PublicStatBlockView
+{
+    public int visibleFields;
+    public bool truncated;
+    public string name;
+    public string size;
+    public string creatureType;
+    public string alignment;
+    public int armorClass;
+    public int hitPoints;
+    public string speed;
+    public int strength, dexterity, constitution, intelligence, wisdom, charisma;
+    public string challengeRating;
+    public string description;
+    public StatBlockPublicAction[] actions = Array.Empty<StatBlockPublicAction>();
+}
+
+[Serializable] public sealed class StatBlockPublicAction
+{
+    public string name;
+    public string description;
 }
 
 [Serializable] public sealed class CampaignMapAsset
@@ -337,7 +377,9 @@ public static class SceneValidation
                 && !string.IsNullOrWhiteSpace(statBlock.name) && statBlock.name.Length <= 128,
                 "Некорректная или повторная запись статблока.");
             Require(statBlock.armorClass >= 0 && statBlock.armorClass <= 999
-                && statBlock.hitPoints >= 0 && statBlock.hitPoints <= 999999,
+                && statBlock.hitPoints >= 0 && statBlock.hitPoints <= 999999
+                && statBlock.publicFieldsMask >= 0
+                && (statBlock.publicFieldsMask & ~StatBlockPublicFields.All) == 0,
                 "Некорректные параметры статблока.");
             Require(statBlock.strength >= 1 && statBlock.strength <= 40
                 && statBlock.dexterity >= 1 && statBlock.dexterity <= 40

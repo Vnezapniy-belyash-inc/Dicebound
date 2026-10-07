@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.UI;
@@ -8,6 +9,15 @@ using UnityEngine.UI;
 /// <summary>Host-only controls built on the existing map and initiative APIs.</summary>
 public class DmPanelUI : MonoBehaviour
 {
+    private static readonly string[] StatBlockPublicFieldNames =
+        { "Название", "Размер", "Тип существа", "Мировоззрение", "КД", "ХП", "Скорость", "Характеристики", "Опасность", "Описание", "Действия" };
+    private static readonly int[] StatBlockPublicFieldMasks =
+    {
+        StatBlockPublicFields.Name, StatBlockPublicFields.Size, StatBlockPublicFields.CreatureType,
+        StatBlockPublicFields.Alignment, StatBlockPublicFields.ArmorClass, StatBlockPublicFields.HitPoints,
+        StatBlockPublicFields.Speed, StatBlockPublicFields.Abilities, StatBlockPublicFields.ChallengeRating,
+        StatBlockPublicFields.Description, StatBlockPublicFields.Actions
+    };
     public static DmPanelUI Instance { get; private set; }
 
     private Canvas _canvas;
@@ -31,6 +41,9 @@ public class DmPanelUI : MonoBehaviour
     private string _selectedStatBlockId;
     private string _statBlockSignature;
     private Text _statBlockHint;
+    private GameObject _statBlockVisibilityPanel;
+    private Text[] _statBlockVisibilityLabels;
+    private int _statBlockVisibleFieldsDraft;
     private GameObject _mapCatalogPanel;
     private InputField _mapAssetNameInput;
     private RectTransform _mapAssetsContent;
@@ -163,8 +176,10 @@ public class DmPanelUI : MonoBehaviour
     private void BuildStatBlockPage(Transform parent)
     {
         Label(parent, "Статблоки кампании", 16, VttUiSkin.Text, TextAnchor.MiddleLeft,
-            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 26), new Vector2(0, -2), true);
-        Button(parent, "Новый", 64, 26, 286, -2, ClearStatBlockInputs, VttUiSkin.Button);
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(180, 26), new Vector2(0, -2), true);
+        Button(parent, "Поля игрокам…", 94, 26, 176, -2, OpenStatBlockVisibilityPanel, VttUiSkin.Button);
+        Button(parent, "Новый", 64, 26, 276, -2, ClearStatBlockInputs, VttUiSkin.Button);
+        Button(parent, "Импорт листа", 100, 26, 248, -30, ImportCharacterDataToStatBlock, VttUiSkin.Button);
         var viewport = Box(parent, "StatBlockViewport", new Color(0, 0, 0, 0.01f), 0, false);
         Place(viewport, new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 66), new Vector2(0, -30));
         viewport.AddComponent<RectMask2D>();
@@ -198,6 +213,46 @@ public class DmPanelUI : MonoBehaviour
             new Color(0.28f, 0.11f, 0.14f));
         _statBlockHint = Label(parent, "", 12, VttUiSkin.Muted, TextAnchor.UpperLeft,
             new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 52), new Vector2(0, -438));
+
+        _statBlockVisibilityPanel = Box(parent, "StatBlockVisibility", VttUiSkin.Panel, 10);
+        Place(_statBlockVisibilityPanel, new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(350, 450), new Vector2(0, -28));
+        Label(_statBlockVisibilityPanel.transform, "Поля, открытые игрокам", 15, VttUiSkin.Text,
+            TextAnchor.MiddleLeft, new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(280, 30), new Vector2(12, -8), true);
+        Button(_statBlockVisibilityPanel.transform, "×", 28, 28, 310, -8,
+            () => _statBlockVisibilityPanel.SetActive(false), VttUiSkin.Button);
+        var visibilityViewport = Box(_statBlockVisibilityPanel.transform, "VisibilityViewport",
+            new Color(0, 0, 0, 0.01f), 0, false);
+        Place(visibilityViewport, new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(326, 360), new Vector2(12, -46));
+        visibilityViewport.AddComponent<RectMask2D>();
+        var visibilityRows = new GameObject("VisibilityFields", typeof(RectTransform));
+        visibilityRows.transform.SetParent(visibilityViewport.transform, false);
+        var visibilityContent = visibilityRows.GetComponent<RectTransform>();
+        visibilityContent.anchorMin = new Vector2(0, 1);
+        visibilityContent.anchorMax = new Vector2(1, 1);
+        visibilityContent.pivot = new Vector2(0.5f, 1);
+        visibilityContent.sizeDelta = new Vector2(0, 11 * 31);
+        var visibilityScroll = visibilityViewport.AddComponent<ScrollRect>();
+        visibilityScroll.viewport = visibilityViewport.GetComponent<RectTransform>();
+        visibilityScroll.content = visibilityContent;
+        visibilityScroll.horizontal = false;
+        visibilityScroll.vertical = true;
+        visibilityScroll.scrollSensitivity = 24;
+        _statBlockVisibilityLabels = new Text[StatBlockPublicFieldNames.Length];
+        for (int i = 0; i < StatBlockPublicFieldNames.Length; i++)
+        {
+            int mask = StatBlockPublicFieldMasks[i];
+            var toggle = Button(visibilityContent, "", 310, 28, 0, -i * 31,
+                () => ToggleStatBlockPublicField(mask), VttUiSkin.Button);
+            _statBlockVisibilityLabels[i] = toggle.GetComponentInChildren<Text>();
+        }
+        UpdateStatBlockVisibilityLabels();
+        Label(_statBlockVisibilityPanel.transform, "Настройки применятся после сохранения статблока.",
+            11, VttUiSkin.Muted, TextAnchor.UpperLeft, new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(326, 28), new Vector2(12, -414));
+        _statBlockVisibilityPanel.SetActive(false);
     }
 
     private void BuildReferencePage(Transform parent)
@@ -399,6 +454,8 @@ public class DmPanelUI : MonoBehaviour
     {
         if (block == null) return;
         _selectedStatBlockId = block.id;
+        _statBlockVisibleFieldsDraft = block.publicFieldsMask;
+        UpdateStatBlockVisibilityLabels();
         _statBlockInputs[0].text = block.name;
         _statBlockInputs[1].text = block.creatureType;
         _statBlockInputs[2].text = block.size;
@@ -420,10 +477,86 @@ public class DmPanelUI : MonoBehaviour
         _statBlockHint.text = "Выбран: " + block.name;
     }
 
+    private void OpenStatBlockVisibilityPanel()
+    {
+        if (string.IsNullOrEmpty(_selectedStatBlockId))
+        {
+            _statBlockHint.text = "Сначала выберите статблок или создайте и сохраните новый.";
+            return;
+        }
+        UpdateStatBlockVisibilityLabels();
+        _statBlockVisibilityPanel.SetActive(true);
+    }
+
+    private void ToggleStatBlockPublicField(int mask)
+    {
+        _statBlockVisibleFieldsDraft ^= mask;
+        UpdateStatBlockVisibilityLabels();
+    }
+
+    private void ImportCharacterDataToStatBlock()
+    {
+        var character = FindAnyObjectByType<CharacterData>();
+        if (character == null)
+        {
+            _statBlockHint.text = "Лист персонажа не найден в сцене.";
+            return;
+        }
+
+        ClearStatBlockInputs();
+        _statBlockInputs[0].text = string.IsNullOrWhiteSpace(character.characterName)
+            ? character.className : character.characterName;
+        _statBlockInputs[1].text = character.className ?? string.Empty;
+        _statBlockInputs[2].text = "Средний";
+        _statBlockInputs[3].text = "Не задано";
+        _statBlockInputs[4].text = character.armorClass.ToString();
+        _statBlockInputs[5].text = character.maxHP.ToString();
+        _statBlockInputs[6].text = string.Empty;
+        _statBlockInputs[7].text = string.Join(",", character.strength, character.dexterity,
+            character.constitution, character.intelligence, character.wisdom, character.charisma);
+        _statBlockInputs[8].text = "Уровень " + character.level;
+        _statBlockInputs[9].text = string.Join("\n", new[]
+        {
+            character.otherProficiencies, character.featuresAndTraits, character.extraAbilities,
+            character.traits, character.equipment, character.treasure,
+            character.note1, character.note2, character.note3, character.note4, character.note5, character.note6
+        }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        var actionLines = new List<string>();
+        AppendCharacterActionLines(actionLines, "Атаки и заклинания", character.attacksAndSpells);
+        AppendCharacterActionLines(actionLines, "Особенности", character.featuresAndTraits);
+        _statBlockInputs[10].text = string.Join("\n", actionLines);
+        _statBlockHint.text = "Поля листа скопированы. Проверьте их и сохраните статблок.";
+    }
+
+    private static void AppendCharacterActionLines(List<string> output, string title, string source)
+    {
+        if (string.IsNullOrWhiteSpace(source)) return;
+        foreach (string raw in source.Split('\n'))
+        {
+            string line = raw.Trim();
+            if (line.Length == 0) continue;
+            // The statblock editor uses "name: description" rows.
+            int separator = line.IndexOf(':');
+            output.Add(separator > 0 ? line : title + ": " + line);
+        }
+    }
+
+    private void UpdateStatBlockVisibilityLabels()
+    {
+        if (_statBlockVisibilityLabels == null) return;
+        for (int i = 0; i < _statBlockVisibilityLabels.Length; i++)
+        {
+            bool visible = (_statBlockVisibleFieldsDraft & StatBlockPublicFieldMasks[i]) != 0;
+            _statBlockVisibilityLabels[i].text = (visible ? "✓  " : "□  ") + StatBlockPublicFieldNames[i];
+        }
+    }
+
     private void ClearStatBlockInputs()
     {
         if (_statBlockInputs == null) return;
         _selectedStatBlockId = null;
+        _statBlockVisibleFieldsDraft = 0;
+        UpdateStatBlockVisibilityLabels();
         foreach (var input in _statBlockInputs) input.SetTextWithoutNotify(string.Empty);
         if (_statBlockHint != null) _statBlockHint.text = "Новая запись: заполните поля и сохраните.";
     }
@@ -458,7 +591,7 @@ public class DmPanelUI : MonoBehaviour
                 strength = stats[0], dexterity = stats[1], constitution = stats[2],
                 intelligence = stats[3], wisdom = stats[4], charisma = stats[5],
                 challengeRating = _statBlockInputs[8].text, description = _statBlockInputs[9].text,
-                actions = actions.ToArray()
+                actions = actions.ToArray(), publicFieldsMask = _statBlockVisibleFieldsDraft
             };
             SceneFileStore.UpsertStatBlock(block);
             _selectedStatBlockId = block.id;
