@@ -499,6 +499,7 @@ public static class SceneValidation
             "Некорректное состояние боя.");
         var ids = new HashSet<string>();
         bool activeFound = string.IsNullOrEmpty(battle.activeParticipantId);
+        var tokenIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var participant in battle.participants)
         {
             Require(participant != null && !string.IsNullOrWhiteSpace(participant.id)
@@ -513,8 +514,9 @@ public static class SceneValidation
             Require(!participant.hasHitPoints || participant.hitPoints >= 0 && participant.hitPoints <= 99999,
                 "Некорректное значение HP участника инициативы.");
             if (!string.IsNullOrEmpty(participant.tokenId))
-                Require(Array.Exists(scene.tokens, token => token.id == participant.tokenId),
-                    "Инициатива ссылается на отсутствующий токен.");
+                Require(tokenIds.Add(participant.tokenId)
+                    && Array.Exists(scene.tokens, token => token.id == participant.tokenId),
+                    "Инициатива повторно ссылается на токен или ссылается на отсутствующий токен.");
             else Require(participant.playerId != ulong.MaxValue || !string.IsNullOrWhiteSpace(participant.name),
                 "Для участника инициативы без токена укажите имя или игрока.");
             if (participant.id == battle.activeParticipantId) activeFound = true;

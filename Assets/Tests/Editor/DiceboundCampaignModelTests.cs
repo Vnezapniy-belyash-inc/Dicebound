@@ -25,6 +25,31 @@ public class DiceboundCampaignModelTests
     }
 
     [Test]
+    public void BattleRejectsDuplicateTokenReferences()
+    {
+        var scene = ValidScene("scene");
+        var token = New("SceneToken");
+        Set(token, "id", "token");
+        var tokens = Array.CreateInstance(TypeOf("SceneToken"), 1);
+        tokens.SetValue(token, 0);
+        Set(scene, "tokens", tokens);
+        var participants = Array.CreateInstance(TypeOf("BattleParticipant"), 2);
+        for (int i = 0; i < 2; i++)
+        {
+            var participant = New("BattleParticipant");
+            Set(participant, "id", i.ToString());
+            Set(participant, "tokenId", "token");
+            participants.SetValue(participant, i);
+        }
+        var battle = New("SceneBattleState");
+        Set(battle, "participants", participants);
+        var exception = Assert.Throws<TargetInvocationException>(() => TypeOf("SceneValidation")
+            .GetMethod("ValidateBattle", BindingFlags.Static | BindingFlags.NonPublic)
+            .Invoke(null, new[] { battle, scene }));
+        Assert.That(exception.InnerException, Is.TypeOf<FormatException>());
+    }
+
+    [Test]
     public void CharacterStatDetailsIncludeExpertiseInPassivePerception()
     {
         var root = new GameObject("Character import test");
