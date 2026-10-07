@@ -988,17 +988,14 @@ public class DmPanelUI : MonoBehaviour
             string targetTitle = Array.Find(SceneFileStore.GetCampaignScenes(), item => item != null
                 && item.sceneId == transition.targetSceneId)?.title ?? "Сцена удалена";
             int row = Array.IndexOf(transitions, transition);
-            Button(_transitionList, $"{transition.title} → {targetTitle} ({transition.x},{transition.y})", 210, 34, 0, -row * 42,
-                () =>
-                {
-                    BeginEditSceneTransition(transition);
-                    SceneFileStore.UseSceneTransition(transition.id);
-                    RefreshSceneTransitions(true);
-                }, VttUiSkin.Button);
-            Button(_transitionList, transition.markerEnabled ? "Маркер ✓" : "Маркер", 94, 34, 216, -row * 42,
+            Button(_transitionList, $"{transition.title} → {targetTitle} ({transition.x},{transition.y})", 178, 34, 0, -row * 42,
+                () => { SceneFileStore.UseSceneTransition(transition.id); RefreshSceneTransitions(true); }, VttUiSkin.Button);
+            Button(_transitionList, "✎", 32, 34, 182, -row * 42,
+                () => BeginEditSceneTransition(transition), VttUiSkin.Button);
+            Button(_transitionList, transition.markerEnabled ? "Марк.✓" : "Марк.", 80, 34, 216, -row * 42,
                 () => { SceneFileStore.ToggleSceneTransitionMarker(transition.id); RefreshSceneTransitions(true); },
                 transition.markerEnabled ? new Color(0.10f, 0.35f, 0.37f) : VttUiSkin.Button);
-            Button(_transitionList, "×", 42, 34, 314, -row * 42,
+            Button(_transitionList, "×", 40, 34, 300, -row * 42,
                 () => { SceneFileStore.DeleteSceneTransition(transition.id); RefreshSceneTransitions(true); },
                 new Color(0.28f, 0.11f, 0.14f));
         }

@@ -243,8 +243,6 @@ public static class SceneSaveMigration
 
         scene.masterData ??= new SceneMasterData();
         scene.transitions ??= Array.Empty<SceneTransition>();
-        foreach (var transition in scene.transitions)
-            if (transition != null) transition.markerEnabled = false;
 
         return scene;
     }

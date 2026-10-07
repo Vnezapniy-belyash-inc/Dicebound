@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Text;
 using Unity.Netcode;
 using UnityEngine;
@@ -755,8 +754,10 @@ public static class SceneFileStore
     {
         var target = Array.Find(_campaign.scenes, item => item.sceneId == sceneId);
         if (target == null) return;
-        ApplyScene(target.scene, target.battle);
+        string previousSceneId = _campaign.activeSceneId;
         _campaign.activeSceneId = sceneId;
+        try { ApplyScene(target.scene, target.battle); }
+        catch { _campaign.activeSceneId = previousSceneId; throw; }
         _campaignDirty = true;
         DiceUI.Instance?.ShowToolNotice($"Активная сцена: {target.title}");
     }

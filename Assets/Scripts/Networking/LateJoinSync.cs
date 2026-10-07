@@ -163,7 +163,6 @@ public class LateJoinSync : MonoBehaviour
             SceneTransitionMarker.EnsureRegistered();
         }
         if (!nm.IsServer) return;
-        if (SceneFileStore.HasCampaign) SceneFileStore.RefreshTransitionMarkers();
         int remaining = WorldObjectsPerFrame;
         bool progressed;
         do

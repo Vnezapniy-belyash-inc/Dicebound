@@ -58,6 +58,24 @@ public class DiceboundCampaignModelTests
     }
 
     [Test]
+    public void SceneUpgradePreservesEnabledTransitionMarker()
+    {
+        var scene = ValidScene("scene-with-marker");
+        var transition = New("SceneTransition");
+        Set(transition, "id", "door");
+        Set(transition, "title", "Door");
+        Set(transition, "targetSceneId", "destination");
+        Set(transition, "markerEnabled", true);
+        var transitions = Array.CreateInstance(TypeOf("SceneTransition"), 1);
+        transitions.SetValue(transition, 0);
+        Set(scene, "transitions", transitions);
+
+        TypeOf("SceneSaveMigration").GetMethod("UpgradeScene").Invoke(null, new[] { scene });
+
+        Assert.That(Get<bool>(transition, "markerEnabled"), Is.True);
+    }
+
+    [Test]
     public void LegacySceneBecomesSingleSceneCampaignWithBattleState()
     {
         var scene = ValidScene("legacy");

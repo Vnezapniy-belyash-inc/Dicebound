@@ -17,13 +17,13 @@ public sealed class SceneTransitionMarker : NetworkBehaviour
     public override void OnNetworkSpawn()
     {
         _transitionId = _netTransitionId.Value.ToString();
-        OnEnabledChanged(!_netIsEnabled.Value, _netIsEnabled.Value);
         if (transform.Find("Visual") == null) BuildVisual(transform.position, _transitionId, _netTitle.Value.ToString());
         else
         {
             _visual = transform.Find("Visual").gameObject;
             Refresh(_netTitle.Value.ToString());
         }
+        OnEnabledChanged(!_netIsEnabled.Value, _netIsEnabled.Value);
         _netTransitionId.OnValueChanged += OnTransitionIdChanged;
         _netTitle.OnValueChanged += OnTitleChanged;
         _netPosition.OnValueChanged += OnPositionChanged;
@@ -109,16 +109,6 @@ public sealed class SceneTransitionMarker : NetworkBehaviour
         if (!nm.SpawnManager.SpawnedObjects.TryGetValue(markerNetworkObjectId, out NetworkObject networkObject)) return;
         var marker = networkObject.GetComponent<SceneTransitionMarker>();
         if (marker == null || string.IsNullOrEmpty(marker.TransitionId) || !marker._netIsEnabled.Value) return;
-        if (!NetworkPermissions.IsHostClient(senderId))
-        {
-            var grid = Object.FindAnyObjectByType<GridManager>();
-            var transition = Array.Find(SceneFileStore.GetActiveSceneTransitions(),
-                item => item != null && item.id == marker.TransitionId);
-            if (grid == null || transition == null) return;
-            var token = TokenController.FindSceneToken(transition.id);
-            if (token == null || !token.IsSpawned
-                || Vector3.Distance(token.CommittedPosition, marker.transform.position) > grid.CellSize * 1.5f) return;
-        }
         if (marker._activationCooldown.TryGetValue(senderId, out float lastRequest)
             && Time.unscaledTime - lastRequest < 0.5f) return;
         marker._activationCooldown[senderId] = Time.unscaledTime;
@@ -127,7 +117,7 @@ public sealed class SceneTransitionMarker : NetworkBehaviour
 
     public void Refresh(string title)
     {
-        _netTitle.Value = new FixedString128Bytes(title ?? string.Empty);
+        if (!IsSpawned || IsServer) _netTitle.Value = new FixedString128Bytes(title ?? string.Empty);
         if (_visual == null || !_visual) return;
         var label = _visual.transform.parent.Find("Label");
         var text = label != null ? label.GetComponent<TextMesh>() : null;
@@ -189,8 +179,7 @@ public sealed class SceneTransitionMarker : NetworkBehaviour
         visual.name = "Visual";
         visual.transform.SetParent(transform, false);
         visual.transform.localScale = new Vector3(0.42f, 0.012f, 0.42f);
-        var collider = visual.GetComponent<Collider>();
-        if (collider != null) Object.Destroy(collider);
+        visual.AddComponent<SceneTransitionMarkerClickRelay>().Initialize(this);
         var renderer = visual.GetComponent<Renderer>();
         if (renderer != null)
         {
@@ -215,7 +204,7 @@ public sealed class SceneTransitionMarker : NetworkBehaviour
         _visual = visual;
     }
 
-    private void OnMouseDown()
+    public void ActivateFromClick()
     {
         if (!IsSpawned || !GameplayInputGate.AllowsWorldPointerInput
             || SceneEditor.IsEditing || FogManager.IsManualEditing || MeasurementTool.Instance?.IsLocalActive == true
@@ -230,6 +219,13 @@ public sealed class SceneTransitionMarker : NetworkBehaviour
             nm.CustomMessagingManager.SendNamedMessage(MSG_ACTIVATE, NetworkManager.ServerClientId, writer);
         }
     }
+}
+
+public sealed class SceneTransitionMarkerClickRelay : MonoBehaviour
+{
+    private SceneTransitionMarker _marker;
+    public void Initialize(SceneTransitionMarker marker) => _marker = marker;
+    private void OnMouseDown() => _marker?.ActivateFromClick();
 }
 
 public sealed class SceneTransitionMarkerSpawnHandler : INetworkPrefabInstanceHandler
