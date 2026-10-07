@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 /// <summary>Host-only controls built on the existing map and initiative APIs.</summary>
@@ -40,11 +41,17 @@ public class DmPanelUI : MonoBehaviour
     private InputField _transitionXInput;
     private InputField _transitionYInput;
     private RectTransform _transitionList;
+    private RectTransform _heroTransferList;
+    private string _heroTransferSignature;
+    private readonly HashSet<string> _selectedHeroTransferIds = new();
     private GameObject _transitionPanel;
     private Text _transitionTargetText;
     private string _selectedTransitionTargetId;
     private int _transitionTargetIndex;
     private string _transitionSignature;
+    private string _editingTransitionId;
+    private string _transitionDraftTargetId;
+    private bool _transitionPickingCell;
     private InputField[] _statBlockInputs;
     private RectTransform _statBlockList;
     private string _selectedStatBlockId;
@@ -92,6 +99,8 @@ public class DmPanelUI : MonoBehaviour
     {
         if (_panel == null || !_panel.activeSelf) return;
         if (!IsLocalHost) { _panel.SetActive(false); return; }
+        if (_transitionPanel != null && _transitionPanel.activeSelf && _transitionPickingCell)
+            UpdateTransitionCellPicker();
         if (Time.unscaledTime < _nextRefresh) return;
         _nextRefresh = Time.unscaledTime + 1f;
         Refresh();
@@ -691,7 +700,7 @@ public class DmPanelUI : MonoBehaviour
             TextAnchor.MiddleLeft, new Vector2(0, 1), new Vector2(0, 1),
             new Vector2(280, 28), new Vector2(10, -6), true);
         Button(_transitionPanel.transform, "×", 28, 28, 310, -6,
-            () => _transitionPanel.SetActive(false), VttUiSkin.Button);
+            () => { _transitionPickingCell = false; _transitionPanel.SetActive(false); }, VttUiSkin.Button);
         _transitionTitleInput = CreateInput(_transitionPanel.transform, "Название перехода", 10, -40, 330, 30);
         _transitionXInput = CreateInput(_transitionPanel.transform, "X клетки", 10, -74, 100, 30);
         _transitionYInput = CreateInput(_transitionPanel.transform, "Y клетки", 120, -74, 100, 30);
@@ -702,12 +711,16 @@ public class DmPanelUI : MonoBehaviour
             new Vector2(192, 28), new Vector2(104, -110));
         Button(_transitionPanel.transform, "▶", 32, 28, 308, -110,
             () => StepTransitionTarget(1), VttUiSkin.Button);
-        Button(_transitionPanel.transform, "Добавить переход", 330, 30, 10, -144,
+        Button(_transitionPanel.transform, "Добавить", 160, 28, 10, -144,
             AddSceneTransition, VttUiSkin.Button);
+        Button(_transitionPanel.transform, "Обновить", 160, 28, 180, -144,
+            UpdateSelectedSceneTransition, VttUiSkin.Button);
+        Button(_transitionPanel.transform, "Выбрать клетку на карте", 330, 26, 10, -174,
+            BeginTransitionCellPicker, VttUiSkin.Button);
         var transitionViewport = Box(_transitionPanel.transform, "TransitionViewport",
             new Color(0, 0, 0, 0.01f), 0, false);
         Place(transitionViewport, new Vector2(0, 1), new Vector2(0, 1),
-            new Vector2(330, 210), new Vector2(10, -180));
+            new Vector2(330, 72), new Vector2(10, -210));
         transitionViewport.AddComponent<RectMask2D>();
         var transitionRows = new GameObject("TransitionRows", typeof(RectTransform));
         transitionRows.transform.SetParent(transitionViewport.transform, false);
@@ -720,7 +733,25 @@ public class DmPanelUI : MonoBehaviour
         transitionScroll.content = _transitionList;
         transitionScroll.horizontal = false;
         transitionScroll.vertical = true;
-        Button(_transitionPanel.transform, "Перенести всех героев в выбранную сцену", 330, 32, 10, -404,
+        Button(_transitionPanel.transform, "Выбрать всех / снять выбор", 330, 26, 10, -290,
+            ToggleAllHeroesForTransfer, VttUiSkin.Button);
+        var heroViewport = Box(_transitionPanel.transform, "HeroTransferViewport",
+            new Color(0, 0, 0, 0.01f), 0, false);
+        Place(heroViewport, new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(330, 76), new Vector2(10, -320));
+        heroViewport.AddComponent<RectMask2D>();
+        var heroRows = new GameObject("HeroTransferRows", typeof(RectTransform));
+        heroRows.transform.SetParent(heroViewport.transform, false);
+        _heroTransferList = heroRows.GetComponent<RectTransform>();
+        _heroTransferList.anchorMin = new Vector2(0, 1);
+        _heroTransferList.anchorMax = new Vector2(1, 1);
+        _heroTransferList.pivot = new Vector2(0.5f, 1);
+        var heroScroll = heroViewport.AddComponent<ScrollRect>();
+        heroScroll.viewport = heroViewport.GetComponent<RectTransform>();
+        heroScroll.content = _heroTransferList;
+        heroScroll.horizontal = false;
+        heroScroll.vertical = true;
+        Button(_transitionPanel.transform, "Перенести выбранных героев", 330, 32, 10, -404,
             TransferHeroesToSelectedScene, new Color(0.10f, 0.30f, 0.48f));
         _transitionPanel.SetActive(false);
     }
@@ -735,8 +766,38 @@ public class DmPanelUI : MonoBehaviour
     private void ToggleTransitionsPanel()
     {
         bool show = _transitionPanel != null && !_transitionPanel.activeSelf;
+        _transitionPickingCell = false;
         _transitionPanel?.SetActive(show);
-        if (show) RefreshSceneTransitions(true);
+        if (show) { RefreshSceneTransitions(true); RefreshHeroTransferList(true); }
+    }
+
+    private void BeginTransitionCellPicker()
+    {
+        _transitionPickingCell = true;
+        DiceUI.Instance?.ShowToolNotice("Наведите мышь на нужную клетку и нажмите ЛКМ. Esc — отмена.");
+    }
+
+    private void UpdateTransitionCellPicker()
+    {
+        if (Keyboard.current?.escapeKey.wasPressedThisFrame == true)
+        {
+            _transitionPickingCell = false;
+            return;
+        }
+        var mouse = Mouse.current;
+        var camera = Camera.main;
+        var grid = FindAnyObjectByType<GridManager>();
+        if (mouse == null || camera == null || grid == null || !mouse.leftButton.wasPressedThisFrame
+            || GameplayInputGate.IsPointerOverUI) return;
+        Ray ray = camera.ScreenPointToRay(mouse.position.ReadValue());
+        var plane = new Plane(Vector3.up, Vector3.zero);
+        if (!plane.Raycast(ray, out float distance)) return;
+        Vector2Int cell = grid.GetGridPosition(ray.GetPoint(distance));
+        if (cell.x < 0 || !grid.IsPointOnMap(grid.GetCellCenter(cell.x, cell.y))) return;
+        _transitionXInput.text = cell.x.ToString();
+        _transitionYInput.text = cell.y.ToString();
+        _transitionPickingCell = false;
+        DiceUI.Instance?.ShowToolNotice($"Клетка перехода выбрана: {cell.x}, {cell.y}.");
     }
 
     private CampaignScene[] GetTransitionTargets()
@@ -753,6 +814,7 @@ public class DmPanelUI : MonoBehaviour
         var targets = GetTransitionTargets();
         if (targets.Length == 0) { RefreshTransitionTargetLabel(); return; }
         _transitionTargetIndex = (_transitionTargetIndex + direction % targets.Length + targets.Length) % targets.Length;
+        _transitionDraftTargetId = targets[_transitionTargetIndex].sceneId;
         RefreshTransitionTargetLabel();
     }
 
@@ -766,7 +828,13 @@ public class DmPanelUI : MonoBehaviour
             return;
         }
         _transitionTargetIndex = Mathf.Clamp(_transitionTargetIndex, 0, targets.Length - 1);
+        if (!string.IsNullOrEmpty(_transitionDraftTargetId))
+        {
+            int draftIndex = Array.FindIndex(targets, item => item.sceneId == _transitionDraftTargetId);
+            if (draftIndex >= 0) _transitionTargetIndex = draftIndex;
+        }
         _selectedTransitionTargetId = targets[_transitionTargetIndex].sceneId;
+        _transitionDraftTargetId = _selectedTransitionTargetId;
         if (_transitionTargetText != null) _transitionTargetText.text = targets[_transitionTargetIndex].title;
     }
 
@@ -783,19 +851,116 @@ public class DmPanelUI : MonoBehaviour
         _transitionTitleInput.text = string.Empty;
         _transitionXInput.text = "0";
         _transitionYInput.text = "0";
+        _editingTransitionId = null;
+        RefreshSceneTransitions(true);
+    }
+
+    private void BeginEditSceneTransition(SceneTransition transition)
+    {
+        if (transition == null) return;
+        _editingTransitionId = transition.id;
+        _transitionTitleInput.text = transition.title;
+        _transitionXInput.text = transition.x.ToString();
+        _transitionYInput.text = transition.y.ToString();
+        _transitionDraftTargetId = transition.targetSceneId;
+        var targets = GetTransitionTargets();
+        _transitionTargetIndex = Mathf.Max(0, Array.FindIndex(targets, item => item.sceneId == transition.targetSceneId));
+        RefreshTransitionTargetLabel();
+    }
+
+    private void UpdateSelectedSceneTransition()
+    {
+        if (string.IsNullOrEmpty(_editingTransitionId))
+        {
+            DiceUI.Instance?.ShowToolNotice("Сначала нажмите на переход, который нужно изменить.");
+            return;
+        }
+        RefreshTransitionTargetLabel();
+        if (string.IsNullOrEmpty(_selectedTransitionTargetId)) return;
+        if (!int.TryParse(_transitionXInput.text, out int x) || !int.TryParse(_transitionYInput.text, out int y))
+        {
+            DiceUI.Instance?.ShowToolNotice("Введите целые координаты клетки.");
+            return;
+        }
+        SceneFileStore.UpdateSceneTransition(_editingTransitionId, _transitionTitleInput.text,
+            _selectedTransitionTargetId, x, y);
+        _editingTransitionId = null;
+        _transitionTitleInput.text = string.Empty;
+        _transitionXInput.text = "0";
+        _transitionYInput.text = "0";
         RefreshSceneTransitions(true);
     }
 
     private void TransferHeroesToSelectedScene()
     {
+        RefreshHeroTransferList(true);
         RefreshTransitionTargetLabel();
         if (string.IsNullOrEmpty(_selectedTransitionTargetId)) return;
+        string[] tokenIds = _selectedHeroTransferIds.ToArray();
+        if (tokenIds.Length == 0)
+        {
+            DiceUI.Instance?.ShowToolNotice("Выберите хотя бы одного героя.");
+            return;
+        }
         string targetId = _selectedTransitionTargetId;
         var target = Array.Find(SceneFileStore.GetCampaignScenes(), item => item != null && item.sceneId == targetId);
         if (target == null) return;
         DiceUI.Instance?.ConfirmAction("Перенести героев?",
-            $"Все герои активной сцены будут перемещены в «{target.title}». Их HP, состояния, изображения и записи инициативы сохранятся.",
-            () => { SceneFileStore.TransferHeroesToScene(targetId); RefreshSceneTransitions(true); });
+            $"Выбранные герои ({tokenIds.Length}) будут перемещены в «{target.title}». Их HP, состояния, изображения и записи инициативы сохранятся.",
+            () => { SceneFileStore.TransferHeroesToScene(targetId, tokenIds); _selectedHeroTransferIds.Clear(); RefreshSceneTransitions(true); RefreshHeroTransferList(true); });
+    }
+
+    private TokenController[] GetActiveSceneHeroes()
+    {
+        var tokens = FindObjectsByType<TokenController>(FindObjectsInactive.Exclude);
+        var heroes = new List<TokenController>();
+        foreach (var token in tokens)
+            if (token != null && token.IsSpawned && token.IsHero && token.SceneId == SceneFileStore.ActiveSceneId)
+                heroes.Add(token);
+        return heroes.ToArray();
+    }
+
+    private void ToggleAllHeroesForTransfer()
+    {
+        var heroes = GetActiveSceneHeroes();
+        bool allSelected = heroes.Length > 0 && heroes.All(token => _selectedHeroTransferIds.Contains(token.SceneId));
+        if (allSelected) _selectedHeroTransferIds.Clear();
+        else
+        {
+            _selectedHeroTransferIds.Clear();
+            foreach (var token in heroes) _selectedHeroTransferIds.Add(token.SceneId);
+        }
+        RefreshHeroTransferList(true);
+    }
+
+    private void RefreshHeroTransferList(bool force = false)
+    {
+        if (_heroTransferList == null) return;
+        var heroes = GetActiveSceneHeroes();
+        var signature = new System.Text.StringBuilder();
+        foreach (var token in heroes)
+            signature.Append(token.SceneId).Append(':').Append(token.TokenName).Append(':')
+                .Append(_selectedHeroTransferIds.Contains(token.SceneId)).Append(';');
+        string snapshot = signature.ToString();
+        if (!force && snapshot == _heroTransferSignature) return;
+        _heroTransferSignature = snapshot;
+        var liveIds = new HashSet<string>(heroes.Select(token => token.SceneId));
+        _selectedHeroTransferIds.RemoveWhere(id => !liveIds.Contains(id));
+        foreach (Transform child in _heroTransferList) Destroy(child.gameObject);
+        _heroTransferList.sizeDelta = new Vector2(0, Mathf.Max(76, heroes.Length * 34));
+        for (int i = 0; i < heroes.Length; i++)
+        {
+            var token = heroes[i];
+            string id = token.SceneId;
+            string marker = _selectedHeroTransferIds.Contains(id) ? "☑" : "☐";
+            string label = string.IsNullOrWhiteSpace(token.TokenName) ? "Герой" : token.TokenName;
+            Button(_heroTransferList, $"{marker}  {label}", 320, 30, 0, -i * 34,
+                () => { if (!_selectedHeroTransferIds.Add(id)) _selectedHeroTransferIds.Remove(id); RefreshHeroTransferList(true); },
+                VttUiSkin.Button);
+        }
+        if (heroes.Length == 0)
+            Label(_heroTransferList, "В активной сцене нет героев", 12, VttUiSkin.Muted,
+                TextAnchor.MiddleCenter, new Vector2(0, 1), new Vector2(1, 1), new Vector2(320, 34), Vector2.zero);
     }
 
     private void RefreshSceneTransitions(bool force = false)
@@ -810,7 +975,7 @@ public class DmPanelUI : MonoBehaviour
             string targetName = Array.Find(SceneFileStore.GetCampaignScenes(), scene => scene != null
                 && scene.sceneId == item.targetSceneId)?.title;
             signature.Append(item.id).Append(':').Append(item.title).Append(':').Append(targetName)
-                .Append(':').Append(item.x).Append(':').Append(item.y).Append(';');
+                .Append(':').Append(item.x).Append(':').Append(item.y).Append(':').Append(item.markerEnabled).Append(';');
         }
         string snapshot = signature.ToString();
         if (!force && snapshot == _transitionSignature) return;
@@ -823,12 +988,21 @@ public class DmPanelUI : MonoBehaviour
             string targetTitle = Array.Find(SceneFileStore.GetCampaignScenes(), item => item != null
                 && item.sceneId == transition.targetSceneId)?.title ?? "Сцена удалена";
             int row = Array.IndexOf(transitions, transition);
-            Button(_transitionList, $"{transition.title} → {targetTitle} ({transition.x},{transition.y})", 244, 34, 0, -row * 42,
-                () => { SceneFileStore.UseSceneTransition(transition.id); RefreshSceneTransitions(true); }, VttUiSkin.Button);
-            Button(_transitionList, "×", 72, 34, 252, -row * 42,
+            Button(_transitionList, $"{transition.title} → {targetTitle} ({transition.x},{transition.y})", 210, 34, 0, -row * 42,
+                () =>
+                {
+                    BeginEditSceneTransition(transition);
+                    SceneFileStore.UseSceneTransition(transition.id);
+                    RefreshSceneTransitions(true);
+                }, VttUiSkin.Button);
+            Button(_transitionList, transition.markerEnabled ? "Маркер ✓" : "Маркер", 94, 34, 216, -row * 42,
+                () => { SceneFileStore.ToggleSceneTransitionMarker(transition.id); RefreshSceneTransitions(true); },
+                transition.markerEnabled ? new Color(0.10f, 0.35f, 0.37f) : VttUiSkin.Button);
+            Button(_transitionList, "×", 42, 34, 314, -row * 42,
                 () => { SceneFileStore.DeleteSceneTransition(transition.id); RefreshSceneTransitions(true); },
                 new Color(0.28f, 0.11f, 0.14f));
         }
+        RefreshHeroTransferList(false);
     }
 
     private void AdjustColumn(float delta)

@@ -105,6 +105,8 @@ public class LateJoinSync : MonoBehaviour
 
         UnregisterServerHandler();
         UnregisterClientHandlers();
+        SceneTransitionMarker.ResetRegistration();
+        CellMarker.ResetRegistration();
         if (Instance == this)
             Instance = null;
     }
@@ -112,6 +114,8 @@ public class LateJoinSync : MonoBehaviour
     private void OnServerStopped(bool wasHost)
     {
         UnregisterServerHandler();
+        SceneTransitionMarker.ResetRegistration();
+        CellMarker.ResetRegistration();
         foreach (var routine in _syncRoutines.Values)
             if (routine != null) StopCoroutine(routine);
         _syncRoutines.Clear();
@@ -140,6 +144,11 @@ public class LateJoinSync : MonoBehaviour
     private void OnClientConnected(ulong clientId)
     {
         var nm = NetworkManager.Singleton;
+        if (nm != null && nm.IsListening)
+        {
+            CellMarker.EnsureRegistered();
+            SceneTransitionMarker.EnsureRegistered();
+        }
         if (nm != null && clientId == nm.LocalClientId)
             RegisterClientHandlers();
     }
@@ -147,7 +156,14 @@ public class LateJoinSync : MonoBehaviour
     private void Update()
     {
         var nm = NetworkManager.Singleton;
-        if (nm == null || !nm.IsServer) return;
+        if (nm == null) return;
+        if (nm.IsListening)
+        {
+            CellMarker.EnsureRegistered();
+            SceneTransitionMarker.EnsureRegistered();
+        }
+        if (!nm.IsServer) return;
+        if (SceneFileStore.HasCampaign) SceneFileStore.RefreshTransitionMarkers();
         int remaining = WorldObjectsPerFrame;
         bool progressed;
         do
@@ -206,7 +222,8 @@ public class LateJoinSync : MonoBehaviour
     private static bool IsWorldObject(NetworkObject obj) =>
         obj != null && (obj.GetComponent<TokenController>() != null
             || obj.GetComponent<NetworkDice>() != null
-            || obj.GetComponent<CellMarker>() != null);
+            || obj.GetComponent<CellMarker>() != null
+            || obj.GetComponent<SceneTransitionMarker>() != null);
 
     private IEnumerator ShowExistingWorldToClientRoutine(ulong clientId)
     {
@@ -372,6 +389,7 @@ public class LateJoinSync : MonoBehaviour
         }
 
         CellMarker.EnsureRegistered();
+        SceneTransitionMarker.EnsureRegistered();
         TokenImageSync.EnsureInstance();
 
         // Give NGO time to spawn scene NetworkObjects (tokens, dice, etc.)

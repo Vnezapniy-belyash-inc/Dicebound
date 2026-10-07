@@ -88,6 +88,7 @@ public class LobbyUI : MonoBehaviour
             NetworkManager.Singleton.GetComponent<Unity.Netcode.Transports.UTP.UnityTransport>()
                 .SetConnectionData("127.0.0.1", 7777, "127.0.0.1");
             CellMarker.EnsureRegistered();
+            SceneTransitionMarker.EnsureRegistered();
             if (!GameNetworkManager.Instance.StartHost()) throw new System.InvalidOperationException("Не удалось открыть редактор.");
             await WaitForPlayerRegistration();
             _sessionClientId = NetworkManager.Singleton.LocalClientId; _hasSessionClientId = true;
@@ -139,6 +140,7 @@ public class LobbyUI : MonoBehaviour
         finally
         {
             CellMarker.ResetRegistration();
+            SceneTransitionMarker.ResetRegistration();
             PlayerColors.Reset();
             RelayManager.ClearJoinCode();
             UnityEngine.SceneManagement.SceneManager.LoadScene(
@@ -166,6 +168,7 @@ public class LobbyUI : MonoBehaviour
 
             string code = await RelayManager.Instance.CreateRelayAllocation(9);
             CellMarker.EnsureRegistered();
+            SceneTransitionMarker.EnsureRegistered();
             if (!GameNetworkManager.Instance.StartHost())
                 throw new System.InvalidOperationException("Не удалось запустить хост.");
             await WaitForPlayerRegistration();
@@ -229,6 +232,7 @@ public class LobbyUI : MonoBehaviour
                 await System.Threading.Tasks.Task.Delay(200);
                 await RelayManager.Instance.JoinRelayAllocation(code);
                 CellMarker.EnsureRegistered();
+                SceneTransitionMarker.EnsureRegistered();
                 if (!GameNetworkManager.Instance.StartClient())
                     throw new System.InvalidOperationException("Не удалось запустить клиент.");
                 for (int tick = 0;

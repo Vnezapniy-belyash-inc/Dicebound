@@ -41,6 +41,23 @@ public class DiceboundCampaignModelTests
     }
 
     [Test]
+    public void LegacySceneTransitionDefaultsToNoWorldMarker()
+    {
+        var scene = ValidScene("legacy");
+        var transition = New("SceneTransition");
+        Set(transition, "id", "old-door");
+        Set(transition, "title", "Old door");
+        Set(transition, "targetSceneId", "destination");
+        var transitions = Array.CreateInstance(TypeOf("SceneTransition"), 1);
+        transitions.SetValue(transition, 0);
+        Set(scene, "transitions", transitions);
+
+        TypeOf("SceneSaveMigration").GetMethod("UpgradeScene").Invoke(null, new[] { scene });
+
+        Assert.That(Get<bool>(transition, "markerEnabled"), Is.False);
+    }
+
+    [Test]
     public void LegacySceneBecomesSingleSceneCampaignWithBattleState()
     {
         var scene = ValidScene("legacy");
@@ -145,6 +162,7 @@ public class DiceboundCampaignModelTests
         Set(transition, "targetSceneId", "scene-b");
         Set(transition, "x", 3);
         Set(transition, "y", 5);
+        Set(transition, "markerEnabled", true);
         var transitions = Array.CreateInstance(TypeOf("SceneTransition"), 1);
         transitions.SetValue(transition, 0);
         Set(Get<object>(entries.GetValue(0), "scene"), "transitions", transitions);
@@ -193,6 +211,7 @@ public class DiceboundCampaignModelTests
             var restoredTransitions = Get<Array>(Get<object>(Get<Array>(restored, "scenes").GetValue(0), "scene"), "transitions");
             Assert.That(restoredTransitions.Length, Is.EqualTo(1));
             Assert.That(Get<string>(restoredTransitions.GetValue(0), "targetSceneId"), Is.EqualTo("scene-b"));
+            Assert.That(Get<bool>(restoredTransitions.GetValue(0), "markerEnabled"), Is.True);
             var restoredBattle = Get<object>(Get<Array>(restored, "scenes").GetValue(1), "battle");
             var restoredParticipant = Get<Array>(restoredBattle, "participants").GetValue(0);
             Assert.That(Get<string>(restoredParticipant, "name"), Is.EqualTo("Следопыт"));

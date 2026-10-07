@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using Unity.Netcode;
 using UnityEngine;
@@ -397,6 +398,7 @@ public static class SceneFileStore
         var scene = JsonUtility.FromJson<SceneDefinition>(JsonUtility.ToJson(current.scene));
         scene.sceneId = Guid.NewGuid().ToString("N");
         scene.title = title;
+        scene.transitions = Array.Empty<SceneTransition>();
         scene.tokens = Array.Empty<SceneToken>();
         scene.masterData = new SceneMasterData();
         scene.geometry = new SceneGeometry { revealPaused = true };
@@ -439,6 +441,7 @@ public static class SceneFileStore
         var scene = JsonUtility.FromJson<SceneDefinition>(JsonUtility.ToJson(current.scene));
         scene.sceneId = Guid.NewGuid().ToString("N");
         scene.title = title;
+        scene.transitions = Array.Empty<SceneTransition>();
         var copy = new CampaignScene
         {
             sceneId = scene.sceneId,
@@ -474,19 +477,58 @@ public static class SceneFileStore
             throw new InvalidOperationException("Выберите другую существующую сцену.");
         title = (title ?? string.Empty).Trim();
         if (title.Length == 0 || title.Length > 128) throw new ArgumentException("Название перехода должно содержать от 1 до 128 символов.");
+        var grid = UnityEngine.Object.FindAnyObjectByType<GridManager>();
+        if (grid == null || !grid.IsPointOnMap(grid.GetCellCenter(x, y)))
+            throw new InvalidOperationException("Выберите клетку внутри карты.");
         var transitions = active.scene.transitions ?? Array.Empty<SceneTransition>();
         if (transitions.Length >= 256) throw new InvalidOperationException("В сцене достигнут лимит переходов.");
         var updated = new SceneTransition[transitions.Length + 1];
         Array.Copy(transitions, updated, transitions.Length);
-        updated[updated.Length - 1] = new SceneTransition
+        var created = new SceneTransition
         {
             id = Guid.NewGuid().ToString("N"), title = title, targetSceneId = target.sceneId, x = x, y = y
         };
+        updated[updated.Length - 1] = created;
         active.scene.transitions = updated;
         try { SceneValidation.Validate(_campaign); }
         catch { active.scene.transitions = transitions; throw; }
         _campaignDirty = true;
+        RefreshTransitionMarkers();
         DiceUI.Instance?.ShowToolNotice("Переход добавлен: " + title);
+    });
+
+    public static void UpdateSceneTransition(string transitionId, string title, string targetSceneId, int x, int y) => Safely(() =>
+    {
+        if (NetworkManager.Singleton?.IsHost != true || string.IsNullOrWhiteSpace(transitionId)) return;
+        if (!HasCampaign) throw new InvalidOperationException("Сначала загрузите или сохраните сессию.");
+        CaptureCampaign(_campaign.title);
+        var active = Array.Find(_campaign.scenes, item => item != null && item.sceneId == _campaign.activeSceneId);
+        var target = Array.Find(_campaign.scenes, item => item != null && item.sceneId == targetSceneId);
+        var transition = Array.Find(active?.scene?.transitions ?? Array.Empty<SceneTransition>(), item => item != null && item.id == transitionId);
+        if (active == null || transition == null || target == null || target.sceneId == active.sceneId)
+            throw new InvalidOperationException("Выберите другую существующую сцену.");
+        title = (title ?? string.Empty).Trim();
+        if (title.Length == 0 || title.Length > 128) throw new ArgumentException("Название перехода должно содержать от 1 до 128 символов.");
+        var grid = UnityEngine.Object.FindAnyObjectByType<GridManager>();
+        if (grid == null || !grid.IsPointOnMap(grid.GetCellCenter(x, y)))
+            throw new InvalidOperationException("Выберите клетку внутри карты.");
+        var backup = JsonUtility.FromJson<SceneTransition>(JsonUtility.ToJson(transition));
+        transition.title = title;
+        transition.targetSceneId = target.sceneId;
+        transition.x = x;
+        transition.y = y;
+        try { SceneValidation.Validate(_campaign); }
+        catch
+        {
+            transition.title = backup.title;
+            transition.targetSceneId = backup.targetSceneId;
+            transition.x = backup.x;
+            transition.y = backup.y;
+            throw;
+        }
+        RefreshTransitionMarkers();
+        _campaignDirty = true;
+        DiceUI.Instance?.ShowToolNotice("Переход обновлён: " + title);
     });
 
     public static void DeleteSceneTransition(string transitionId) => Safely(() =>
@@ -496,12 +538,61 @@ public static class SceneFileStore
         var transitions = active?.scene?.transitions ?? Array.Empty<SceneTransition>();
         int index = Array.FindIndex(transitions, item => item != null && item.id == transitionId);
         if (index < 0) return;
+        var deleted = transitions[index];
         var updated = new SceneTransition[transitions.Length - 1];
         if (index > 0) Array.Copy(transitions, 0, updated, 0, index);
         if (index < updated.Length) Array.Copy(transitions, index + 1, updated, index, updated.Length - index);
         active.scene.transitions = updated;
+        var marker = Array.Find(UnityEngine.Object.FindObjectsByType<SceneTransitionMarker>(FindObjectsInactive.Include),
+            item => item != null && item.TransitionId == deleted.id);
+        if (marker != null) marker.SetMarkerEnabled(false);
         _campaignDirty = true;
+        RefreshTransitionMarkers();
     });
+
+    public static void RefreshTransitionMarkers()
+    {
+        var existing = UnityEngine.Object.FindObjectsByType<SceneTransitionMarker>(FindObjectsInactive.Include);
+        if (NetworkManager.Singleton?.IsServer != true)
+        {
+            foreach (var marker in existing) if (marker != null) marker.SetMarkerEnabled(false);
+            return;
+        }
+        if (!HasCampaign)
+        {
+            foreach (var marker in existing) if (marker != null) marker.SetMarkerEnabled(false);
+            return;
+        }
+        var scene = Array.Find(_campaign.scenes, item => item != null && item.sceneId == _campaign.activeSceneId)?.scene;
+        var grid = UnityEngine.Object.FindAnyObjectByType<GridManager>();
+        if (scene?.transitions == null || grid == null)
+        {
+            foreach (var marker in existing) if (marker != null) marker.SetMarkerEnabled(false);
+            return;
+        }
+        var seen = new HashSet<string>();
+        foreach (var transition in scene.transitions)
+        {
+            if (transition == null || !transition.markerEnabled
+                || !grid.IsPointOnMap(grid.GetCellCenter(transition.x, transition.y))) continue;
+            seen.Add(transition.id);
+            var marker = Array.Find(existing, item => item != null && item.TransitionId == transition.id);
+            Vector3 position = grid.GetCellCenter(transition.x, transition.y, 0.025f);
+            if (marker == null) SceneTransitionMarker.Spawn(position, transition.id, transition.title);
+            else
+            {
+                marker.SetMarkerPosition(position);
+                marker.SetMarkerEnabled(true);
+                marker.Refresh(transition.title);
+            }
+        }
+        foreach (var marker in existing)
+            if (marker != null && !seen.Contains(marker.TransitionId))
+            {
+                if (marker.IsSpawned) marker.SetMarkerEnabled(false);
+                else UnityEngine.Object.Destroy(marker.gameObject);
+            }
+    }
 
     public static void UseSceneTransition(string transitionId) => Safely(() =>
     {
@@ -515,7 +606,27 @@ public static class SceneFileStore
         SwitchToScene(transition.targetSceneId);
     });
 
-    public static void TransferHeroesToScene(string targetSceneId) => Safely(() =>
+    public static void ToggleSceneTransitionMarker(string transitionId) => Safely(() =>
+    {
+        if (NetworkManager.Singleton?.IsHost != true || string.IsNullOrWhiteSpace(transitionId)) return;
+        if (!HasCampaign) throw new InvalidOperationException("Сначала загрузите или сохраните сессию.");
+        CaptureCampaign(_campaign.title);
+        var active = Array.Find(_campaign.scenes, item => item != null && item.sceneId == _campaign.activeSceneId);
+        var transition = Array.Find(active?.scene?.transitions ?? Array.Empty<SceneTransition>(),
+            item => item != null && item.id == transitionId);
+        if (transition == null) throw new InvalidOperationException("Переход не найден.");
+        var grid = UnityEngine.Object.FindAnyObjectByType<GridManager>();
+        if (grid == null || !grid.IsPointOnMap(grid.GetCellCenter(transition.x, transition.y)))
+            throw new InvalidOperationException("Клетка перехода находится за пределами карты.");
+        transition.markerEnabled = !transition.markerEnabled;
+        RefreshTransitionMarkers();
+        _campaignDirty = true;
+        DiceUI.Instance?.ShowToolNotice(transition.markerEnabled
+            ? "Маркер перехода включён на карте."
+            : "Маркер перехода скрыт на карте.");
+    });
+
+    public static void TransferHeroesToScene(string targetSceneId, string[] tokenIds) => Safely(() =>
     {
         if (NetworkManager.Singleton?.IsHost != true) return;
         if (!HasCampaign) throw new InvalidOperationException("Сначала загрузите или сохраните сессию.");
@@ -525,8 +636,13 @@ public static class SceneFileStore
         if (source == null || target == null || source.sceneId == target.sceneId)
             throw new InvalidOperationException("Выберите другую существующую сцену.");
 
-        var moving = Array.FindAll(source.scene.tokens, token => token != null && token.hero);
+        var selectedIds = new HashSet<string>(tokenIds ?? Array.Empty<string>());
+        if (selectedIds.Count == 0) throw new InvalidOperationException("Выберите хотя бы одного героя.");
+        var moving = Array.FindAll(source.scene.tokens,
+            token => token != null && token.hero && selectedIds.Contains(token.id));
         if (moving.Length == 0) throw new InvalidOperationException("В активной сцене нет героев для переноса.");
+        if (moving.Length != selectedIds.Count)
+            throw new InvalidOperationException("Выбран несуществующий герой или токен не из активной сцены.");
         var backup = JsonUtility.FromJson<CampaignDefinition>(JsonUtility.ToJson(_campaign));
         bool previousDirty = _campaignDirty;
         var masterById = new Dictionary<string, MasterTokenData>();
@@ -587,8 +703,7 @@ public static class SceneFileStore
             participant => participant != null && !string.IsNullOrEmpty(participant.tokenId)
                 && movingIds.Contains(participant.tokenId));
         source.battle.participants = Array.FindAll(source.battle.participants,
-            participant => participant == null || string.IsNullOrEmpty(participant.tokenId)
-                || !movingIds.Contains(participant.tokenId));
+            participant => participant == null || !movingIds.Contains(participant.tokenId));
         var targetParticipants = new List<BattleParticipant>(target.battle.participants);
         foreach (var participant in movedParticipants)
         {
@@ -598,12 +713,12 @@ public static class SceneFileStore
             targetParticipants.Add(copy);
         }
         target.battle.participants = targetParticipants.ToArray();
+        bool activeParticipantMoved = false;
         foreach (var participant in movedParticipants)
-            if (participant.id == source.battle.activeParticipantId)
-            {
-                source.battle.activeParticipantId = string.Empty;
-                break;
-            }
+            if (participant.id == source.battle.activeParticipantId) { activeParticipantMoved = true; break; }
+        if (activeParticipantMoved) source.battle.activeParticipantId = string.Empty;
+        source.battle.round = NormalizeRound(source.battle);
+        target.battle.round = NormalizeRound(target.battle);
         try { SceneValidation.Validate(_campaign); }
         catch { _campaign = backup; _campaignDirty = previousDirty; throw; }
         _campaignDirty = true;
@@ -611,6 +726,19 @@ public static class SceneFileStore
         catch { _campaign = backup; _campaignDirty = previousDirty; throw; }
         DiceUI.Instance?.ShowToolNotice($"В сцену «{target.title}» перенесено героев: {moving.Length}.");
     });
+
+    private static int NormalizeRound(SceneBattleState battle)
+    {
+        if (battle?.participants == null || battle.participants.Length == 0) return 1;
+        Array.Sort(battle.participants, (left, right) =>
+        {
+            if (left == null) return right == null ? 0 : 1;
+            if (right == null) return -1;
+            int initiative = right.initiative.CompareTo(left.initiative);
+            return initiative != 0 ? initiative : string.CompareOrdinal(left.id, right.id);
+        });
+        return Mathf.Max(1, battle.round);
+    }
 
     private static void CycleSceneCore(int direction)
     {
@@ -794,6 +922,8 @@ public static class SceneFileStore
         _campaign = null;
         _campaignDirty = false;
         _currentMapAssetId = null;
+        foreach (var marker in UnityEngine.Object.FindObjectsByType<SceneTransitionMarker>(FindObjectsInactive.Include))
+            if (marker != null) marker.SetMarkerEnabled(false);
         ApplyScene(scene, null);
     }
 
@@ -841,6 +971,7 @@ public static class SceneFileStore
             SceneEditor.Instance.Replace(scene.geometry);
             FogManager.Instance?.Restore(scene.fog);
             MapController.Instance.RestoreSceneMap(map, scene.mapPosition, scene.mapRotation, scene.mapScale);
+            RefreshTransitionMarkers();
             foreach (var data in scene.tokens)
             {
                 masterTokens.TryGetValue(data.id, out MasterTokenData masterData);
@@ -865,6 +996,7 @@ public static class SceneFileStore
         _currentMapAssetId = scene.mapAssetId;
         _lastSavedState = JsonUtility.ToJson(Capture(true));
     }
+
     private static void Safely(Action action)
     {
         try { action(); }

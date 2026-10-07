@@ -48,6 +48,7 @@ public class TokenManager : MonoBehaviour
             if (NetworkManager.Singleton.IsServer) OnServerStarted();
             TokenImageSync.EnsureInstance();
             CellMarker.EnsureRegistered();
+            SceneTransitionMarker.EnsureRegistered();
         }
     }
 
@@ -59,6 +60,7 @@ public class TokenManager : MonoBehaviour
                 MSG_SPAWN_TOKEN, OnSpawnTokenRequest);
             _handlerRegistered = true;
         }
+        SceneTransitionMarker.EnsureRegistered();
     }
 
     private void OnServerStopped(bool wasHost)

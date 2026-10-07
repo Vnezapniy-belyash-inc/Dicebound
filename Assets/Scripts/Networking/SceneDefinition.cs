@@ -71,6 +71,7 @@ using UnityEngine;
     public string title;
     public string targetSceneId;
     public int x, y;
+    public bool markerEnabled;
 }
 
 /// <summary>Master-only, scene-local token data. Never put this in replicated token state.</summary>
@@ -241,6 +242,9 @@ public static class SceneSaveMigration
         else throw new FormatException("Неподдерживаемая версия сцены.");
 
         scene.masterData ??= new SceneMasterData();
+        scene.transitions ??= Array.Empty<SceneTransition>();
+        foreach (var transition in scene.transitions)
+            if (transition != null) transition.markerEnabled = false;
 
         return scene;
     }
