@@ -306,6 +306,7 @@ public sealed class FogManager : MonoBehaviour
     private void ReceiveAck(ulong sender, FastBufferReader reader)
     {
         if (_network == null || !_network.IsServer || !_network.ConnectedClients.ContainsKey(sender)) return;
+        if (!reader.TryBeginRead(sizeof(int))) return;
         reader.ReadValueSafe(out int revision);
         if (revision > 0 && revision <= _revision) _clientAcks[sender] = revision;
     }
@@ -384,7 +385,7 @@ public sealed class FogManager : MonoBehaviour
             _mask.SetPixels32(colors); _mask.Apply(false); _textureDirty = false;
         }
         Texture2D displayMask = _width == _grid.Width && _height == _grid.Height ? _mask : null;
-        MapController.Instance?.ApplyFog(displayMask, display, _grid);
+        bool appliedToMap = MapController.Instance?.ApplyFog(displayMask, display, _grid) == true;
         if (_cover == null)
         {
             _cover = GameObject.CreatePrimitive(PrimitiveType.Quad); _cover.name = "Unexplored map cover"; _cover.transform.SetParent(transform, false);
@@ -398,7 +399,8 @@ public sealed class FogManager : MonoBehaviour
         _cover.transform.localScale = new Vector3(_grid.Width * _grid.CellSize, _grid.Height * _grid.CellSize, 1);
         _coverMaterial.SetTexture("_FogMask", displayMask);
         foreach (var token in FindObjectsByType<TokenController>(FindObjectsInactive.Exclude)) if (token.IsSpawned) token.RefreshFogAppearance();
-        if (_pendingRevisionAck > 0 && _network != null && _network.IsListening)
+        if (_pendingRevisionAck > 0 && appliedToMap && displayMask != null && !_textureDirty
+            && _network != null && _network.IsListening && !_network.IsServer)
         {
             using var ack = new FastBufferWriter(sizeof(int), Allocator.Temp);
             ack.WriteValueSafe(_pendingRevisionAck);

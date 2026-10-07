@@ -563,11 +563,11 @@ public class MapController : NetworkBehaviour
     }
 
     public bool HasImage => _currentTexture != null;
-    public void ApplyFog(Texture2D mask, bool enabled, GridManager grid)
+    public bool ApplyFog(Texture2D mask, bool enabled, GridManager grid)
     {
-        if (_mapMaterial == null) return;
+        if (_mapMaterial == null || grid == null) return false;
         var shader = _fogShader != null ? _fogShader : _fogShader = Resources.Load<Shader>("DiceboundFog");
-        if (shader == null) return;
+        if (shader == null) return false;
         if (_mapMaterial.shader != shader)
         {
             _mapMaterial.shader = shader;
@@ -578,6 +578,7 @@ public class MapController : NetworkBehaviour
         _mapMaterial.SetFloat("_FogEnabled", enabled ? 1 : 0);
         _mapMaterial.SetVector("_GridSize", new Vector4(grid.Width * grid.CellSize, grid.Height * grid.CellSize, 0, 0));
         _mapMaterial.SetMatrix("_GridWorldToLocal", Matrix4x4.TRS(grid.GridOrigin, grid.GridRotation, Vector3.one).inverse);
+        return true;
     }
 
     public void RestoreSceneMap(byte[] data, Vector3 position, Vector3 rotation, float scale)

@@ -138,6 +138,7 @@ public sealed class SceneEditor : MonoBehaviour
     private void ReceiveAck(ulong client, FastBufferReader reader)
     {
         if (_network == null || !_network.IsServer || !_network.ConnectedClients.ContainsKey(client)) return;
+        if (!reader.TryBeginRead(sizeof(int))) return;
         reader.ReadValueSafe(out int revision);
         if (revision > 0 && revision <= _revision) _clientAcks[client] = revision;
     }
