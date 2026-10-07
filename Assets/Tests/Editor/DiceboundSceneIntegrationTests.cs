@@ -107,6 +107,10 @@ public class DiceboundSceneIntegrationTests
         Assert.That(Read<string>(restored, "TokenName"), Is.EqualTo("Гоблин"));
         Assert.That(Read<string>(restored, "SceneId"), Is.EqualTo(stableId));
         Assert.That(Read<bool>(restored, "IsHidden"), Is.True);
+        var eligibleTransfers = (Array)TypeOf("DmPanelUI").GetMethod("GetActiveSceneTokens",
+            BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, null);
+        Assert.That(eligibleTransfers.Length, Is.EqualTo(1), "The transfer list must include spawned NPCs even when hidden.");
+        Assert.That(eligibleTransfers.GetValue(0), Is.SameAs(restored), "Token IDs must not be compared with the active scene ID.");
         Assert.That(Read<int>(restored, "VisionFeet"), Is.EqualTo(30));
         Assert.That(Call(restored, "GetPortraitJpg"), Is.Not.Null);
         var geometry = Call(model, "Snapshot");

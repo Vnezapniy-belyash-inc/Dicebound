@@ -625,7 +625,10 @@ public static class SceneFileStore
             : "Маркер перехода скрыт на карте.");
     });
 
-    public static void TransferHeroesToScene(string targetSceneId, string[] tokenIds) => Safely(() =>
+    public static void TransferHeroesToScene(string targetSceneId, string[] tokenIds)
+        => TransferTokensToScene(targetSceneId, tokenIds);
+
+    public static void TransferTokensToScene(string targetSceneId, string[] tokenIds) => Safely(() =>
     {
         if (NetworkManager.Singleton?.IsHost != true) return;
         if (!HasCampaign) throw new InvalidOperationException("Сначала загрузите или сохраните сессию.");
@@ -636,12 +639,12 @@ public static class SceneFileStore
             throw new InvalidOperationException("Выберите другую существующую сцену.");
 
         var selectedIds = new HashSet<string>(tokenIds ?? Array.Empty<string>());
-        if (selectedIds.Count == 0) throw new InvalidOperationException("Выберите хотя бы одного героя.");
+        if (selectedIds.Count == 0) throw new InvalidOperationException("Выберите хотя бы один токен.");
         var moving = Array.FindAll(source.scene.tokens,
-            token => token != null && token.hero && selectedIds.Contains(token.id));
-        if (moving.Length == 0) throw new InvalidOperationException("В активной сцене нет героев для переноса.");
+            token => token != null && selectedIds.Contains(token.id));
+        if (moving.Length == 0) throw new InvalidOperationException("В активной сцене нет выбранных токенов для переноса.");
         if (moving.Length != selectedIds.Count)
-            throw new InvalidOperationException("Выбран несуществующий герой или токен не из активной сцены.");
+            throw new InvalidOperationException("Выбран несуществующий токен или токен не из активной сцены.");
         var backup = JsonUtility.FromJson<CampaignDefinition>(JsonUtility.ToJson(_campaign));
         bool previousDirty = _campaignDirty;
         var masterById = new Dictionary<string, MasterTokenData>();
@@ -679,7 +682,7 @@ public static class SceneFileStore
                 occupiedCells.Add((x, y));
                 break;
             }
-            if (cell < 0) throw new InvalidOperationException("На карте назначения не осталось свободных клеток для героев.");
+            if (cell < 0) throw new InvalidOperationException("На карте назначения не осталось свободных клеток для токенов.");
             copy.position = new Vector3(cell % target.scene.gridWidth + 0.5f, 0,
                 cell / target.scene.gridWidth + 0.5f);
             targetTokens.Add(copy);
@@ -723,7 +726,7 @@ public static class SceneFileStore
         _campaignDirty = true;
         try { SwitchToScene(target.sceneId); }
         catch { _campaign = backup; _campaignDirty = previousDirty; throw; }
-        DiceUI.Instance?.ShowToolNotice($"В сцену «{target.title}» перенесено героев: {moving.Length}.");
+        DiceUI.Instance?.ShowToolNotice($"В сцену «{target.title}» перенесено токенов: {moving.Length}.");
     });
 
     private static int NormalizeRound(SceneBattleState battle)
