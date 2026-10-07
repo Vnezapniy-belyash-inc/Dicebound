@@ -25,6 +25,29 @@ public class DiceboundCampaignModelTests
     }
 
     [Test]
+    public void InitiativeSnapshotRetainsMoreThanThirtyParticipants()
+    {
+        var root = new GameObject("Large initiative test");
+        try
+        {
+            var tracker = root.AddComponent(TypeOf("InitiativeTracker"));
+            var rows = new string[40];
+            for (int i = 0; i < rows.Length; i++)
+                rows[i] = "{\"id\":" + (i + 1) + ",\"name\":\"Участник " + i
+                    + "\",\"initiative\":10,\"publicHp\":-1}";
+            string json = "{\"currentIndex\":35,\"round\":3,\"activeParticipantId\":\"36\",\"entries\":["
+                + string.Join(",", rows) + "]}";
+            tracker.GetType().GetMethod("ParseData", BindingFlags.Instance | BindingFlags.NonPublic)
+                .Invoke(tracker, new object[] { json });
+            var battle = tracker.GetType().GetMethod("CaptureBattleState").Invoke(tracker, null);
+            Assert.That(Get<Array>(battle, "participants").Length, Is.EqualTo(40));
+            Assert.That(Get<string>(battle, "activeParticipantId"), Is.EqualTo("36"));
+            Assert.That(Get<int>(battle, "round"), Is.EqualTo(3));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(root); }
+    }
+
+    [Test]
     public void BattleRejectsDuplicateTokenReferences()
     {
         var scene = ValidScene("scene");

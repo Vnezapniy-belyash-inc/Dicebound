@@ -446,11 +446,14 @@ public class InitiativeTracker : NetworkBehaviour
     {
         if (IsServer || sender != Unity.Netcode.NetworkManager.ServerClientId || !reader.TryBeginRead(8)) return;
         reader.ReadValueSafe(out int revision); reader.ReadValueSafe(out int length);
-        if (revision <= _receivedRevision || length <= 0 || length > MaxStateBytes || !reader.TryBeginRead(length)) return;
-        var bytes = new byte[length]; reader.ReadBytesSafe(ref bytes, length);
-        ParseData(System.Text.Encoding.UTF8.GetString(bytes));
-        _receivedRevision = revision;
-        RebuildRows();
+        if (revision < _receivedRevision || length <= 0 || length > MaxStateBytes || !reader.TryBeginRead(length)) return;
+        if (revision > _receivedRevision)
+        {
+            var bytes = new byte[length]; reader.ReadBytesSafe(ref bytes, length);
+            ParseData(System.Text.Encoding.UTF8.GetString(bytes));
+            _receivedRevision = revision;
+            RebuildRows();
+        }
         using var ack = new FastBufferWriter(sizeof(int), Unity.Collections.Allocator.Temp);
         ack.WriteValueSafe(revision);
         NetworkManager.CustomMessagingManager.SendNamedMessage(AckMessage, Unity.Netcode.NetworkManager.ServerClientId, ack);
