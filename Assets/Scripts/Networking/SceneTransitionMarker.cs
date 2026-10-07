@@ -104,9 +104,11 @@ public sealed class SceneTransitionMarker : NetworkBehaviour
     private static void OnActivateRequest(ulong senderId, FastBufferReader reader)
     {
         var nm = NetworkManager.Singleton;
-        if (nm == null || !nm.IsServer) return;
+        if (nm == null || !nm.IsServer || !nm.ConnectedClients.ContainsKey(senderId)
+            || HostSceneCurtain.IsCurtainDown || !reader.TryBeginRead(sizeof(ulong))) return;
         reader.ReadValueSafe(out ulong markerNetworkObjectId);
         if (!nm.SpawnManager.SpawnedObjects.TryGetValue(markerNetworkObjectId, out NetworkObject networkObject)) return;
+        if (!networkObject.IsNetworkVisibleTo(senderId)) return;
         var marker = networkObject.GetComponent<SceneTransitionMarker>();
         if (marker == null || string.IsNullOrEmpty(marker.TransitionId) || !marker._netIsEnabled.Value) return;
         if (marker._activationCooldown.TryGetValue(senderId, out float lastRequest)
