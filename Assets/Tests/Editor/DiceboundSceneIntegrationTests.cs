@@ -135,6 +135,40 @@ public class DiceboundSceneIntegrationTests
         var bits = Convert.FromBase64String((string)blankMemory.GetType().GetField("explored").GetValue(blankMemory));
         Assert.That(Array.TrueForAll(bits, value => value == 0), Is.True);
         Assert.That(Read<bool>(fog, "Paused"), Is.True);
+        var tracker = Add("InitiativeTracker", "Initiative restore test");
+        tracker.GetComponent<NetworkObject>().Spawn();
+        var battle = Activator.CreateInstance(TypeOf("SceneBattleState"));
+        var participantType = TypeOf("BattleParticipant");
+        var participants = Array.CreateInstance(participantType, 2);
+        string transferredId = Guid.NewGuid().ToString("N");
+        for (int i = 0; i < 2; i++)
+        {
+            var participant = Activator.CreateInstance(participantType);
+            participantType.GetField("id").SetValue(participant, i == 0 ? transferredId : "1");
+            participantType.GetField("name").SetValue(participant, i == 0 ? "Перенесённый" : "Исходный");
+            participantType.GetField("initiative").SetValue(participant, i == 0 ? 12 : 20);
+            participantType.GetField("hasHitPoints").SetValue(participant, true);
+            participantType.GetField("hitPoints").SetValue(participant, i == 0 ? 7 : 15);
+            participants.SetValue(participant, i);
+        }
+        battle.GetType().GetField("participants").SetValue(battle, participants);
+        battle.GetType().GetField("activeParticipantId").SetValue(battle, transferredId);
+        battle.GetType().GetField("round").SetValue(battle, 4);
+        Call(tracker, "RestoreBattleState", battle);
+        var capturedBattle = Call(tracker, "CaptureBattleState");
+        var capturedParticipants = (Array)capturedBattle.GetType().GetField("participants").GetValue(capturedBattle);
+        string activeId = (string)capturedBattle.GetType().GetField("activeParticipantId").GetValue(capturedBattle);
+        var ids = new System.Collections.Generic.HashSet<string>();
+        foreach (object participant in capturedParticipants)
+        {
+            string id = (string)participantType.GetField("id").GetValue(participant);
+            Assert.That(ids.Add(id), Is.True, "Restored IDs must be unique.");
+            string name = (string)participantType.GetField("name").GetValue(participant);
+            Assert.That(participantType.GetField("hitPoints").GetValue(participant), Is.EqualTo(name == "Перенесённый" ? 7 : 15));
+            if (id == activeId) Assert.That(name, Is.EqualTo("Перенесённый"));
+        }
+        Assert.That(ids.Contains(activeId), Is.True);
+        Assert.That(capturedBattle.GetType().GetField("round").GetValue(capturedBattle), Is.EqualTo(4));
     }
 
     [UnityTearDown]
