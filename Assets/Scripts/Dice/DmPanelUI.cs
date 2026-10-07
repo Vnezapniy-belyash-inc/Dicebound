@@ -687,7 +687,7 @@ public class DmPanelUI : MonoBehaviour
         _transitionPanel = Box(parent, "SceneTransitions", VttUiSkin.Panel, 10);
         Place(_transitionPanel, new Vector2(0, 1), new Vector2(0, 1),
             new Vector2(350, 450), new Vector2(0, -24));
-        Label(_transitionPanel.transform, "Переходы между сценами", 15, VttUiSkin.Text,
+        Label(_transitionPanel.transform, "Переходы и перемещение героев", 15, VttUiSkin.Text,
             TextAnchor.MiddleLeft, new Vector2(0, 1), new Vector2(0, 1),
             new Vector2(280, 28), new Vector2(10, -6), true);
         Button(_transitionPanel.transform, "×", 28, 28, 310, -6,
@@ -707,7 +707,7 @@ public class DmPanelUI : MonoBehaviour
         var transitionViewport = Box(_transitionPanel.transform, "TransitionViewport",
             new Color(0, 0, 0, 0.01f), 0, false);
         Place(transitionViewport, new Vector2(0, 1), new Vector2(0, 1),
-            new Vector2(330, 254), new Vector2(10, -180));
+            new Vector2(330, 210), new Vector2(10, -180));
         transitionViewport.AddComponent<RectMask2D>();
         var transitionRows = new GameObject("TransitionRows", typeof(RectTransform));
         transitionRows.transform.SetParent(transitionViewport.transform, false);
@@ -720,6 +720,8 @@ public class DmPanelUI : MonoBehaviour
         transitionScroll.content = _transitionList;
         transitionScroll.horizontal = false;
         transitionScroll.vertical = true;
+        Button(_transitionPanel.transform, "Перенести всех героев в выбранную сцену", 330, 32, 10, -404,
+            TransferHeroesToSelectedScene, new Color(0.10f, 0.30f, 0.48f));
         _transitionPanel.SetActive(false);
     }
 
@@ -782,6 +784,18 @@ public class DmPanelUI : MonoBehaviour
         _transitionXInput.text = "0";
         _transitionYInput.text = "0";
         RefreshSceneTransitions(true);
+    }
+
+    private void TransferHeroesToSelectedScene()
+    {
+        RefreshTransitionTargetLabel();
+        if (string.IsNullOrEmpty(_selectedTransitionTargetId)) return;
+        string targetId = _selectedTransitionTargetId;
+        var target = Array.Find(SceneFileStore.GetCampaignScenes(), item => item != null && item.sceneId == targetId);
+        if (target == null) return;
+        DiceUI.Instance?.ConfirmAction("Перенести героев?",
+            $"Все герои активной сцены будут перемещены в «{target.title}». Их HP, состояния, изображения и записи инициативы сохранятся.",
+            () => { SceneFileStore.TransferHeroesToScene(targetId); RefreshSceneTransitions(true); });
     }
 
     private void RefreshSceneTransitions(bool force = false)

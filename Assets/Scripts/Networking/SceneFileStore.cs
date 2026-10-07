@@ -515,6 +515,103 @@ public static class SceneFileStore
         SwitchToScene(transition.targetSceneId);
     });
 
+    public static void TransferHeroesToScene(string targetSceneId) => Safely(() =>
+    {
+        if (NetworkManager.Singleton?.IsHost != true) return;
+        if (!HasCampaign) throw new InvalidOperationException("Сначала загрузите или сохраните сессию.");
+        CaptureCampaign(_campaign.title);
+        var source = Array.Find(_campaign.scenes, item => item != null && item.sceneId == _campaign.activeSceneId);
+        var target = Array.Find(_campaign.scenes, item => item != null && item.sceneId == targetSceneId);
+        if (source == null || target == null || source.sceneId == target.sceneId)
+            throw new InvalidOperationException("Выберите другую существующую сцену.");
+
+        var moving = Array.FindAll(source.scene.tokens, token => token != null && token.hero);
+        if (moving.Length == 0) throw new InvalidOperationException("В активной сцене нет героев для переноса.");
+        var backup = JsonUtility.FromJson<CampaignDefinition>(JsonUtility.ToJson(_campaign));
+        bool previousDirty = _campaignDirty;
+        var masterById = new Dictionary<string, MasterTokenData>();
+        foreach (var master in source.scene.masterData.tokens) masterById[master.tokenId] = master;
+        var movingIds = new HashSet<string>();
+        var newIds = new Dictionary<string, string>();
+        foreach (var token in moving)
+        {
+            string oldId = token.id;
+            movingIds.Add(oldId);
+            string id = oldId;
+            if (Array.Exists(target.scene.tokens, existing => existing != null && existing.id == id))
+                id = Guid.NewGuid().ToString("N");
+            newIds[oldId] = id;
+        }
+
+        var targetTokens = new List<SceneToken>(target.scene.tokens);
+        var targetMasters = new List<MasterTokenData>(target.scene.masterData.tokens);
+        var occupiedCells = new HashSet<(int X, int Y)>();
+        foreach (var existing in target.scene.tokens)
+            if (existing != null) occupiedCells.Add((Mathf.FloorToInt(existing.position.x), Mathf.FloorToInt(existing.position.z)));
+        for (int i = 0; i < moving.Length; i++)
+        {
+            var copy = JsonUtility.FromJson<SceneToken>(JsonUtility.ToJson(moving[i]));
+            string oldId = copy.id;
+            copy.id = newIds[oldId];
+            int cells = target.scene.gridWidth * target.scene.gridHeight;
+            int cell = -1;
+            for (int attempt = 0; attempt < cells; attempt++)
+            {
+                int x = (target.scene.gridWidth / 2 + attempt % target.scene.gridWidth) % target.scene.gridWidth;
+                int y = (target.scene.gridHeight / 2 + attempt / target.scene.gridWidth) % target.scene.gridHeight;
+                if (occupiedCells.Contains((x, y))) continue;
+                cell = y * target.scene.gridWidth + x;
+                occupiedCells.Add((x, y));
+                break;
+            }
+            if (cell < 0) throw new InvalidOperationException("На карте назначения не осталось свободных клеток для героев.");
+            copy.position = new Vector3(cell % target.scene.gridWidth + 0.5f, 0,
+                cell / target.scene.gridWidth + 0.5f);
+            targetTokens.Add(copy);
+            if (masterById.TryGetValue(oldId, out MasterTokenData master))
+            {
+                var masterCopy = JsonUtility.FromJson<MasterTokenData>(JsonUtility.ToJson(master));
+                masterCopy.tokenId = copy.id;
+                targetMasters.Add(masterCopy);
+            }
+        }
+        source.scene.tokens = Array.FindAll(source.scene.tokens, token => token == null || !movingIds.Contains(token.id));
+        source.scene.masterData.tokens = Array.FindAll(source.scene.masterData.tokens,
+            master => master == null || !movingIds.Contains(master.tokenId));
+        target.scene.tokens = targetTokens.ToArray();
+        target.scene.masterData.tokens = targetMasters.ToArray();
+        source.scene.includesPlayers = true;
+        target.scene.includesPlayers = true;
+
+        var movedParticipants = Array.FindAll(source.battle.participants,
+            participant => participant != null && !string.IsNullOrEmpty(participant.tokenId)
+                && movingIds.Contains(participant.tokenId));
+        source.battle.participants = Array.FindAll(source.battle.participants,
+            participant => participant == null || string.IsNullOrEmpty(participant.tokenId)
+                || !movingIds.Contains(participant.tokenId));
+        var targetParticipants = new List<BattleParticipant>(target.battle.participants);
+        foreach (var participant in movedParticipants)
+        {
+            var copy = JsonUtility.FromJson<BattleParticipant>(JsonUtility.ToJson(participant));
+            copy.id = Guid.NewGuid().ToString("N");
+            copy.tokenId = newIds[participant.tokenId];
+            targetParticipants.Add(copy);
+        }
+        target.battle.participants = targetParticipants.ToArray();
+        foreach (var participant in movedParticipants)
+            if (participant.id == source.battle.activeParticipantId)
+            {
+                source.battle.activeParticipantId = string.Empty;
+                break;
+            }
+        try { SceneValidation.Validate(_campaign); }
+        catch { _campaign = backup; _campaignDirty = previousDirty; throw; }
+        _campaignDirty = true;
+        try { SwitchToScene(target.sceneId); }
+        catch { _campaign = backup; _campaignDirty = previousDirty; throw; }
+        DiceUI.Instance?.ShowToolNotice($"В сцену «{target.title}» перенесено героев: {moving.Length}.");
+    });
+
     private static void CycleSceneCore(int direction)
     {
         if (NetworkManager.Singleton?.IsHost != true) return;
