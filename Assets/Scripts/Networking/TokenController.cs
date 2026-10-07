@@ -77,6 +77,7 @@ public class TokenController : NetworkDraggable
     public int VisionFeet => _netVisionFeet.Value;
     public int VisibleCurrentHp => IsServer ? _masterData.currentHp : _netVisibleCurrentHp.Value;
     public int VisibleMaxHp => IsServer ? _masterData.maxHp : _netVisibleMaxHp.Value;
+    public int NetworkVisibleCurrentHp => _netVisibleCurrentHp.Value;
     public int ArmorClass => IsServer ? _masterData.armorClass : _netArmorClass.Value;
     public string[] VisibleConditionIds => IsServer ? (string[])_masterData.conditionIds.Clone()
         : string.IsNullOrEmpty(_netVisibleConditions.Value.ToString())
@@ -355,20 +356,34 @@ public class TokenController : NetworkDraggable
         PublishMasterData();
     }
 
-    public bool ServerSetHealth(int current, int maximum)
+    public bool ServerSetHealth(int current, int maximum, bool recordUndo = true)
     {
         if (!IsServer || current < 0 || current > 999999 || maximum < 0 || maximum > 999999
             || current > maximum) return false;
+        if (_masterData.currentHp == current && _masterData.maxHp == maximum) return true;
+        if (recordUndo)
+        {
+            int previousCurrent = _masterData.currentHp;
+            int previousMaximum = _masterData.maxHp;
+            string tokenId = SceneId;
+            GameMasterUndo.Record("ХП токена", () => FindSceneToken(tokenId)?.ServerSetHealth(previousCurrent, previousMaximum, false));
+        }
         _masterData.currentHp = current;
         _masterData.maxHp = maximum;
         PublishMasterData();
-        InitiativeTracker.Instance?.RefreshToken(SceneId);
         return true;
     }
 
-    public bool ServerSetArmorClass(int armorClass)
+    public bool ServerSetArmorClass(int armorClass, bool recordUndo = true)
     {
         if (!IsServer || armorClass < 0 || armorClass > 999) return false;
+        if (_masterData.armorClass == armorClass) return true;
+        if (recordUndo)
+        {
+            int previous = _masterData.armorClass;
+            string tokenId = SceneId;
+            GameMasterUndo.Record("КД токена", () => FindSceneToken(tokenId)?.ServerSetArmorClass(previous, false));
+        }
         _masterData.armorClass = armorClass;
         PublishMasterData();
         return true;
@@ -385,6 +400,12 @@ public class TokenController : NetworkDraggable
     public void ServerSetMasterVisibility(bool hideHp, bool hideConditions)
     {
         if (!IsServer) return;
+        if (_masterData.hideHp == hideHp && _masterData.hideConditions == hideConditions) return;
+        bool previousHideHp = _masterData.hideHp;
+        bool previousHideConditions = _masterData.hideConditions;
+        string tokenId = SceneId;
+        GameMasterUndo.Record("видимость параметров токена", () =>
+            FindSceneToken(tokenId)?.ServerSetMasterVisibility(previousHideHp, previousHideConditions));
         _masterData.hideHp = hideHp;
         _masterData.hideConditions = hideConditions;
         PublishMasterData();
@@ -394,7 +415,8 @@ public class TokenController : NetworkDraggable
     {
         if (!IsServer || string.IsNullOrWhiteSpace(conditionId) || conditionId.Length > 64
             || conditionId.Contains("|")) return false;
-        var conditions = new System.Collections.Generic.List<string>(_masterData.conditionIds ?? Array.Empty<string>());
+        var previous = (string[])(_masterData.conditionIds ?? Array.Empty<string>()).Clone();
+        var conditions = new System.Collections.Generic.List<string>(previous);
         int existing = conditions.IndexOf(conditionId);
         if (existing >= 0) conditions.RemoveAt(existing);
         else
@@ -404,9 +426,18 @@ public class TokenController : NetworkDraggable
         }
         string encoded = string.Join("|", conditions);
         if (Encoding.UTF8.GetByteCount(encoded) > FixedString4096Bytes.UTF8MaxLengthInBytes) return false;
+        string tokenId = SceneId;
+        GameMasterUndo.Record("состояние токена", () => FindSceneToken(tokenId)?.ServerSetConditions(previous));
         _masterData.conditionIds = conditions.ToArray();
         PublishMasterData();
         return true;
+    }
+
+    private void ServerSetConditions(string[] conditionIds)
+    {
+        if (!IsServer) return;
+        _masterData.conditionIds = conditionIds == null ? Array.Empty<string>() : (string[])conditionIds.Clone();
+        PublishMasterData();
     }
 
     private void PublishMasterData()
@@ -418,6 +449,7 @@ public class TokenController : NetworkDraggable
         string conditions = _masterData.hideConditions || _masterData.conditionIds == null
             ? string.Empty : string.Join("|", _masterData.conditionIds);
         _netVisibleConditions.Value = new FixedString4096Bytes(conditions);
+        InitiativeTracker.Instance?.RefreshToken(SceneId);
     }
 
     public void RequestSetHidden(bool hidden)
@@ -1007,8 +1039,22 @@ public class TokenController : NetworkDraggable
             DiceUI.Instance?.ShowToolNotice("Проверьте HP, максимум HP и КД.");
             return;
         }
-        ServerSetHealth(current, maximum);
-        ServerSetArmorClass(armorClass);
+        if (_masterData.currentHp != current || _masterData.maxHp != maximum || _masterData.armorClass != armorClass)
+        {
+            int previousCurrent = _masterData.currentHp;
+            int previousMaximum = _masterData.maxHp;
+            int previousArmorClass = _masterData.armorClass;
+            string tokenId = SceneId;
+            GameMasterUndo.Record("ХП и КД токена", () =>
+            {
+                var token = FindSceneToken(tokenId);
+                if (token == null) return;
+                token.ServerSetHealth(previousCurrent, previousMaximum, false);
+                token.ServerSetArmorClass(previousArmorClass, false);
+            });
+            ServerSetHealth(current, maximum, false);
+            ServerSetArmorClass(armorClass, false);
+        }
         GUI.FocusControl(null);
     }
 

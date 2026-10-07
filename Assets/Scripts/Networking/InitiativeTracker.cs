@@ -30,6 +30,7 @@ public class InitiativeTracker : NetworkBehaviour
         public string colorHex;
         public ulong playerId;
         public string tokenId;
+        public int publicHp = -1;
     }
 
     private readonly NetworkVariable<FixedString4096Bytes> _netData = new(
@@ -44,10 +45,11 @@ public class InitiativeTracker : NetworkBehaviour
         public string colorHex;
         public ulong playerId;
         public string tokenId;
+        public int publicHp;
     }
 
     private readonly List<Entry> _entries = new();
-    // HP exists only on the host and is deliberately excluded from _netData.
+    // Host HP cache; only the privacy-filtered HP projection enters _netData.
     private readonly Dictionary<int, int> _hpById = new();
     private int _currentIndex;
     private int _nextEntryId;
@@ -291,7 +293,8 @@ public class InitiativeTracker : NetworkBehaviour
                     initiative = Mathf.Clamp(item.initiative, -999, 999),
                     colorHex = item.colorHex ?? "#FFFFFF",
                     playerId = item.playerId,
-                    tokenId = item.tokenId
+                    tokenId = item.tokenId,
+                    publicHp = item.publicHp
                 });
                 _nextEntryId = Mathf.Max(_nextEntryId, item.id);
             }
@@ -350,7 +353,8 @@ public class InitiativeTracker : NetworkBehaviour
                 initiative = entry.initiative,
                 colorHex = entry.colorHex,
                 playerId = entry.playerId,
-                tokenId = entry.tokenId
+                tokenId = entry.tokenId,
+                publicHp = GetPublicHp(entry)
             };
         }
         return JsonUtility.ToJson(state);
@@ -424,6 +428,16 @@ public class InitiativeTracker : NetworkBehaviour
         AddEntryInternal(name, 0, color, playerId);
     }
 
+    private int GetPublicHp(Entry entry)
+    {
+        if (!string.IsNullOrEmpty(entry.tokenId))
+        {
+            var token = TokenController.FindSceneToken(entry.tokenId);
+            return token != null ? token.NetworkVisibleCurrentHp : -1;
+        }
+        return _hpById.TryGetValue(entry.id, out int hp) ? hp : 0;
+    }
+
     private static string ClampText(string value, int maxLength, string fallback)
     {
         if (string.IsNullOrEmpty(value)) return fallback;
@@ -435,7 +449,7 @@ public class InitiativeTracker : NetworkBehaviour
 
     public void RefreshToken(string sceneId)
     {
-        if (IsHost && ContainsToken(sceneId)) RebuildRows();
+        if (IsHost && ContainsToken(sceneId)) Sync();
     }
 
     public void AddToken(TokenController token)
@@ -503,8 +517,24 @@ public class InitiativeTracker : NetworkBehaviour
                     token.ServerSetHealth(Mathf.Clamp(hp, 0, maximum), maximum);
                 }
             }
-            else _hpById[id] = Mathf.Clamp(hp, 0, 99999);
+            else
+            {
+                int clamped = Mathf.Clamp(hp, 0, 99999);
+                int previous = _hpById.TryGetValue(id, out int oldHp) ? oldHp : 0;
+                if (previous != clamped)
+                {
+                    GameMasterUndo.Record("ХП участника инициативы", () => SetStandaloneHpById(id, previous));
+                    _hpById[id] = clamped;
+                }
+            }
         }
+        RebuildRows();
+    }
+
+    private void SetStandaloneHpById(int id, int value)
+    {
+        if (!IsHost || !_entries.Exists(entry => entry.id == id)) return;
+        _hpById[id] = Mathf.Clamp(value, 0, 99999);
         RebuildRows();
     }
 
@@ -537,9 +567,14 @@ public class InitiativeTracker : NetworkBehaviour
             participants[index] = new BattleParticipant
             {
                 id = entry.id.ToString(),
+                name = entry.name,
+                colorHex = entry.colorHex,
                 tokenId = entry.tokenId,
                 playerId = entry.playerId,
-                initiative = entry.initiative
+                initiative = entry.initiative,
+                hasHitPoints = string.IsNullOrEmpty(entry.tokenId),
+                hitPoints = string.IsNullOrEmpty(entry.tokenId)
+                    ? _hpById.GetValueOrDefault(entry.id) : 0
             };
         }
         return new SceneBattleState
@@ -565,11 +600,13 @@ public class InitiativeTracker : NetworkBehaviour
             TokenController token = string.IsNullOrEmpty(participant.tokenId)
                 ? null : TokenController.FindSceneToken(participant.tokenId);
             string name = token != null ? token.TokenName
+                : !string.IsNullOrWhiteSpace(participant.name) ? participant.name
                 : participant.playerId != ulong.MaxValue
                     ? PlayerColors.GetNickname(participant.playerId) ?? "Игрок"
                     : "Участник";
-            string color = "#" + ColorUtility.ToHtmlStringRGB(
-                PlayerColors.GetColor(token != null ? token.SpawnerClientId : participant.playerId));
+            string color = !string.IsNullOrWhiteSpace(participant.colorHex) ? participant.colorHex
+                : "#" + ColorUtility.ToHtmlStringRGB(
+                    PlayerColors.GetColor(token != null ? token.SpawnerClientId : participant.playerId));
             _entries.Add(new Entry
             {
                 id = id,
@@ -580,6 +617,7 @@ public class InitiativeTracker : NetworkBehaviour
                 tokenId = participant.tokenId
             });
             if (token != null) _hpById[id] = token.VisibleCurrentHp;
+            else if (participant.hasHitPoints) _hpById[id] = Mathf.Clamp(participant.hitPoints, 0, 99999);
         }
         _entries.Sort((a, b) => {
             int byScore = b.initiative.CompareTo(a.initiative);
@@ -735,9 +773,15 @@ public class InitiativeTracker : NetworkBehaviour
                     () => RemoveEntryById(id), new Color(0.28f, 0.11f, 0.14f));
             }
             else
+            {
                 Label(row.transform, entry.initiative.ToString(), 14, VttUiSkin.Text,
                     TextAnchor.MiddleLeft, new Vector2(0, 1), new Vector2(0, 1),
                     new Vector2(90, 22), new Vector2(32, -25), true);
+                if (entry.publicHp >= 0)
+                    Label(row.transform, "HP " + entry.publicHp, 11, VttUiSkin.Muted,
+                        TextAnchor.MiddleRight, new Vector2(1, 1), new Vector2(1, 1),
+                        new Vector2(52, 22), new Vector2(-5, -25));
+            }
         }
     }
 

@@ -95,9 +95,13 @@ using UnityEngine;
 [Serializable] public sealed class BattleParticipant
 {
     public string id;
+    public string name;
+    public string colorHex;
     public string tokenId;
     public ulong playerId = ulong.MaxValue;
     public int initiative;
+    public int hitPoints;
+    public bool hasHitPoints;
 }
 
 [Serializable] public sealed class SceneBattleState
@@ -424,11 +428,17 @@ public static class SceneValidation
                 "Некорректная или повторная запись инициативы.");
             Require(participant.initiative >= -999 && participant.initiative <= 999,
                 "Некорректное значение инициативы.");
+            Require(participant.name == null || participant.name.Length <= 256,
+                "Слишком длинное имя участника инициативы.");
+            Require(participant.colorHex == null || participant.colorHex.Length <= 16,
+                "Некорректный цвет участника инициативы.");
+            Require(!participant.hasHitPoints || participant.hitPoints >= 0 && participant.hitPoints <= 99999,
+                "Некорректное значение HP участника инициативы.");
             if (!string.IsNullOrEmpty(participant.tokenId))
                 Require(Array.Exists(scene.tokens, token => token.id == participant.tokenId),
                     "Инициатива ссылается на отсутствующий токен.");
-            else Require(participant.playerId != ulong.MaxValue,
-                "Запись инициативы не связана ни с токеном, ни с игроком.");
+            else Require(participant.playerId != ulong.MaxValue || !string.IsNullOrWhiteSpace(participant.name),
+                "Для участника инициативы без токена укажите имя или игрока.");
             if (participant.id == battle.activeParticipantId) activeFound = true;
         }
         Require(activeFound, "Активный участник инициативы отсутствует в списке.");
