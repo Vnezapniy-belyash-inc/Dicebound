@@ -1565,9 +1565,9 @@ public class DiceUI : MonoBehaviour
         if (GameNetworkManager.Instance != null && GameNetworkManager.Instance.IsConnected)
         {
             Vector3 pos = mapCenter + new Vector3(
-                Random.Range(-spawnSpread, spawnSpread),
+                UnityEngine.Random.Range(-spawnSpread, spawnSpread),
                 0,
-                Random.Range(-spawnSpread, spawnSpread)
+                UnityEngine.Random.Range(-spawnSpread, spawnSpread)
             );
             NetworkDiceManager.Instance?.RequestSpawnDie(type, pos);
             return;
@@ -1575,8 +1575,8 @@ public class DiceUI : MonoBehaviour
 
         // Локальный режим — старый DiceManager
         if (DiceManager.Instance == null) return;
-        float x = mapCenter.x + Random.Range(-spawnSpread, spawnSpread);
-        float z = mapCenter.z + Random.Range(-spawnSpread, spawnSpread);
+        float x = mapCenter.x + UnityEngine.Random.Range(-spawnSpread, spawnSpread);
+        float z = mapCenter.z + UnityEngine.Random.Range(-spawnSpread, spawnSpread);
         DiceManager.Instance.SpawnDieAt(type, x, z);
     }
 
