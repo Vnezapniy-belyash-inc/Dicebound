@@ -181,6 +181,8 @@ public class DiceboundLobbyIntegrationTests
         while (!_client.SpawnManager.SpawnedObjects.ContainsKey(objectId) && Time.realtimeSinceStartup < deadline) yield return null;
         Assert.That(_client.SpawnManager.SpawnedObjects.ContainsKey(objectId), Is.True, "Token must spawn on the actual connected client.");
         var remote = _client.SpawnManager.SpawnedObjects[objectId].GetComponent(tokenType);
+        Assert.That(tokenType.GetProperty("SceneId").GetValue(remote), Is.EqualTo(tokenType.GetProperty("SceneId").GetValue(token)),
+            "Client tokens must retain the server's stable scene ID for initiative links.");
         Assert.That((bool)tokenType.GetProperty("IsServer").GetValue(remote), Is.False);
         Assert.That(tokenType.GetProperty("VisibleCurrentHp").GetValue(remote), Is.EqualTo(-1));
         Assert.That(tokenType.GetProperty("VisibleConditionIds").GetValue(remote), Is.Empty);

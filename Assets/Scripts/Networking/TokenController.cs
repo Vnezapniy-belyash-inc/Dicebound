@@ -49,7 +49,14 @@ public class TokenController : NetworkDraggable
     public Vector3 CommittedPosition => _netCommitted.Value;
     public ulong ControllerClientId => _netController.Value;
     public bool EveryoneCanMove => _netSharedMove.Value;
-    public string SceneId { get; private set; } = Guid.NewGuid().ToString("N");
+    private string _localSceneId = Guid.NewGuid().ToString("N");
+    private readonly NetworkVariable<FixedString512Bytes> _netSceneId = new(
+        default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    public string SceneId
+    {
+        get => _netSceneId.Value.IsEmpty ? _localSceneId : _netSceneId.Value.ToString();
+        private set => _localSceneId = value;
+    }
     private readonly NetworkVariable<FixedString128Bytes> _netName = new(new FixedString128Bytes(""),
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     public const int MaxVisionFeet = 1000;
@@ -160,6 +167,7 @@ public class TokenController : NetworkDraggable
 
         if (IsServer)
         {
+            _netSceneId.Value = new FixedString512Bytes(_localSceneId);
             bool initialized = _hasInitialServerState;
             if (_hasInitialServerState)
             {
