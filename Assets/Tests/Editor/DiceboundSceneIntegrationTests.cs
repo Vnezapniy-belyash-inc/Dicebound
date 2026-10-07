@@ -154,7 +154,15 @@ public class DiceboundSceneIntegrationTests
         battle.GetType().GetField("participants").SetValue(battle, participants);
         battle.GetType().GetField("activeParticipantId").SetValue(battle, transferredId);
         battle.GetType().GetField("round").SetValue(battle, 4);
+        var pendingIds = (System.Collections.Generic.Queue<string>)tracker.GetType().GetField("_awaitingInitiativeTokenIds",
+            BindingFlags.Instance | BindingFlags.NonPublic).GetValue(tracker);
+        pendingIds.Enqueue("old-scene-token");
+        tracker.GetType().GetField("_awaitingInitiativeTokenId", BindingFlags.Instance | BindingFlags.NonPublic)
+            .SetValue(tracker, "old-scene-token");
         Call(tracker, "RestoreBattleState", battle);
+        Assert.That(pendingIds, Is.Empty, "Loading a battle must discard pending rolls from the previous scene.");
+        Assert.That(tracker.GetType().GetField("_awaitingInitiativeTokenId", BindingFlags.Instance | BindingFlags.NonPublic)
+            .GetValue(tracker), Is.Null);
         var capturedBattle = Call(tracker, "CaptureBattleState");
         var capturedParticipants = (Array)capturedBattle.GetType().GetField("participants").GetValue(capturedBattle);
         string activeId = (string)capturedBattle.GetType().GetField("activeParticipantId").GetValue(capturedBattle);

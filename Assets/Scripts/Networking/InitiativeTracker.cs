@@ -181,6 +181,13 @@ public class InitiativeTracker : NetworkBehaviour
         DiceUI.Instance?.ShowToolNotice("Назначение броска инициативы отменено.");
     }
 
+    private void ResetPendingInitiative()
+    {
+        _awaitingInitiativeTokenId = null;
+        _awaitingInitiativeTokenIds.Clear();
+        _initiativeRollExpiresAt = 0;
+    }
+
     private void OnServerStarted()
     {
         var netObj = GetComponent<NetworkObject>();
@@ -197,6 +204,7 @@ public class InitiativeTracker : NetworkBehaviour
 
     public override void OnNetworkDespawn()
     {
+        ResetPendingInitiative();
         _netData.OnValueChanged -= OnDataChanged;
         _hpById.Clear();
     }
@@ -550,6 +558,7 @@ public class InitiativeTracker : NetworkBehaviour
     public void ClearAll()
     {
         if (!IsHost) return;
+        ResetPendingInitiative();
         _entries.Clear();
         _hpById.Clear();
         _currentIndex = 0;
@@ -588,6 +597,7 @@ public class InitiativeTracker : NetworkBehaviour
     public void RestoreBattleState(SceneBattleState battle)
     {
         if (!IsHost || battle == null || battle.participants == null) return;
+        ResetPendingInitiative();
         _entries.Clear();
         _hpById.Clear();
         _round = Mathf.Clamp(battle.round, 1, 100000);
