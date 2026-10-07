@@ -240,6 +240,56 @@ public static class SceneFileStore
         _campaignDirty = true;
     }
 
+    public static int ImportMapAssets(string[] names, byte[][] imageBytes)
+    {
+        if (NetworkManager.Singleton?.IsHost != true) throw new InvalidOperationException("Только мастер импортирует карты.");
+        if (names == null || imageBytes == null || names.Length != imageBytes.Length
+            || names.Length == 0 || names.Length > 32)
+            throw new FormatException("Выберите от 1 до 32 файлов изображений.");
+        CaptureCampaign(_campaign?.title ?? "Кампания");
+        if (_campaign.mapAssets.Length + names.Length > 256)
+            throw new InvalidOperationException("В каталоге кампании достигнут лимит в 256 карт.");
+
+        var existingNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var map in _campaign.mapAssets) existingNames.Add(map.name);
+        var imported = new CampaignMapAsset[names.Length];
+        for (int i = 0; i < names.Length; i++)
+        {
+            if (imageBytes[i] == null || imageBytes[i].Length == 0 || imageBytes[i].Length > MapSync.MaxMapBytes)
+                throw new FormatException("Изображение должно занимать от 1 байта до 16 МБ после обработки.");
+            string baseName = Path.GetFileNameWithoutExtension(names[i] ?? string.Empty).Trim();
+            if (baseName.Length > 128) baseName = baseName.Substring(0, 128).Trim();
+            if (baseName.Length == 0) baseName = "Карта";
+            string name = baseName;
+            int suffix = 2;
+            while (existingNames.Contains(name))
+            {
+                string tail = " (" + suffix++ + ")";
+                name = baseName.Substring(0, Mathf.Min(baseName.Length, 128 - tail.Length)) + tail;
+            }
+            existingNames.Add(name);
+            imported[i] = new CampaignMapAsset
+            {
+                id = Guid.NewGuid().ToString("N"), name = name,
+                imageData = Convert.ToBase64String(imageBytes[i])
+            };
+        }
+
+        var previous = _campaign.mapAssets;
+        var updated = new CampaignMapAsset[previous.Length + imported.Length];
+        Array.Copy(previous, updated, previous.Length);
+        Array.Copy(imported, 0, updated, previous.Length, imported.Length);
+        _campaign.mapAssets = updated;
+        try
+        {
+            SceneValidation.Validate(_campaign);
+            CampaignFileStore.ValidateEmbeddedImageBudget(_campaign);
+        }
+        catch { _campaign.mapAssets = previous; throw; }
+        _campaignDirty = true;
+        return imported.Length;
+    }
+
     public static void SelectMapAsset(string id)
     {
         if (NetworkManager.Singleton?.IsHost != true) throw new InvalidOperationException("Только мастер выбирает карту.");

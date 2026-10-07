@@ -1109,7 +1109,7 @@ public class DmPanelUI : MonoBehaviour
         _mapAssetNameInput.characterLimit = 128;
         _mapAssetNameInput.lineType = InputField.LineType.SingleLine;
         _mapAssetNameInput.targetGraphic = nameBox.GetComponent<Image>();
-        Button(_mapCatalogPanel.transform, "Импортировать файл", 162, 32, 12, -76,
+        Button(_mapCatalogPanel.transform, "Импортировать файлы", 162, 32, 12, -76,
             ImportMapAsset, new Color(0.10f, 0.30f, 0.48f));
         Button(_mapCatalogPanel.transform, "Добавить текущую", 162, 32, 184, -76,
             AddCurrentMapAsset, VttUiSkin.Button);
@@ -1166,12 +1166,7 @@ public class DmPanelUI : MonoBehaviour
 
     private void ImportMapAsset()
     {
-        if (string.IsNullOrWhiteSpace(_mapAssetNameInput.text))
-        {
-            _mapCatalogNotice.text = "Сначала введите название карты.";
-            return;
-        }
-        MapController.Instance?.LoadImageToLibrary(_mapAssetNameInput.text);
+        MapController.Instance?.ImportImageFilesToLibrary();
     }
 
     private void AddCurrentMapAsset()
