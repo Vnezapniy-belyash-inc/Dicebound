@@ -28,6 +28,7 @@ public sealed class FogManager : MonoBehaviour
     private NetworkManager _network;
     private bool[] _visible = Array.Empty<bool>(), _explored = Array.Empty<bool>(), _manualVisible = Array.Empty<bool>(), _manualHidden = Array.Empty<bool>();
     private int _width, _height, _revision, _received = -1;
+    private int _pendingRevisionAck = -1;
     private bool _dirty = true, _textureDirty = true, _hasState;
     private Texture2D _mask;
     private GameObject _cover;
@@ -36,14 +37,27 @@ public sealed class FogManager : MonoBehaviour
     private bool _manualStroke;
     private Vector2Int _lastManual = new(-1, -1);
     private string _manualBefore;
-    private const string StateMessage = "FogStateV2", RequestMessage = "FogStateRequestV2";
+    private const string StateMessage = "FogStateV2", RequestMessage = "FogStateRequestV2", AckMessage = "FogStateAckV2";
     private byte[] _encodedState;
     private bool _publishPending;
     private float _nextPublish;
+    private readonly Dictionary<ulong, int> _clientAcks = new();
     public bool IsMaster => _network != null && _network.IsHost && _network.IsListening;
+    public bool AllClientsHaveCurrentRevision
+    {
+        get
+        {
+            if (_network == null || !_network.IsServer || _revision <= 0) return false;
+            foreach (ulong client in _network.ConnectedClientsIds)
+                if (client != NetworkManager.ServerClientId
+                    && (!_clientAcks.TryGetValue(client, out int ack) || ack < _revision)) return false;
+            return true;
+        }
+    }
     public bool ShowingPlayerView => _network != null && _network.IsListening && (!IsMaster || Preview);
     private void Awake() { Instance = this; }
     public void MarkDirty() { _dirty = true; _previewDirty = true; }
+    public void PrepareForSceneTransfer() { if (IsMaster && _dirty) Recalculate(); }
     private void Register(NetworkManager manager)
     {
         _network = manager; _received = -1; _revision = 0; _hasState = manager.IsServer;
@@ -51,6 +65,7 @@ public sealed class FogManager : MonoBehaviour
         Enabled = true; Preview = false; PreviewSourceId = null; PreviewTestSource = false; _dirty = true;
         manager.CustomMessagingManager.RegisterNamedMessageHandler(StateMessage, Receive);
         manager.CustomMessagingManager.RegisterNamedMessageHandler(RequestMessage, ReceiveRequest);
+        manager.CustomMessagingManager.RegisterNamedMessageHandler(AckMessage, ReceiveAck);
         manager.OnClientConnectedCallback += Connected;
         _nextAutosave = Time.unscaledTime + 120;
     }
@@ -61,8 +76,11 @@ public sealed class FogManager : MonoBehaviour
         {
             _network.CustomMessagingManager.UnregisterNamedMessageHandler(StateMessage);
             _network.CustomMessagingManager.UnregisterNamedMessageHandler(RequestMessage);
+            _network.CustomMessagingManager.UnregisterNamedMessageHandler(AckMessage);
         }
         _network = null; Preview = false; ManualMode = 0; _hasState = false;
+        _clientAcks.Clear();
+        _pendingRevisionAck = -1;
         _width = _height = 0; _explored = _visible = _manualVisible = _manualHidden = Array.Empty<bool>();
         _textureDirty = true; GameMasterUndo.Clear();
         _encodedState = null; _publishPending = false;
@@ -277,9 +295,20 @@ public sealed class FogManager : MonoBehaviour
         if (pause && SceneEditor.Instance != null) SceneEditor.Instance.Model.RevealPaused = true;
         MarkDirty();
     }
-    private void Connected(ulong client) { if (_network.IsServer && client != NetworkManager.ServerClientId) Send(client); }
+    private void Connected(ulong client)
+    {
+        if (!_network.IsServer || client == NetworkManager.ServerClientId) return;
+        _clientAcks.Remove(client);
+        Send(client);
+    }
     private void ReceiveRequest(ulong sender, FastBufferReader reader)
     { if (_network.IsServer && _network.ConnectedClients.ContainsKey(sender)) Send(sender); }
+    private void ReceiveAck(ulong sender, FastBufferReader reader)
+    {
+        if (_network == null || !_network.IsServer || !_network.ConnectedClients.ContainsKey(sender)) return;
+        reader.ReadValueSafe(out int revision);
+        if (revision > 0 && revision <= _revision) _clientAcks[sender] = revision;
+    }
     private void Publish()
     {
         _revision++;
@@ -308,6 +337,7 @@ public sealed class FogManager : MonoBehaviour
             if (_width != width || _height != height) Resize(width, height);
             _visible = visible; _explored = explored;
             Enabled = enabled; _received = revision; _hasState = true; _textureDirty = true;
+            _pendingRevisionAck = revision;
         }
         catch (Exception ex) { Debug.LogWarning("[Fog] " + ex.Message); }
     }
@@ -368,6 +398,13 @@ public sealed class FogManager : MonoBehaviour
         _cover.transform.localScale = new Vector3(_grid.Width * _grid.CellSize, _grid.Height * _grid.CellSize, 1);
         _coverMaterial.SetTexture("_FogMask", displayMask);
         foreach (var token in FindObjectsByType<TokenController>(FindObjectsInactive.Exclude)) if (token.IsSpawned) token.RefreshFogAppearance();
+        if (_pendingRevisionAck > 0 && _network != null && _network.IsListening)
+        {
+            using var ack = new FastBufferWriter(sizeof(int), Allocator.Temp);
+            ack.WriteValueSafe(_pendingRevisionAck);
+            _network.CustomMessagingManager.SendNamedMessage(AckMessage, NetworkManager.ServerClientId, ack);
+            _pendingRevisionAck = -1;
+        }
     }
     public void ApplyMarkupFog(Material material, bool playerView)
     {

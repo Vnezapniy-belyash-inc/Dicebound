@@ -18,9 +18,10 @@ public sealed class SceneEditor : MonoBehaviour
     public float ColumnDiameter { get; set; } = 0.5f;
     public SceneGeometryModel Model { get; } = new();
     public string Notice { get; private set; } = "Выберите инструмент и рисуйте на карте. ПКМ / Esc — закончить.";
-    private const string StateMessage = "SceneGeometryV1", RequestMessage = "SceneGeometryRequestV1";
+    private const string StateMessage = "SceneGeometryV1", RequestMessage = "SceneGeometryRequestV1", AckMessage = "SceneGeometryAckV1";
     private const string DoorMessage = "SceneDoorInteractV1";
     private readonly Dictionary<ulong, float> _doorRequests = new();
+    private readonly Dictionary<ulong, int> _clientAcks = new();
     private const int MaxStateBytes = 768 * 1024;
     private NetworkManager _network;
     private GridManager _grid;
@@ -32,6 +33,7 @@ public sealed class SceneEditor : MonoBehaviour
     private string _beforeStroke;
     private SavedFog _beforeFog;
     private int _revision, _receivedRevision = -1;
+    private int _pendingRevisionAck = -1;
     private Vector3 _lastOrigin;
     private Quaternion _lastRotation;
     private float _lastCellSize;
@@ -39,6 +41,17 @@ public sealed class SceneEditor : MonoBehaviour
     private bool _hasState;
     private int _loadGeneration;
     public bool IsMaster => _network != null && _network.IsListening && _network.IsHost;
+    public bool AllClientsHaveCurrentRevision
+    {
+        get
+        {
+            if (_network == null || !_network.IsServer || _revision <= 0) return false;
+            foreach (ulong client in _network.ConnectedClientsIds)
+                if (client != NetworkManager.ServerClientId
+                    && (!_clientAcks.TryGetValue(client, out int ack) || ack < _revision)) return false;
+            return true;
+        }
+    }
 
     private void Awake() { Instance = this; }
     private void Update()
@@ -74,6 +87,13 @@ public sealed class SceneEditor : MonoBehaviour
         if (_grid == null) return;
         if (_dirty || _lastOrigin != _grid.GridOrigin || _lastRotation != _grid.GridRotation || _lastCellSize != _grid.CellSize)
             RebuildVisuals();
+        if (_pendingRevisionAck > 0 && _network != null && _network.IsListening)
+        {
+            using var ack = new FastBufferWriter(sizeof(int), Allocator.Temp);
+            ack.WriteValueSafe(_pendingRevisionAck);
+            _network.CustomMessagingManager.SendNamedMessage(AckMessage, NetworkManager.ServerClientId, ack);
+            _pendingRevisionAck = -1;
+        }
         bool playerView = !IsMaster || FogManager.Instance?.Preview == true;
         if (_visualRoot != null) _visualRoot.SetActive(_network != null && _network.IsListening && (playerView ? PlayerShowMarkup : ShowMarkup));
         foreach (var material in new[] { _wallMaterial, _doorMaterial, _openMaterial, _obstacleMaterial })
@@ -84,6 +104,7 @@ public sealed class SceneEditor : MonoBehaviour
         _network = manager; _revision = 0; _receivedRevision = -1; _hasState = manager.IsServer;
         manager.CustomMessagingManager.RegisterNamedMessageHandler(StateMessage, ReceiveState);
         manager.CustomMessagingManager.RegisterNamedMessageHandler(RequestMessage, ReceiveRequest);
+        manager.CustomMessagingManager.RegisterNamedMessageHandler(AckMessage, ReceiveAck);
         manager.CustomMessagingManager.RegisterNamedMessageHandler(DoorMessage, ReceiveDoor);
         manager.OnClientConnectedCallback += Connected;
         if (!manager.IsServer) Model.Replace(new SceneGeometry());
@@ -96,16 +117,30 @@ public sealed class SceneEditor : MonoBehaviour
         {
             _network.CustomMessagingManager.UnregisterNamedMessageHandler(StateMessage);
             _network.CustomMessagingManager.UnregisterNamedMessageHandler(RequestMessage);
+            _network.CustomMessagingManager.UnregisterNamedMessageHandler(AckMessage);
             _network.CustomMessagingManager.UnregisterNamedMessageHandler(DoorMessage);
         }
         _network.OnClientConnectedCallback -= Connected;
+        _clientAcks.Clear();
+        _pendingRevisionAck = -1;
         _network = null; _hasState = false;
         _doorRequests.Clear();
         Model.Replace(new SceneGeometry()); _dirty = true;
     }
-    private void Connected(ulong client) { if (_network.IsServer && client != NetworkManager.ServerClientId) SendState(client); }
+    private void Connected(ulong client)
+    {
+        if (!_network.IsServer || client == NetworkManager.ServerClientId) return;
+        _clientAcks.Remove(client);
+        SendState(client);
+    }
     private void ReceiveRequest(ulong client, FastBufferReader reader)
     { if (_network.IsServer && _network.ConnectedClients.ContainsKey(client)) SendState(client); }
+    private void ReceiveAck(ulong client, FastBufferReader reader)
+    {
+        if (_network == null || !_network.IsServer || !_network.ConnectedClients.ContainsKey(client)) return;
+        reader.ReadValueSafe(out int revision);
+        if (revision > 0 && revision <= _revision) _clientAcks[client] = revision;
+    }
     private void ReceiveState(ulong sender, FastBufferReader reader)
     {
         if (_network.IsServer || sender != NetworkManager.ServerClientId || _grid == null) return;
@@ -124,6 +159,7 @@ public sealed class SceneEditor : MonoBehaviour
                 _grid.RestoreGrid(width, height, size, origin, rotation);
             TokenController.RebuildCellOccupancy();
             Model.Replace(geometry); _receivedRevision = revision; _hasState = true; _dirty = true;
+            _pendingRevisionAck = revision;
         }
         catch (Exception ex) { Debug.LogWarning("[Scene] Invalid geometry snapshot: " + ex.Message); }
     }
@@ -179,11 +215,14 @@ public sealed class SceneEditor : MonoBehaviour
         float deadline = Time.unscaledTime + (MapSync.Instance?.TransferWaitSeconds ?? 40);
         while (generation == _loadGeneration && IsMaster && Time.unscaledTime < deadline
             && (MapSync.Instance == null || !MapSync.Instance.AllClientsHaveCurrentMap
-                || LateJoinSync.Instance == null || !LateJoinSync.Instance.AllSceneWorldClientsReady))
+                || LateJoinSync.Instance == null || !LateJoinSync.Instance.AllSceneWorldClientsReady
+                || !AllClientsHaveCurrentRevision || FogManager.Instance == null
+                || !FogManager.Instance.AllClientsHaveCurrentRevision))
             yield return null;
         if (generation != _loadGeneration || !IsMaster) yield break;
         if (MapSync.Instance?.AllClientsHaveCurrentMap == true
-            && LateJoinSync.Instance?.AllSceneWorldClientsReady == true)
+            && LateJoinSync.Instance?.AllSceneWorldClientsReady == true
+            && AllClientsHaveCurrentRevision && FogManager.Instance?.AllClientsHaveCurrentRevision == true)
         {
             if (HostSceneCurtain.IsCurtainDown) HostSceneCurtain.Instance?.ToggleCurtainOnHost();
         }

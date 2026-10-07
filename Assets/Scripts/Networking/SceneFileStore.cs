@@ -983,6 +983,7 @@ public static class SceneFileStore
             }
             TokenController.RebuildCellOccupancy();
             InitiativeTracker.Instance?.RestoreBattleState(battle ?? new SceneBattleState());
+            FogManager.Instance?.PrepareForSceneTransfer();
             applyCompleted = true;
         }
         finally
