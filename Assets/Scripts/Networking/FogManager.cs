@@ -114,7 +114,7 @@ public sealed class FogManager : MonoBehaviour
             {
                 try
                 {
-                    SceneFileStore.SaveOptions(System.IO.Path.Combine(Application.persistentDataPath, "autosave-scene.json"), true, false);
+                    SceneFileStore.SaveAutosave();
                     Status = "Автосохранение: " + DateTime.Now.ToString("HH:mm");
                 }
                 catch (Exception ex) { Status = "Автосохранение: " + ex.Message; }

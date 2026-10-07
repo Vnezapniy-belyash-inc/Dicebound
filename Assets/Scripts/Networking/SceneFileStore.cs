@@ -1010,9 +1010,21 @@ public static class SceneFileStore
     }
     public static void LoadAutosave()
     {
-        string path = Path.Combine(Application.persistentDataPath, "autosave-scene.json");
+        if (NetworkManager.Singleton?.IsHost != true) return;
+        string path = Path.Combine(Application.persistentDataPath, "autosave-campaign.json");
+        bool campaign = File.Exists(path);
+        if (!campaign) path = Path.Combine(Application.persistentDataPath, "autosave-scene.json");
         if (!File.Exists(path)) { DiceUI.Instance?.ShowToolNotice("Автосохранения пока нет."); return; }
-        DiceUI.Instance?.ConfirmAction("Восстановить автосохранение?", "Текущая сцена будет заменена последней сохранённой копией.", () => Safely(() => Load(path)));
+        DiceUI.Instance?.ConfirmAction("Восстановить автосохранение?",
+            campaign ? "Сессия со всеми сценами, библиотеками и боем будет заменена последней сохранённой копией."
+                : "Текущая сцена будет заменена последней сохранённой копией.",
+            () => Safely(() => { if (campaign) LoadCampaign(path); else Load(path); }));
+    }
+
+    public static void SaveAutosave()
+    {
+        if (NetworkManager.Singleton?.IsHost != true) return;
+        CampaignFileStore.Save(Path.Combine(Application.persistentDataPath, "autosave-campaign.json"), CaptureCampaign());
     }
     public static void SaveDialog()
     {
