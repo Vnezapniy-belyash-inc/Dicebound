@@ -979,7 +979,8 @@ public static class SceneFileStore
                 var token = TokenManager.Instance.RestoreSceneToken(data, grid, masterData);
                 if (token == null) throw new InvalidOperationException("Не удалось восстановить токен.");
                 byte[] portrait = portraits[data.id];
-                if (portrait != null) TokenImageSync.BroadcastImage(token.NetworkObjectId, portrait);
+                if (portrait != null && !TokenImageSync.BroadcastImage(token.NetworkObjectId, portrait))
+                    throw new InvalidOperationException("Не удалось восстановить портрет токена.");
             }
             TokenController.RebuildCellOccupancy();
             InitiativeTracker.Instance?.RestoreBattleState(battle ?? new SceneBattleState());

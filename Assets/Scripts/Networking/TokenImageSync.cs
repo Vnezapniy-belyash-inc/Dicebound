@@ -52,6 +52,27 @@ public class TokenImageSync : MonoBehaviour
     }
 
     public static TokenImageSync Instance { get; private set; }
+    public static bool AllClientsHaveCurrentPortraits
+    {
+        get
+        {
+            var nm = NetworkManager.Singleton;
+            if (nm == null || !nm.IsServer || !nm.IsListening) return false;
+            foreach (var entry in PortraitVersions)
+            {
+                var token = FindToken(entry.Key);
+                if (token == null || !token.IsSpawned) continue;
+                foreach (ulong client in nm.ConnectedClientsIds)
+                {
+                    if (client == NetworkManager.ServerClientId
+                        || !token.NetworkObject.IsNetworkVisibleTo(client)) continue;
+                    if (Instance == null || !Instance._downloadAcks.TryGetValue((client, entry.Key), out int ack)
+                        || ack != entry.Value) return false;
+                }
+            }
+            return true;
+        }
+    }
     private static readonly Dictionary<ulong, byte[]> PortraitCache = new();
     private static readonly Dictionary<ulong, int> PortraitVersions = new();
 

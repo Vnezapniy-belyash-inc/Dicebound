@@ -217,16 +217,18 @@ public sealed class SceneEditor : MonoBehaviour
             && (MapSync.Instance == null || !MapSync.Instance.AllClientsHaveCurrentMap
                 || LateJoinSync.Instance == null || !LateJoinSync.Instance.AllSceneWorldClientsReady
                 || !AllClientsHaveCurrentRevision || FogManager.Instance == null
-                || !FogManager.Instance.AllClientsHaveCurrentRevision))
+                || !FogManager.Instance.AllClientsHaveCurrentRevision
+                || !TokenImageSync.AllClientsHaveCurrentPortraits))
             yield return null;
         if (generation != _loadGeneration || !IsMaster) yield break;
         if (MapSync.Instance?.AllClientsHaveCurrentMap == true
             && LateJoinSync.Instance?.AllSceneWorldClientsReady == true
-            && AllClientsHaveCurrentRevision && FogManager.Instance?.AllClientsHaveCurrentRevision == true)
+            && AllClientsHaveCurrentRevision && FogManager.Instance?.AllClientsHaveCurrentRevision == true
+            && TokenImageSync.AllClientsHaveCurrentPortraits)
         {
             if (HostSceneCurtain.IsCurtainDown) HostSceneCurtain.Instance?.ToggleCurtainOnHost();
         }
-        else DiceUI.Instance?.ShowToolNotice("Не все игроки получили карту и объекты сцены. Занавес оставлен закрытым; можно повторить передачу или показать карту вручную.");
+        else DiceUI.Instance?.ShowToolNotice("Не все игроки получили карту, объекты, портреты, разметку и туман сцены. Занавес оставлен закрытым; можно повторить передачу или показать карту вручную.");
     }
     private void FinishStroke()
     {
