@@ -36,6 +36,15 @@ public class DmPanelUI : MonoBehaviour
     private float _nextRefresh;
     private InputField _tokenNameInput;
     private InputField _sceneNameInput;
+    private InputField _transitionTitleInput;
+    private InputField _transitionXInput;
+    private InputField _transitionYInput;
+    private RectTransform _transitionList;
+    private GameObject _transitionPanel;
+    private Text _transitionTargetText;
+    private string _selectedTransitionTargetId;
+    private int _transitionTargetIndex;
+    private string _transitionSignature;
     private InputField[] _statBlockInputs;
     private RectTransform _statBlockList;
     private string _selectedStatBlockId;
@@ -86,6 +95,7 @@ public class DmPanelUI : MonoBehaviour
         if (Time.unscaledTime < _nextRefresh) return;
         _nextRefresh = Time.unscaledTime + 1f;
         Refresh();
+        if (_transitionPanel != null && _transitionPanel.activeSelf) RefreshSceneTransitions(true);
     }
 
     public void Toggle()
@@ -627,7 +637,7 @@ public class DmPanelUI : MonoBehaviour
     private void BuildScenePage(Transform parent)
     {
         Label(parent, "Разметка и файл сцены", 16, VttUiSkin.Text, TextAnchor.MiddleLeft,
-            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 30), new Vector2(0, -4), true);
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(210, 30), new Vector2(0, -4), true);
         Button(parent, "Кисть стен", 170, 34, 0, -44,
             () => SceneEditor.Instance?.Activate(SceneEditor.Tool.Wall), VttUiSkin.Button);
         Button(parent, "Стереть ребро", 170, 34, 180, -44,
@@ -673,6 +683,44 @@ public class DmPanelUI : MonoBehaviour
             SceneFileStore.DeleteActiveScene), VttUiSkin.Button);
         _sceneNotice = Label(parent, "", 12, VttUiSkin.Text, TextAnchor.UpperLeft,
             new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 28), new Vector2(0, -486));
+        Button(parent, "Переходы…", 130, 28, 220, -4, ToggleTransitionsPanel, VttUiSkin.Button);
+        _transitionPanel = Box(parent, "SceneTransitions", VttUiSkin.Panel, 10);
+        Place(_transitionPanel, new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(350, 450), new Vector2(0, -24));
+        Label(_transitionPanel.transform, "Переходы между сценами", 15, VttUiSkin.Text,
+            TextAnchor.MiddleLeft, new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(280, 28), new Vector2(10, -6), true);
+        Button(_transitionPanel.transform, "×", 28, 28, 310, -6,
+            () => _transitionPanel.SetActive(false), VttUiSkin.Button);
+        _transitionTitleInput = CreateInput(_transitionPanel.transform, "Название перехода", 10, -40, 330, 30);
+        _transitionXInput = CreateInput(_transitionPanel.transform, "X клетки", 10, -74, 100, 30);
+        _transitionYInput = CreateInput(_transitionPanel.transform, "Y клетки", 120, -74, 100, 30);
+        Button(_transitionPanel.transform, "Цель ◀", 92, 28, 10, -110,
+            () => StepTransitionTarget(-1), VttUiSkin.Button);
+        _transitionTargetText = Label(_transitionPanel.transform, "", 13, VttUiSkin.Text,
+            TextAnchor.MiddleCenter, new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(192, 28), new Vector2(104, -110));
+        Button(_transitionPanel.transform, "▶", 32, 28, 308, -110,
+            () => StepTransitionTarget(1), VttUiSkin.Button);
+        Button(_transitionPanel.transform, "Добавить переход", 330, 30, 10, -144,
+            AddSceneTransition, VttUiSkin.Button);
+        var transitionViewport = Box(_transitionPanel.transform, "TransitionViewport",
+            new Color(0, 0, 0, 0.01f), 0, false);
+        Place(transitionViewport, new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(330, 254), new Vector2(10, -180));
+        transitionViewport.AddComponent<RectMask2D>();
+        var transitionRows = new GameObject("TransitionRows", typeof(RectTransform));
+        transitionRows.transform.SetParent(transitionViewport.transform, false);
+        _transitionList = transitionRows.GetComponent<RectTransform>();
+        _transitionList.anchorMin = new Vector2(0, 1);
+        _transitionList.anchorMax = new Vector2(1, 1);
+        _transitionList.pivot = new Vector2(0.5f, 1);
+        var transitionScroll = transitionViewport.AddComponent<ScrollRect>();
+        transitionScroll.viewport = transitionViewport.GetComponent<RectTransform>();
+        transitionScroll.content = _transitionList;
+        transitionScroll.horizontal = false;
+        transitionScroll.vertical = true;
+        _transitionPanel.SetActive(false);
     }
 
     private void RenameActiveScene()
@@ -680,6 +728,93 @@ public class DmPanelUI : MonoBehaviour
         if (_sceneNameInput == null || string.IsNullOrWhiteSpace(_sceneNameInput.text)) return;
         SceneFileStore.RenameActiveScene(_sceneNameInput.text);
         _sceneNameInput.text = string.Empty;
+    }
+
+    private void ToggleTransitionsPanel()
+    {
+        bool show = _transitionPanel != null && !_transitionPanel.activeSelf;
+        _transitionPanel?.SetActive(show);
+        if (show) RefreshSceneTransitions(true);
+    }
+
+    private CampaignScene[] GetTransitionTargets()
+    {
+        var targets = new List<CampaignScene>();
+        foreach (var scene in SceneFileStore.GetCampaignScenes())
+            if (scene != null && scene.scene != null && scene.sceneId != SceneFileStore.ActiveSceneId)
+                targets.Add(scene);
+        return targets.ToArray();
+    }
+
+    private void StepTransitionTarget(int direction)
+    {
+        var targets = GetTransitionTargets();
+        if (targets.Length == 0) { RefreshTransitionTargetLabel(); return; }
+        _transitionTargetIndex = (_transitionTargetIndex + direction % targets.Length + targets.Length) % targets.Length;
+        RefreshTransitionTargetLabel();
+    }
+
+    private void RefreshTransitionTargetLabel()
+    {
+        var targets = GetTransitionTargets();
+        if (targets.Length == 0)
+        {
+            _selectedTransitionTargetId = null;
+            if (_transitionTargetText != null) _transitionTargetText.text = "Сначала создайте ещё сцену";
+            return;
+        }
+        _transitionTargetIndex = Mathf.Clamp(_transitionTargetIndex, 0, targets.Length - 1);
+        _selectedTransitionTargetId = targets[_transitionTargetIndex].sceneId;
+        if (_transitionTargetText != null) _transitionTargetText.text = targets[_transitionTargetIndex].title;
+    }
+
+    private void AddSceneTransition()
+    {
+        RefreshTransitionTargetLabel();
+        if (string.IsNullOrEmpty(_selectedTransitionTargetId)) return;
+        string title = _transitionTitleInput.text;
+        if (!int.TryParse(_transitionXInput.text, out int x)) x = 0;
+        if (!int.TryParse(_transitionYInput.text, out int y)) y = 0;
+        int before = SceneFileStore.GetActiveSceneTransitions().Length;
+        SceneFileStore.AddSceneTransition(title, _selectedTransitionTargetId, x, y);
+        if (SceneFileStore.GetActiveSceneTransitions().Length == before) return;
+        _transitionTitleInput.text = string.Empty;
+        _transitionXInput.text = "0";
+        _transitionYInput.text = "0";
+        RefreshSceneTransitions(true);
+    }
+
+    private void RefreshSceneTransitions(bool force = false)
+    {
+        if (_transitionList == null) return;
+        RefreshTransitionTargetLabel();
+        var transitions = SceneFileStore.GetActiveSceneTransitions();
+        var signature = new System.Text.StringBuilder();
+        foreach (var item in transitions)
+        {
+            if (item == null) continue;
+            string targetName = Array.Find(SceneFileStore.GetCampaignScenes(), scene => scene != null
+                && scene.sceneId == item.targetSceneId)?.title;
+            signature.Append(item.id).Append(':').Append(item.title).Append(':').Append(targetName)
+                .Append(':').Append(item.x).Append(':').Append(item.y).Append(';');
+        }
+        string snapshot = signature.ToString();
+        if (!force && snapshot == _transitionSignature) return;
+        _transitionSignature = snapshot;
+        foreach (Transform child in _transitionList) Destroy(child.gameObject);
+        _transitionList.sizeDelta = new Vector2(0, Mathf.Max(254, transitions.Length * 42));
+        foreach (var transition in transitions)
+        {
+            if (transition == null) continue;
+            string targetTitle = Array.Find(SceneFileStore.GetCampaignScenes(), item => item != null
+                && item.sceneId == transition.targetSceneId)?.title ?? "Сцена удалена";
+            int row = Array.IndexOf(transitions, transition);
+            Button(_transitionList, $"{transition.title} → {targetTitle} ({transition.x},{transition.y})", 244, 34, 0, -row * 42,
+                () => { SceneFileStore.UseSceneTransition(transition.id); RefreshSceneTransitions(true); }, VttUiSkin.Button);
+            Button(_transitionList, "×", 72, 34, 252, -row * 42,
+                () => { SceneFileStore.DeleteSceneTransition(transition.id); RefreshSceneTransitions(true); },
+                new Color(0.28f, 0.11f, 0.14f));
+        }
     }
 
     private void AdjustColumn(float delta)

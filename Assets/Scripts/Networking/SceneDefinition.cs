@@ -61,7 +61,16 @@ using UnityEngine;
     public SceneToken[] tokens = Array.Empty<SceneToken>();
     public SceneMasterData masterData = new();
     public SavedFog fog = new();
+    public SceneTransition[] transitions = Array.Empty<SceneTransition>();
     public bool includesPlayers;
+}
+
+[Serializable] public sealed class SceneTransition
+{
+    public string id;
+    public string title;
+    public string targetSceneId;
+    public int x, y;
 }
 
 /// <summary>Master-only, scene-local token data. Never put this in replicated token state.</summary>
@@ -299,6 +308,17 @@ public static class SceneValidation
     {
         Require(scene != null && scene.version == SceneSaveMigration.CurrentSceneVersion,
             "Неподдерживаемая версия сцены.");
+        if (scene.transitions == null) scene.transitions = Array.Empty<SceneTransition>();
+        Require(scene.transitions.Length <= 256, "В сцене слишком много переходов.");
+        var transitionIds = new HashSet<string>();
+        foreach (var transition in scene.transitions)
+            Require(transition != null && !string.IsNullOrWhiteSpace(transition.id)
+                && transition.id.Length <= 64 && transitionIds.Add(transition.id)
+                && !string.IsNullOrWhiteSpace(transition.title) && transition.title.Length <= 128
+                && !string.IsNullOrWhiteSpace(transition.targetSceneId) && transition.targetSceneId.Length <= 64
+                && transition.x >= -10000 && transition.x <= 10000
+                && transition.y >= -10000 && transition.y <= 10000,
+                "Некорректный переход сцены.");
         Require(!string.IsNullOrWhiteSpace(scene.sceneId) && scene.sceneId.Length <= 64,
             "Некорректный ID сцены.");
         Require(!string.IsNullOrEmpty(scene.mapImage), "Сначала загрузите изображение карты.");
@@ -367,6 +387,20 @@ public static class SceneValidation
         foreach (var entry in campaign.scenes)
             Require(string.IsNullOrEmpty(entry.scene.mapAssetId) || mapIds.Contains(entry.scene.mapAssetId),
                 "Сцена ссылается на отсутствующую карту каталога.");
+        foreach (var entry in campaign.scenes)
+        {
+            if (entry.scene.transitions == null) entry.scene.transitions = Array.Empty<SceneTransition>();
+            Require(entry.scene.transitions.Length <= 256, "В сцене слишком много переходов.");
+            var transitionIds = new HashSet<string>();
+            foreach (var transition in entry.scene.transitions)
+                Require(transition != null && !string.IsNullOrWhiteSpace(transition.id)
+                    && transition.id.Length <= 64 && transitionIds.Add(transition.id)
+                    && !string.IsNullOrWhiteSpace(transition.title) && transition.title.Length <= 128
+                    && ids.Contains(transition.targetSceneId) && transition.targetSceneId != entry.sceneId
+                    && transition.x >= -10000 && transition.x <= 10000
+                    && transition.y >= -10000 && transition.y <= 10000,
+                    "Некорректный переход между сценами.");
+        }
         Require(campaign.statBlocks != null && campaign.statBlocks.Length <= 4096,
             "Некорректный каталог статблоков.");
         var statBlockIds = new HashSet<string>();

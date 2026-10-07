@@ -139,6 +139,15 @@ public class DiceboundCampaignModelTests
         Set(battle, "activeParticipantId", "7");
         Set(battle, "participants", battleParticipants);
         Set(entries.GetValue(1), "battle", battle);
+        var transition = New("SceneTransition");
+        Set(transition, "id", "door-to-b");
+        Set(transition, "title", "В старый склеп");
+        Set(transition, "targetSceneId", "scene-b");
+        Set(transition, "x", 3);
+        Set(transition, "y", 5);
+        var transitions = Array.CreateInstance(TypeOf("SceneTransition"), 1);
+        transitions.SetValue(transition, 0);
+        Set(Get<object>(entries.GetValue(0), "scene"), "transitions", transitions);
         var mapAsset = New("CampaignMapAsset");
         Set(mapAsset, "id", "map-forest");
         Set(mapAsset, "name", "Лес");
@@ -181,6 +190,9 @@ public class DiceboundCampaignModelTests
                 .Invoke(null, new object[] { campaignPath });
             Assert.That(Get<Array>(restored, "scenes").Length, Is.EqualTo(2));
             Assert.That(Get<string>(restored, "activeSceneId"), Is.EqualTo("scene-b"));
+            var restoredTransitions = Get<Array>(Get<object>(Get<Array>(restored, "scenes").GetValue(0), "scene"), "transitions");
+            Assert.That(restoredTransitions.Length, Is.EqualTo(1));
+            Assert.That(Get<string>(restoredTransitions.GetValue(0), "targetSceneId"), Is.EqualTo("scene-b"));
             var restoredBattle = Get<object>(Get<Array>(restored, "scenes").GetValue(1), "battle");
             var restoredParticipant = Get<Array>(restoredBattle, "participants").GetValue(0);
             Assert.That(Get<string>(restoredParticipant, "name"), Is.EqualTo("Следопыт"));
