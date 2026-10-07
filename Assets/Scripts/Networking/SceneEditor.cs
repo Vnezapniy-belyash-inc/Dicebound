@@ -170,20 +170,24 @@ public sealed class SceneEditor : MonoBehaviour
     { Deactivate(); Model.Replace(geometry); Model.RevealPaused = true; Publish(); }
     public void RevealAfterMapTransfer()
     {
+        LateJoinSync.EnsureInstance();
+        LateJoinSync.Instance?.SynchronizeCurrentWorldForAll();
         StartCoroutine(WaitForMapTransfer(++_loadGeneration));
     }
     private System.Collections.IEnumerator WaitForMapTransfer(int generation)
     {
         float deadline = Time.unscaledTime + (MapSync.Instance?.TransferWaitSeconds ?? 40);
         while (generation == _loadGeneration && IsMaster && Time.unscaledTime < deadline
-            && MapSync.Instance != null && !MapSync.Instance.AllClientsHaveCurrentMap)
+            && (MapSync.Instance == null || !MapSync.Instance.AllClientsHaveCurrentMap
+                || LateJoinSync.Instance == null || !LateJoinSync.Instance.AllSceneWorldClientsReady))
             yield return null;
         if (generation != _loadGeneration || !IsMaster) yield break;
-        if (MapSync.Instance?.AllClientsHaveCurrentMap == true)
+        if (MapSync.Instance?.AllClientsHaveCurrentMap == true
+            && LateJoinSync.Instance?.AllSceneWorldClientsReady == true)
         {
             if (HostSceneCurtain.IsCurtainDown) HostSceneCurtain.Instance?.ToggleCurtainOnHost();
         }
-        else DiceUI.Instance?.ShowToolNotice("Не все игроки получили карту. Занавес оставлен закрытым; можно повторить передачу или показать карту вручную.");
+        else DiceUI.Instance?.ShowToolNotice("Не все игроки получили карту и объекты сцены. Занавес оставлен закрытым; можно повторить передачу или показать карту вручную.");
     }
     private void FinishStroke()
     {
