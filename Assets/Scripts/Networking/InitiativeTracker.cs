@@ -49,6 +49,9 @@ public class InitiativeTracker : NetworkBehaviour
     }
 
     private readonly List<Entry> _entries = new();
+    private const string StateMessage = "InitiativeStateV2", RequestMessage = "InitiativeRequestV2";
+    private const int MaxStateBytes = 512 * 1024;
+    private int _stateRevision, _receivedRevision = -1;
     // Host HP cache; only the privacy-filtered HP projection enters _netData.
     private readonly Dictionary<int, int> _hpById = new();
     private int _currentIndex;
@@ -196,8 +199,16 @@ public class InitiativeTracker : NetworkBehaviour
 
     public override void OnNetworkSpawn()
     {
+        _stateRevision = 0; _receivedRevision = -1;
+        NetworkManager.CustomMessagingManager.RegisterNamedMessageHandler(StateMessage, ReceiveState);
+        NetworkManager.CustomMessagingManager.RegisterNamedMessageHandler(RequestMessage, ReceiveStateRequest);
         _netData.OnValueChanged += OnDataChanged;
         if (!IsServer) ParseData(_netData.Value.ToString());
+        if (!IsServer)
+        {
+            using var writer = new FastBufferWriter(1, Unity.Collections.Allocator.Temp);
+            NetworkManager.CustomMessagingManager.SendNamedMessage(RequestMessage, Unity.Netcode.NetworkManager.ServerClientId, writer);
+        }
         RebuildRows();
         UpdateHostControls();
     }
@@ -205,6 +216,11 @@ public class InitiativeTracker : NetworkBehaviour
     public override void OnNetworkDespawn()
     {
         ResetPendingInitiative();
+        if (NetworkManager.CustomMessagingManager != null)
+        {
+            NetworkManager.CustomMessagingManager.UnregisterNamedMessageHandler(StateMessage);
+            NetworkManager.CustomMessagingManager.UnregisterNamedMessageHandler(RequestMessage);
+        }
         _netData.OnValueChanged -= OnDataChanged;
         _hpById.Clear();
     }
@@ -289,7 +305,7 @@ public class InitiativeTracker : NetworkBehaviour
             _currentIndex = Mathf.Max(0, state.currentIndex);
             _round = state.round;
             _activeParticipantId = state.activeParticipantId;
-            int entryLimit = Mathf.Min(state.entries.Length, 30);
+            int entryLimit = Mathf.Min(state.entries.Length, SceneValidation.MaxTokens + 64);
             for (int index = 0; index < entryLimit; index++)
             {
                 var item = state.entries[index];
@@ -373,13 +389,40 @@ public class InitiativeTracker : NetworkBehaviour
         if (!IsHost) return;
         string data = SerializeData();
         if (System.Text.Encoding.UTF8.GetByteCount(data)
-            > 3500)
+            > MaxStateBytes)
         {
             Debug.LogError("[Initiative] State exceeds network string capacity");
             DiceUI.Instance?.ShowToolNotice("Список инициативы слишком большой.");
             return;
         }
-        _netData.Value = new FixedString4096Bytes(data);
+        _stateRevision++;
+        foreach (ulong client in NetworkManager.ConnectedClientsIds)
+            if (client != Unity.Netcode.NetworkManager.ServerClientId) SendState(client, data);
+        RebuildRows();
+    }
+
+    private void ReceiveStateRequest(ulong client, FastBufferReader reader)
+    {
+        if (IsServer && NetworkManager.ConnectedClients.ContainsKey(client)) SendState(client, SerializeData());
+    }
+
+    private void SendState(ulong client, string data)
+    {
+        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(data);
+        if (bytes.Length > MaxStateBytes) return;
+        using var writer = new FastBufferWriter(bytes.Length + 8, Unity.Collections.Allocator.Temp);
+        writer.WriteValueSafe(_stateRevision); writer.WriteValueSafe(bytes.Length); writer.WriteBytesSafe(bytes);
+        NetworkManager.CustomMessagingManager.SendNamedMessage(StateMessage, client, writer, NetworkDelivery.ReliableFragmentedSequenced);
+    }
+
+    private void ReceiveState(ulong sender, FastBufferReader reader)
+    {
+        if (IsServer || sender != Unity.Netcode.NetworkManager.ServerClientId || !reader.TryBeginRead(8)) return;
+        reader.ReadValueSafe(out int revision); reader.ReadValueSafe(out int length);
+        if (revision <= _receivedRevision || length <= 0 || length > MaxStateBytes || !reader.TryBeginRead(length)) return;
+        var bytes = new byte[length]; reader.ReadBytesSafe(ref bytes, length);
+        ParseData(System.Text.Encoding.UTF8.GetString(bytes));
+        _receivedRevision = revision;
         RebuildRows();
     }
 
@@ -404,14 +447,14 @@ public class InitiativeTracker : NetworkBehaviour
     private void AddEntryInternal(string name, int initiative, string colorHex, ulong playerId,
         int hp = 0, string tokenId = null)
     {
-        if (!IsHost || _entries.Count >= 30 || string.IsNullOrWhiteSpace(name)) return;
+        if (!IsHost || _entries.Count >= SceneValidation.MaxTokens + 64 || string.IsNullOrWhiteSpace(name)) return;
         initiative = Mathf.Clamp(initiative, -999, 999);
         string cleanName = name.Trim();
         if (cleanName.Length > 28) cleanName = cleanName.Substring(0, 28);
         var candidate = new Entry { id = _nextEntryId + 1, name = cleanName,
             initiative = initiative, colorHex = colorHex, playerId = playerId, tokenId = tokenId };
         _entries.Add(candidate);
-        if (System.Text.Encoding.UTF8.GetByteCount(SerializeData()) > 3500)
+        if (System.Text.Encoding.UTF8.GetByteCount(SerializeData()) > MaxStateBytes)
         {
             _entries.RemoveAt(_entries.Count - 1);
             DiceUI.Instance?.ShowToolNotice("Список инициативы слишком большой.");
