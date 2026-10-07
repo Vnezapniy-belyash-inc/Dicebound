@@ -207,6 +207,48 @@ public class NetworkDiceManager : MonoBehaviour
         }
     }
 
+    public bool RollInitiativeGroup(string[] tokenIds)
+    {
+        if (tokenIds == null || tokenIds.Length == 0 || NetworkManager.Singleton?.IsServer != true || dicePrefab == null) return false;
+        StartCoroutine(SpawnAndRollInitiativeGroup((string[])tokenIds.Clone()));
+        return true;
+    }
+
+    private IEnumerator SpawnAndRollInitiativeGroup(string[] tokenIds)
+    {
+        Vector3 center = MapController.Instance != null ? MapController.Instance.transform.position : Vector3.zero;
+        const int columns = 8;
+        int failed = 0;
+        for (int i = 0; i < tokenIds.Length; i++)
+        {
+            if (NetworkManager.Singleton?.IsServer != true)
+            {
+                for (int pending = i; pending < tokenIds.Length; pending++)
+                {
+                    InitiativeTracker.Instance?.RemovePendingInitiativeAssignment(tokenIds[pending]);
+                    failed++;
+                }
+                break;
+            }
+
+            int column = i % columns;
+            int row = i / columns;
+            Vector3 position = center + new Vector3((column - (columns - 1) * 0.5f) * 0.9f, 0f, row * 0.9f);
+            NetworkObject networkObject = DoSpawn(DieType.d20, position, NetworkManager.Singleton.LocalClientId);
+            var die = networkObject != null ? networkObject.GetComponent<NetworkDice>() : null;
+            if (die == null || !die.IsReady)
+            {
+                if (networkObject != null && networkObject.IsSpawned) networkObject.Despawn();
+                InitiativeTracker.Instance?.RemovePendingInitiativeAssignment(tokenIds[i]);
+                failed++;
+            }
+            else die.Roll();
+
+            if ((i + 1) % 4 == 0) yield return null;
+        }
+        if (failed > 0) DiceUI.Instance?.ShowToolNotice($"Не удалось запустить {failed} автоматических бросков d20.");
+    }
+
     private IEnumerator SendSpawnRequestRoutine(int requestId, DieType type, Vector3 pos)
     {
         for (int attempt = 0; attempt < MaxSpawnAttempts; attempt++)

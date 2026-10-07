@@ -148,8 +148,27 @@ public class InitiativeTracker : NetworkBehaviour
         }
         _awaitingInitiativeTokenId = _awaitingInitiativeTokenIds.Peek();
         _initiativeRollExpiresAt = Time.unscaledTime + 300f;
-        DiceUI.Instance?.ShowToolNotice($"Добавлено в инициативу: {eligible.Count}. Бросайте d20 — результаты назначатся по порядку списка токенов.");
+        var tokenIds = new string[eligible.Count];
+        for (int i = 0; i < eligible.Count; i++) tokenIds[i] = eligible[i].SceneId;
+        if (NetworkDiceManager.Instance?.RollInitiativeGroup(tokenIds) != true)
+        {
+            _awaitingInitiativeTokenIds.Clear();
+            _awaitingInitiativeTokenId = null;
+            DiceUI.Instance?.ShowToolNotice($"Добавлено в инициативу: {eligible.Count}, но сетевые кости недоступны. Броски можно назначить кнопкой d20 в трекере.");
+            return eligible.Count;
+        }
+        DiceUI.Instance?.ShowToolNotice($"Добавлено в инициативу: {eligible.Count}. Брошены групповые d20; результаты назначатся по порядку списка токенов.");
         return eligible.Count;
+    }
+
+    public void RemovePendingInitiativeAssignment(string tokenId)
+    {
+        if (!IsHost || string.IsNullOrEmpty(tokenId) || _awaitingInitiativeTokenIds.Count == 0) return;
+        var pending = new List<string>(_awaitingInitiativeTokenIds);
+        if (!pending.Remove(tokenId)) return;
+        _awaitingInitiativeTokenIds.Clear();
+        foreach (string pendingId in pending) _awaitingInitiativeTokenIds.Enqueue(pendingId);
+        _awaitingInitiativeTokenId = _awaitingInitiativeTokenIds.Count > 0 ? _awaitingInitiativeTokenIds.Peek() : null;
     }
 
     public void CancelInitiativeFromJournal()
