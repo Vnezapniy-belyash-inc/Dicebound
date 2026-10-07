@@ -43,6 +43,11 @@ public class DmPanelUI : MonoBehaviour
     private RectTransform _tokensContent;
     private string _tokenSignature;
     private readonly HashSet<string> _selectedInitiativeTokenIds = new();
+    private InputField _referenceSearch, _referenceTitle, _referenceCategory, _referenceTags, _referenceBody;
+    private RectTransform _referenceList;
+    private string _selectedReferenceId, _referenceSignature;
+    private Text _referencePrivacyText, _referencePinText, _referenceHint;
+    private bool _referenceMasterOnly, _referencePinned;
     private Text _sceneNotice, _sceneMarkupText, _sceneDiameterText;
     private Text _fogEnabledText, _fogPauseText, _fogPreviewText, _fogSourceText, _fogHistoryText, _fogAutosaveText, _fogStatus;
 
@@ -108,14 +113,15 @@ public class DmPanelUI : MonoBehaviour
         Button(_panel.transform, "×", 32, 30, 362, -14,
             () => _panel.SetActive(false), VttUiSkin.Button);
 
-        _pages = new GameObject[7];
-        _tabs = new Image[7];
-        string[] titles = { "Карта", "Игроки", "Бой", "Токены", "Сцена", "Туман", "Статы" };
+        _pages = new GameObject[8];
+        _tabs = new Image[8];
+        string[] titles = { "Карта", "Игроки", "Бой", "Токены", "Сцена", "Туман", "Статы", "Справ." };
         for (int i = 0; i < _pages.Length; i++)
         {
             int pageIndex = i;
-            var tab = Button(_panel.transform, titles[i], 54, 34, 8 + i * 56, -58,
+            var tab = Button(_panel.transform, titles[i], 45, 34, 8 + i * 46, -58,
                 () => ShowPage(pageIndex), VttUiSkin.Button);
+            tab.GetComponentInChildren<Text>().fontSize = 11;
             _tabs[i] = tab.GetComponent<Image>();
             _pages[i] = new GameObject(titles[i] + "Page", typeof(RectTransform));
             _pages[i].transform.SetParent(_panel.transform, false);
@@ -129,6 +135,7 @@ public class DmPanelUI : MonoBehaviour
         BuildScenePage(_pages[4].transform);
         BuildFogPage(_pages[5].transform);
         BuildStatBlockPage(_pages[6].transform);
+        BuildReferencePage(_pages[7].transform);
         ShowPage(0);
     }
 
@@ -191,6 +198,154 @@ public class DmPanelUI : MonoBehaviour
             new Color(0.28f, 0.11f, 0.14f));
         _statBlockHint = Label(parent, "", 12, VttUiSkin.Muted, TextAnchor.UpperLeft,
             new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 52), new Vector2(0, -438));
+    }
+
+    private void BuildReferencePage(Transform parent)
+    {
+        Label(parent, "Справочник кампании", 16, VttUiSkin.Text, TextAnchor.MiddleLeft,
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(250, 26), new Vector2(0, -2), true);
+        Button(parent, "Новая", 76, 26, 274, -2, ClearReferenceInputs, VttUiSkin.Button);
+        _referenceSearch = CreateInput(parent, "Поиск по названию, тексту, тегам", 0, -32, 350, 28);
+        _referenceSearch.onValueChanged.AddListener(_ => RefreshReferences(true));
+        var viewport = Box(parent, "ReferenceViewport", new Color(0, 0, 0, 0.01f), 0, false);
+        Place(viewport, new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 108), new Vector2(0, -64));
+        viewport.AddComponent<RectMask2D>();
+        var rows = new GameObject("References", typeof(RectTransform));
+        rows.transform.SetParent(viewport.transform, false);
+        _referenceList = rows.GetComponent<RectTransform>();
+        _referenceList.anchorMin = new Vector2(0, 1);
+        _referenceList.anchorMax = new Vector2(1, 1);
+        _referenceList.pivot = new Vector2(0.5f, 1);
+        var scroll = viewport.AddComponent<ScrollRect>();
+        scroll.viewport = viewport.GetComponent<RectTransform>();
+        scroll.content = _referenceList;
+        scroll.horizontal = false;
+        scroll.vertical = true;
+        scroll.scrollSensitivity = 24;
+
+        _referenceTitle = CreateInput(parent, "Название", 0, -178, 350, 28);
+        _referenceCategory = CreateInput(parent, "Категория", 0, -210, 170, 28);
+        _referenceTags = CreateInput(parent, "Теги через запятую", 180, -210, 170, 28);
+        _referenceBody = CreateInput(parent, "Содержание записи", 0, -242, 350, 132, true);
+        _referenceBody.characterLimit = 65000;
+        _referencePrivacyText = Button(parent, "Игрокам доступно", 170, 28, 0, -380,
+            ToggleReferencePrivacy, VttUiSkin.Button).GetComponentInChildren<Text>();
+        _referencePinText = Button(parent, "Не закреплено", 170, 28, 180, -380,
+            ToggleReferencePinned, VttUiSkin.Button).GetComponentInChildren<Text>();
+        Button(parent, "Сохранить запись", 210, 30, 0, -414, SaveReference, VttUiSkin.Button);
+        Button(parent, "Удалить", 130, 30, 220, -414, DeleteReference,
+            new Color(0.28f, 0.11f, 0.14f));
+        _referenceHint = Label(parent, "Записи сохраняются в файл сессии.", 11, VttUiSkin.Muted,
+            TextAnchor.UpperLeft, new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(350, 42), new Vector2(0, -451));
+    }
+
+    private void RefreshReferences(bool force = false)
+    {
+        if (_referenceList == null) return;
+        var entries = SceneFileStore.GetReferenceEntries();
+        string query = (_referenceSearch?.text ?? string.Empty).Trim();
+        var filtered = new List<ReferenceEntry>();
+        foreach (var entry in entries)
+        {
+            if (entry == null) continue;
+            if (string.IsNullOrEmpty(query) || entry.title.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0
+                || entry.category.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0
+                || entry.body.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0
+                || Array.Exists(entry.tags, tag => tag.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0))
+                filtered.Add(entry);
+        }
+        filtered.Sort((a, b) =>
+        {
+            int pinned = b.pinned.CompareTo(a.pinned);
+            return pinned != 0 ? pinned : string.Compare(a.title, b.title, StringComparison.CurrentCultureIgnoreCase);
+        });
+        if (!string.IsNullOrEmpty(_selectedReferenceId)
+            && !Array.Exists(entries, item => item != null && item.id == _selectedReferenceId)) ClearReferenceInputs();
+        var signature = new System.Text.StringBuilder(query);
+        foreach (var entry in filtered) signature.Append('|').Append(entry.id).Append(':').Append(entry.title).Append(':').Append(entry.category).Append(':').Append(entry.pinned);
+        string snapshot = signature.ToString();
+        if (!force && snapshot == _referenceSignature) return;
+        _referenceSignature = snapshot;
+        foreach (Transform child in _referenceList) Destroy(child.gameObject);
+        _referenceList.sizeDelta = new Vector2(0, Mathf.Max(108, filtered.Count * 32));
+        for (int i = 0; i < filtered.Count; i++)
+        {
+            var entry = filtered[i];
+            string title = (entry.pinned ? "★ " : "") + entry.title + " · " + entry.category;
+            Button(_referenceList, title, 340, 28, 0, -i * 32,
+                () => SelectReference(entry), VttUiSkin.Button);
+        }
+    }
+
+    private void SelectReference(ReferenceEntry entry)
+    {
+        if (entry == null) return;
+        _selectedReferenceId = entry.id;
+        _referenceTitle.text = entry.title;
+        _referenceCategory.text = entry.category;
+        _referenceTags.text = string.Join(", ", entry.tags ?? Array.Empty<string>());
+        _referenceBody.text = entry.body;
+        _referenceMasterOnly = entry.masterOnly;
+        _referencePinned = entry.pinned;
+        UpdateReferenceToggles();
+        _referenceHint.text = "Выбрано: " + entry.title;
+    }
+
+    private void ClearReferenceInputs()
+    {
+        _selectedReferenceId = null;
+        if (_referenceTitle == null) return;
+        _referenceTitle.SetTextWithoutNotify(string.Empty);
+        _referenceCategory.SetTextWithoutNotify(string.Empty);
+        _referenceTags.SetTextWithoutNotify(string.Empty);
+        _referenceBody.SetTextWithoutNotify(string.Empty);
+        _referenceMasterOnly = false;
+        _referencePinned = false;
+        UpdateReferenceToggles();
+    }
+
+    private void ToggleReferencePrivacy() { _referenceMasterOnly = !_referenceMasterOnly; UpdateReferenceToggles(); }
+    private void ToggleReferencePinned() { _referencePinned = !_referencePinned; UpdateReferenceToggles(); }
+
+    private void UpdateReferenceToggles()
+    {
+        if (_referencePrivacyText != null) _referencePrivacyText.text = _referenceMasterOnly ? "Только мастеру" : "Игрокам доступно";
+        if (_referencePinText != null) _referencePinText.text = _referencePinned ? "★ Закреплено" : "Не закреплено";
+    }
+
+    private void SaveReference()
+    {
+        try
+        {
+            var tags = new List<string>();
+            foreach (string tag in (_referenceTags.text ?? string.Empty).Split(','))
+                if (!string.IsNullOrWhiteSpace(tag)) tags.Add(tag.Trim());
+            var entry = new ReferenceEntry
+            {
+                id = _selectedReferenceId, title = _referenceTitle.text, category = _referenceCategory.text,
+                body = _referenceBody.text, tags = tags.ToArray(), masterOnly = _referenceMasterOnly, pinned = _referencePinned
+            };
+            SceneFileStore.UpsertReferenceEntry(entry);
+            _selectedReferenceId = entry.id;
+            _referenceHint.text = "Запись сохранена в кампании. Не забудьте сохранить файл сессии.";
+            RefreshReferences(true);
+        }
+        catch (Exception ex) { _referenceHint.text = ex.Message; }
+    }
+
+    private void DeleteReference()
+    {
+        if (string.IsNullOrEmpty(_selectedReferenceId)) { _referenceHint.text = "Сначала выберите запись."; return; }
+        string id = _selectedReferenceId;
+        try
+        {
+            SceneFileStore.DeleteReferenceEntry(id);
+            ClearReferenceInputs();
+            _referenceHint.text = "Запись удалена из кампании.";
+            RefreshReferences(true);
+        }
+        catch (Exception ex) { _referenceHint.text = ex.Message; }
     }
 
     private InputField CreateInput(Transform parent, string placeholderText, float x, float y,
@@ -587,6 +742,7 @@ public class DmPanelUI : MonoBehaviour
             _pages[i].SetActive(i == index);
             _tabs[i].color = i == index ? new Color(0.11f, 0.29f, 0.48f) : VttUiSkin.Button;
         }
+        if (index == 7) RefreshReferences(true);
         Refresh();
     }
 

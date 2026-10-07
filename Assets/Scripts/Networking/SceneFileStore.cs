@@ -32,6 +32,51 @@ public static class SceneFileStore
 
     public static StatBlockDefinition[] GetStatBlocks() => _campaign?.statBlocks ?? Array.Empty<StatBlockDefinition>();
 
+    public static ReferenceEntry[] GetReferenceEntries() => _campaign?.referenceEntries ?? Array.Empty<ReferenceEntry>();
+
+    public static void UpsertReferenceEntry(ReferenceEntry entry)
+    {
+        if (NetworkManager.Singleton?.IsHost != true) throw new InvalidOperationException("Только мастер редактирует справочник.");
+        if (entry == null) throw new ArgumentNullException(nameof(entry));
+        CaptureCampaign(_campaign?.title ?? "Кампания");
+        entry.id = string.IsNullOrWhiteSpace(entry.id) ? Guid.NewGuid().ToString("N") : entry.id;
+        entry.title = (entry.title ?? string.Empty).Trim();
+        entry.category = (entry.category ?? string.Empty).Trim();
+        entry.body ??= string.Empty;
+        entry.tags ??= Array.Empty<string>();
+        if (entry.title.Length == 0) throw new FormatException("Укажите название записи.");
+        if (entry.category.Length == 0) entry.category = "Без категории";
+        for (int i = 0; i < entry.tags.Length; i++) entry.tags[i] = (entry.tags[i] ?? string.Empty).Trim();
+        var previous = _campaign.referenceEntries ?? Array.Empty<ReferenceEntry>();
+        int index = Array.FindIndex(previous, item => item.id == entry.id);
+        var updated = (ReferenceEntry[])previous.Clone();
+        if (index < 0)
+        {
+            Array.Resize(ref updated, updated.Length + 1);
+            index = updated.Length - 1;
+        }
+        updated[index] = entry;
+        _campaign.referenceEntries = updated;
+        try { SceneValidation.Validate(_campaign); }
+        catch { _campaign.referenceEntries = previous; throw; }
+        _campaignDirty = true;
+    }
+
+    public static void DeleteReferenceEntry(string id)
+    {
+        if (NetworkManager.Singleton?.IsHost != true) throw new InvalidOperationException("Только мастер редактирует справочник.");
+        if (string.IsNullOrWhiteSpace(id)) return;
+        CaptureCampaign(_campaign?.title ?? "Кампания");
+        var entries = _campaign.referenceEntries ?? Array.Empty<ReferenceEntry>();
+        int index = Array.FindIndex(entries, item => item.id == id);
+        if (index < 0) return;
+        var updated = new ReferenceEntry[entries.Length - 1];
+        if (index > 0) Array.Copy(entries, 0, updated, 0, index);
+        if (index < updated.Length) Array.Copy(entries, index + 1, updated, index, updated.Length - index);
+        _campaign.referenceEntries = updated;
+        _campaignDirty = true;
+    }
+
     public static void UpsertStatBlock(StatBlockDefinition definition)
     {
         if (NetworkManager.Singleton?.IsHost != true) throw new InvalidOperationException("Только мастер редактирует статблоки.");

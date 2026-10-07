@@ -145,6 +145,7 @@ using UnityEngine;
     public string body;
     public string[] tags = Array.Empty<string>();
     public bool masterOnly;
+    public bool pinned;
 }
 
 /// <summary>Portable campaign container; the active encounter can be stored independently.</summary>

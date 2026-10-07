@@ -144,6 +144,18 @@ public class DiceboundCampaignModelTests
         var statBlocks = Array.CreateInstance(TypeOf("StatBlockDefinition"), 1);
         statBlocks.SetValue(statBlock, 0);
         Set(campaign, "statBlocks", statBlocks);
+        var reference = New("ReferenceEntry");
+        Set(reference, "id", "rules-rest");
+        Set(reference, "title", "Отдых");
+        Set(reference, "category", "Правила");
+        Set(reference, "body", "Короткий отдых");
+        Set(reference, "pinned", true);
+        var tags = Array.CreateInstance(typeof(string), 1);
+        tags.SetValue("отдых", 0);
+        Set(reference, "tags", tags);
+        var references = Array.CreateInstance(TypeOf("ReferenceEntry"), 1);
+        references.SetValue(reference, 0);
+        Set(campaign, "referenceEntries", references);
 
         string campaignPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".json");
         string scenePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".json");
@@ -156,6 +168,10 @@ public class DiceboundCampaignModelTests
             Assert.That(Get<string>(restored, "activeSceneId"), Is.EqualTo("scene-b"));
             Assert.That(Get<Array>(restored, "statBlocks").Length, Is.EqualTo(1));
             Assert.That(Get<string>(Get<Array>(restored, "statBlocks").GetValue(0), "name"), Is.EqualTo("Гоблин"));
+            Assert.That(Get<Array>(restored, "referenceEntries").Length, Is.EqualTo(1));
+            var restoredReference = Get<Array>(restored, "referenceEntries").GetValue(0);
+            Assert.That(Get<string>(restoredReference, "title"), Is.EqualTo("Отдых"));
+            Assert.That(Get<bool>(restoredReference, "pinned"), Is.True);
             Assert.That(Get<Array>(restored, "mapAssets").Length, Is.EqualTo(1));
             var restoredScene = Get<object>(Get<Array>(restored, "scenes").GetValue(1), "scene");
             Assert.That(Get<string>(restoredScene, "mapAssetId"), Is.EqualTo("map-forest"));
