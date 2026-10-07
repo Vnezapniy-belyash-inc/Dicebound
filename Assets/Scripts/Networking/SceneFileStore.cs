@@ -302,9 +302,14 @@ public static class SceneFileStore
         Vector3 position = map.transform.position;
         Vector3 rotation = map.transform.eulerAngles;
         float scale = map.CurrentScale;
+        bool curtainWasDown = HostSceneCurtain.IsCurtainDown;
+        if (!curtainWasDown) HostSceneCurtain.Instance?.ToggleCurtainOnHost();
         map.RestoreSceneMap(bytes, position, rotation, scale);
         _currentMapAssetId = asset.id;
         _campaignDirty = true;
+        SceneEditor.Instance?.Publish();
+        FogManager.Instance?.PrepareForSceneTransfer();
+        if (!curtainWasDown) SceneEditor.Instance?.RevealAfterMapTransfer();
     }
 
     public static void DeleteMapAsset(string id)
