@@ -361,6 +361,7 @@ public class TokenController : NetworkDraggable
             };
         _masterData.currentHp = Mathf.Min(_masterData.currentHp, _masterData.maxHp);
         PublishMasterData();
+        PublishPublicStatBlock();
     }
 
     public bool ServerSetHealth(int current, int maximum, bool recordUndo = true)

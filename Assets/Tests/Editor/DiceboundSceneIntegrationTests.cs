@@ -177,6 +177,15 @@ public class DiceboundSceneIntegrationTests
         }
         Assert.That(ids.Contains(activeId), Is.True);
         Assert.That(capturedBattle.GetType().GetField("round").GetValue(capturedBattle), Is.EqualTo(4));
+        var block = JsonUtility.FromJson("{\"id\":\"restore-public-block\",\"name\":\"Public name\",\"size\":\"\",\"creatureType\":\"\",\"alignment\":\"\",\"speed\":\"\",\"challengeRating\":\"\",\"description\":\"Master secret\",\"actions\":[],\"publicFieldsMask\":1}", TypeOf("StatBlockDefinition"));
+        TypeOf("SceneFileStore").GetMethod("UpsertStatBlock").Invoke(null, new[] { block });
+        var statToken = Call(tokenManager, "CreateTokenAsHost", "Stat block restore", false);
+        var master = Call(statToken, "CaptureMasterData");
+        master.GetType().GetField("statBlockId").SetValue(master, "restore-public-block");
+        Call(statToken, "ServerApplyMasterData", master);
+        string publicBlock = Read<string>(statToken, "PublicStatBlockJson");
+        Assert.That(publicBlock, Does.Contain("Public name"), "Restoring master data must publish permitted stat block fields.");
+        Assert.That(publicBlock, Does.Not.Contain("Master secret"));
     }
 
     [UnityTearDown]
