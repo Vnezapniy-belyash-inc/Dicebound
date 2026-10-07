@@ -611,6 +611,7 @@ public static class SceneFileStore
         GameMasterUndo.Clear();
         bool curtain = HostSceneCurtain.IsCurtainDown;
         if (!curtain) HostSceneCurtain.Instance?.ToggleCurtainOnHost();
+        bool applyCompleted = false;
         try
         {
             ulong host = NetworkManager.Singleton.LocalClientId;
@@ -631,8 +632,16 @@ public static class SceneFileStore
             }
             TokenController.RebuildCellOccupancy();
             InitiativeTracker.Instance?.RestoreBattleState(battle ?? new SceneBattleState());
+            applyCompleted = true;
         }
-        finally { if (!curtain && HostSceneCurtain.IsCurtainDown) SceneEditor.Instance.RevealAfterMapTransfer(); }
+        finally
+        {
+            if (!curtain && HostSceneCurtain.IsCurtainDown)
+            {
+                if (applyCompleted) SceneEditor.Instance.RevealAfterMapTransfer();
+                else DiceUI.Instance?.ShowToolNotice("Сцену не удалось применить полностью. Занавес оставлен закрытым.");
+            }
+        }
         _currentSceneId = scene.sceneId;
         _currentMapAssetId = scene.mapAssetId;
         _lastSavedState = JsonUtility.ToJson(Capture(true));
