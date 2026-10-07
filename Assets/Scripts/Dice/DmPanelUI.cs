@@ -42,6 +42,7 @@ public class DmPanelUI : MonoBehaviour
     private Text _tokenCount;
     private RectTransform _tokensContent;
     private string _tokenSignature;
+    private readonly HashSet<string> _selectedInitiativeTokenIds = new();
     private Text _sceneNotice, _sceneMarkupText, _sceneDiameterText;
     private Text _fogEnabledText, _fogPauseText, _fogPreviewText, _fogSourceText, _fogHistoryText, _fogAutosaveText, _fogStatus;
 
@@ -452,12 +453,14 @@ public class DmPanelUI : MonoBehaviour
         scroll.movementType = ScrollRect.MovementType.Clamped;
         scroll.scrollSensitivity = 28;
         Label(parent, "Массовое удаление", 12, VttUiSkin.Muted, TextAnchor.MiddleLeft,
-            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 22), new Vector2(0, -445));
-        Button(parent, "Все…", 110, 30, 0, -470,
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 22), new Vector2(0, -458));
+        Button(parent, "Добавить выбранные в бой", 350, 30, 0, -425, AddSelectedTokensToInitiative,
+            new Color(0.10f, 0.30f, 0.48f));
+        Button(parent, "Все…", 110, 30, 0, -474,
             () => ConfirmDeleteTokens(0), new Color(0.28f, 0.11f, 0.14f));
-        Button(parent, "Мои…", 110, 30, 120, -470,
+        Button(parent, "Мои…", 110, 30, 120, -474,
             () => ConfirmDeleteTokens(1), new Color(0.28f, 0.11f, 0.14f));
-        Button(parent, "Игроков…", 110, 30, 240, -470,
+        Button(parent, "Игроков…", 110, 30, 240, -474,
             () => ConfirmDeleteTokens(2), new Color(0.28f, 0.11f, 0.14f));
     }
 
@@ -477,6 +480,9 @@ public class DmPanelUI : MonoBehaviour
         foreach (var token in FindObjectsByType<TokenController>(FindObjectsInactive.Exclude))
             if (token.IsSpawned) tokens.Add(token);
         tokens.Sort((a, b) => a.NetworkObjectId.CompareTo(b.NetworkObjectId));
+        var liveIds = new HashSet<string>();
+        foreach (var token in tokens) liveIds.Add(token.SceneId);
+        _selectedInitiativeTokenIds.RemoveWhere(id => !liveIds.Contains(id));
         var signature = new System.Text.StringBuilder();
         foreach (var token in tokens)
             signature.Append(token.NetworkObjectId).Append(':').Append(token.TokenName).Append(':')
@@ -497,12 +503,18 @@ public class DmPanelUI : MonoBehaviour
             var token = tokens[i];
             var row = Box(_tokensContent, "Token " + token.NetworkObjectId, VttUiSkin.Raised, 7, false);
             Place(row, new Vector2(0, 1), new Vector2(0, 1), new Vector2(340, 90), new Vector2(0, -i * 96));
+            Button(row.transform, _selectedInitiativeTokenIds.Contains(token.SceneId) ? "✓" : "○", 24, 24, 7, -3,
+                () => {
+                    if (_selectedInitiativeTokenIds.Contains(token.SceneId)) _selectedInitiativeTokenIds.Remove(token.SceneId);
+                    else _selectedInitiativeTokenIds.Add(token.SceneId);
+                    RefreshTokens(true);
+                }, VttUiSkin.Button);
             Label(row.transform, token.TokenName, 13, VttUiSkin.Text, TextAnchor.MiddleLeft,
-                new Vector2(0, 1), new Vector2(0, 1), new Vector2(200, 24), new Vector2(10, -3), true);
+                new Vector2(0, 1), new Vector2(0, 1), new Vector2(172, 24), new Vector2(36, -3), true);
             string status = (token.IsHidden ? "Скрыт" : "Виден") + (token.IsHero ? " · герой" : "") +
                 $" · {token.VisionFeet} фт";
             Label(row.transform, status, 11, VttUiSkin.Muted, TextAnchor.MiddleLeft,
-                new Vector2(0, 1), new Vector2(0, 1), new Vector2(200, 22), new Vector2(10, -28));
+                new Vector2(0, 1), new Vector2(0, 1), new Vector2(172, 22), new Vector2(36, -28));
             Button(row.transform, token.IsHidden ? "Показать" : "Скрыть", 64, 30, 214, -12,
                 () => {
                     if (!IsLocalHost || token == null || !token.IsSpawned) return;
@@ -631,6 +643,19 @@ public class DmPanelUI : MonoBehaviour
             RefreshMapCatalog(true);
         }, VttUiSkin.Button);
         BuildMapCatalogOverlay(parent);
+    }
+
+    private void AddSelectedTokensToInitiative()
+    {
+        if (!IsLocalHost) return;
+        var selected = new List<TokenController>();
+        foreach (var token in FindObjectsByType<TokenController>(FindObjectsInactive.Exclude))
+            if (token != null && token.IsSpawned && _selectedInitiativeTokenIds.Contains(token.SceneId)) selected.Add(token);
+        selected.Sort((a, b) => a.NetworkObjectId.CompareTo(b.NetworkObjectId));
+        int added = InitiativeTracker.Instance?.AddTokensAndArmInitiative(selected) ?? 0;
+        _selectedInitiativeTokenIds.Clear();
+        _tokenNotice.text = added == 0 ? "Нет выбранных токенов, которых ещё нет в инициативе." : $"Добавлено в инициативу: {added}. Бросайте d20 по очереди.";
+        RefreshTokens(true);
     }
 
     private void BuildMapCatalogOverlay(Transform parent)

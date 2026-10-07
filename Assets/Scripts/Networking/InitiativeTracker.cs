@@ -56,6 +56,7 @@ public class InitiativeTracker : NetworkBehaviour
     private int _round = 1;
     private string _activeParticipantId;
     private string _awaitingInitiativeTokenId;
+    private readonly Queue<string> _awaitingInitiativeTokenIds = new();
     private float _initiativeRollExpiresAt;
     private Canvas _canvas;
     private Font _font;
@@ -91,18 +92,28 @@ public class InitiativeTracker : NetworkBehaviour
 
     private void OnJournalResultRecorded(string dieType, int result, ulong throwerId)
     {
-        if (!IsHost || string.IsNullOrEmpty(_awaitingInitiativeTokenId)) return;
+        if (!IsHost || _awaitingInitiativeTokenIds.Count == 0 && string.IsNullOrEmpty(_awaitingInitiativeTokenId)) return;
         if (Time.unscaledTime > _initiativeRollExpiresAt)
         {
             _awaitingInitiativeTokenId = null;
+            _awaitingInitiativeTokenIds.Clear();
             DiceUI.Instance?.ShowToolNotice("Назначение инициативы истекло. Нажмите 🎲 ещё раз.");
             return;
         }
         if (dieType != "d20") return;
         if (throwerId != NetworkManager.Singleton.LocalClientId) return;
 
-        string tokenId = _awaitingInitiativeTokenId;
-        _awaitingInitiativeTokenId = null;
+        string tokenId;
+        if (_awaitingInitiativeTokenIds.Count > 0)
+        {
+            tokenId = _awaitingInitiativeTokenIds.Dequeue();
+            _awaitingInitiativeTokenId = _awaitingInitiativeTokenIds.Count > 0 ? _awaitingInitiativeTokenIds.Peek() : null;
+        }
+        else
+        {
+            tokenId = _awaitingInitiativeTokenId;
+            _awaitingInitiativeTokenId = null;
+        }
         int index = _entries.FindIndex(entry => entry.tokenId == tokenId);
         if (index < 0) return;
         int id = _entries[index].id;
@@ -115,15 +126,37 @@ public class InitiativeTracker : NetworkBehaviour
     public void ArmInitiativeFromJournal(string tokenId)
     {
         if (!IsHost || string.IsNullOrEmpty(tokenId) || !ContainsToken(tokenId)) return;
+        _awaitingInitiativeTokenIds.Clear();
         _awaitingInitiativeTokenId = tokenId;
         _initiativeRollExpiresAt = Time.unscaledTime + 120f;
         DiceUI.Instance?.ShowToolNotice("Бросьте d20: следующий результат из журнала пойдёт в инициативу.");
     }
 
+    public int AddTokensAndArmInitiative(IEnumerable<TokenController> tokens)
+    {
+        if (!IsHost || tokens == null) return 0;
+        var eligible = new List<TokenController>();
+        foreach (var token in tokens)
+            if (token != null && token.IsSpawned && !ContainsToken(token.SceneId)) eligible.Add(token);
+        if (eligible.Count == 0) return 0;
+
+        _awaitingInitiativeTokenIds.Clear();
+        foreach (var token in eligible)
+        {
+            AddToken(token);
+            _awaitingInitiativeTokenIds.Enqueue(token.SceneId);
+        }
+        _awaitingInitiativeTokenId = _awaitingInitiativeTokenIds.Peek();
+        _initiativeRollExpiresAt = Time.unscaledTime + 300f;
+        DiceUI.Instance?.ShowToolNotice($"Добавлено в инициативу: {eligible.Count}. Бросайте d20 — результаты назначатся по порядку списка токенов.");
+        return eligible.Count;
+    }
+
     public void CancelInitiativeFromJournal()
     {
-        if (!IsHost || string.IsNullOrEmpty(_awaitingInitiativeTokenId)) return;
+        if (!IsHost || _awaitingInitiativeTokenIds.Count == 0 && string.IsNullOrEmpty(_awaitingInitiativeTokenId)) return;
         _awaitingInitiativeTokenId = null;
+        _awaitingInitiativeTokenIds.Clear();
         DiceUI.Instance?.ShowToolNotice("Назначение броска инициативы отменено.");
     }
 
