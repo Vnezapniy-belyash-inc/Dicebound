@@ -219,13 +219,15 @@ public sealed class SceneEditor : MonoBehaviour
                 || LateJoinSync.Instance == null || !LateJoinSync.Instance.AllSceneWorldClientsReady
                 || !AllClientsHaveCurrentRevision || FogManager.Instance == null
                 || !FogManager.Instance.AllClientsHaveCurrentRevision
-                || !TokenImageSync.AllClientsHaveCurrentPortraits))
+                || !TokenImageSync.AllClientsHaveCurrentPortraits
+                || InitiativeTracker.Instance != null && !InitiativeTracker.Instance.AllClientsHaveCurrentState))
             yield return null;
         if (generation != _loadGeneration || !IsMaster) yield break;
         if (MapSync.Instance?.AllClientsHaveCurrentMap == true
             && LateJoinSync.Instance?.AllSceneWorldClientsReady == true
             && AllClientsHaveCurrentRevision && FogManager.Instance?.AllClientsHaveCurrentRevision == true
-            && TokenImageSync.AllClientsHaveCurrentPortraits)
+            && TokenImageSync.AllClientsHaveCurrentPortraits
+            && (InitiativeTracker.Instance == null || InitiativeTracker.Instance.AllClientsHaveCurrentState))
         {
             if (HostSceneCurtain.IsCurtainDown) HostSceneCurtain.Instance?.ToggleCurtainOnHost();
         }

@@ -49,9 +49,21 @@ public class InitiativeTracker : NetworkBehaviour
     }
 
     private readonly List<Entry> _entries = new();
-    private const string StateMessage = "InitiativeStateV2", RequestMessage = "InitiativeRequestV2";
+    private const string StateMessage = "InitiativeStateV2", RequestMessage = "InitiativeRequestV2", AckMessage = "InitiativeAckV2";
     private const int MaxStateBytes = 512 * 1024;
     private int _stateRevision, _receivedRevision = -1;
+    private readonly Dictionary<ulong, int> _stateAcks = new();
+    public bool AllClientsHaveCurrentState
+    {
+        get
+        {
+            if (!IsSpawned || !IsServer) return false;
+            foreach (ulong client in NetworkManager.ConnectedClientsIds)
+                if (client != Unity.Netcode.NetworkManager.ServerClientId
+                    && (!_stateAcks.TryGetValue(client, out int revision) || revision != _stateRevision)) return false;
+            return true;
+        }
+    }
     // Host HP cache; only the privacy-filtered HP projection enters _netData.
     private readonly Dictionary<int, int> _hpById = new();
     private int _currentIndex;
@@ -200,8 +212,10 @@ public class InitiativeTracker : NetworkBehaviour
     public override void OnNetworkSpawn()
     {
         _stateRevision = 0; _receivedRevision = -1;
+        _stateAcks.Clear();
         NetworkManager.CustomMessagingManager.RegisterNamedMessageHandler(StateMessage, ReceiveState);
         NetworkManager.CustomMessagingManager.RegisterNamedMessageHandler(RequestMessage, ReceiveStateRequest);
+        NetworkManager.CustomMessagingManager.RegisterNamedMessageHandler(AckMessage, ReceiveStateAck);
         _netData.OnValueChanged += OnDataChanged;
         if (!IsServer) ParseData(_netData.Value.ToString());
         if (!IsServer)
@@ -216,10 +230,12 @@ public class InitiativeTracker : NetworkBehaviour
     public override void OnNetworkDespawn()
     {
         ResetPendingInitiative();
+        _stateAcks.Clear();
         if (NetworkManager.CustomMessagingManager != null)
         {
             NetworkManager.CustomMessagingManager.UnregisterNamedMessageHandler(StateMessage);
             NetworkManager.CustomMessagingManager.UnregisterNamedMessageHandler(RequestMessage);
+            NetworkManager.CustomMessagingManager.UnregisterNamedMessageHandler(AckMessage);
         }
         _netData.OnValueChanged -= OnDataChanged;
         _hpById.Clear();
@@ -403,7 +419,18 @@ public class InitiativeTracker : NetworkBehaviour
 
     private void ReceiveStateRequest(ulong client, FastBufferReader reader)
     {
-        if (IsServer && NetworkManager.ConnectedClients.ContainsKey(client)) SendState(client, SerializeData());
+        if (IsServer && NetworkManager.ConnectedClients.ContainsKey(client))
+        {
+            _stateAcks.Remove(client);
+            SendState(client, SerializeData());
+        }
+    }
+
+    private void ReceiveStateAck(ulong client, FastBufferReader reader)
+    {
+        if (!IsServer || !NetworkManager.ConnectedClients.ContainsKey(client) || !reader.TryBeginRead(sizeof(int))) return;
+        reader.ReadValueSafe(out int revision);
+        if (revision == _stateRevision) _stateAcks[client] = revision;
     }
 
     private void SendState(ulong client, string data)
@@ -424,6 +451,9 @@ public class InitiativeTracker : NetworkBehaviour
         ParseData(System.Text.Encoding.UTF8.GetString(bytes));
         _receivedRevision = revision;
         RebuildRows();
+        using var ack = new FastBufferWriter(sizeof(int), Unity.Collections.Allocator.Temp);
+        ack.WriteValueSafe(revision);
+        NetworkManager.CustomMessagingManager.SendNamedMessage(AckMessage, Unity.Netcode.NetworkManager.ServerClientId, ack);
     }
 
     private int ActiveId => _entries.Count > 0 && _currentIndex < _entries.Count
