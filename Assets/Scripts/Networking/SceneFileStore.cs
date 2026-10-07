@@ -60,6 +60,7 @@ public static class SceneFileStore
         try { SceneValidation.Validate(_campaign); }
         catch { _campaign.referenceEntries = previous; throw; }
         _campaignDirty = true;
+        DmPanelUI.Instance?.OnReferenceLibraryChanged();
     }
 
     public static void DeleteReferenceEntry(string id)
@@ -75,6 +76,68 @@ public static class SceneFileStore
         if (index < updated.Length) Array.Copy(entries, index + 1, updated, index, updated.Length - index);
         _campaign.referenceEntries = updated;
         _campaignDirty = true;
+        DmPanelUI.Instance?.OnReferenceLibraryChanged();
+    }
+
+    public static void ExportReferenceLibrary(string path)
+    {
+        if (NetworkManager.Singleton?.IsHost != true) throw new InvalidOperationException("Только мастер экспортирует справочник.");
+        if (string.IsNullOrWhiteSpace(path)) return;
+        var file = new ReferenceLibraryFile { entries = GetReferenceEntries() };
+        string json = JsonUtility.ToJson(file, true);
+        if (Encoding.UTF8.GetByteCount(json) > 16 * 1024 * 1024)
+            throw new InvalidOperationException("Файл справочника превышает лимит 16 МБ.");
+        WriteAtomically(path, json);
+    }
+
+    public static void ImportReferenceLibrary(string path)
+    {
+        if (NetworkManager.Singleton?.IsHost != true) throw new InvalidOperationException("Только мастер импортирует справочник.");
+        if (string.IsNullOrWhiteSpace(path)) return;
+        var info = new FileInfo(path);
+        if (!info.Exists || info.Length > 16 * 1024 * 1024)
+            throw new InvalidOperationException("Файл справочника отсутствует или превышает лимит 16 МБ.");
+        var file = JsonUtility.FromJson<ReferenceLibraryFile>(File.ReadAllText(path, Encoding.UTF8));
+        ValidateReferenceLibrary(file);
+        CaptureCampaign(_campaign?.title ?? "Кампания");
+        var previous = _campaign.referenceEntries;
+        _campaign.referenceEntries = file.entries;
+        try { SceneValidation.Validate(_campaign); }
+        catch { _campaign.referenceEntries = previous; throw; }
+        _campaignDirty = true;
+        DmPanelUI.Instance?.OnReferenceLibraryChanged();
+    }
+
+    private static void ValidateReferenceLibrary(ReferenceLibraryFile file)
+    {
+        if (file == null || file.version != 1 || file.entries == null || file.entries.Length > 10000)
+            throw new FormatException("Неподдерживаемый или повреждённый файл справочника.");
+        var ids = new HashSet<string>();
+        foreach (var entry in file.entries)
+        {
+            if (entry == null || string.IsNullOrWhiteSpace(entry.id) || entry.id.Length > 64 || !ids.Add(entry.id)
+                || string.IsNullOrWhiteSpace(entry.title) || entry.title.Length > 256
+                || entry.category == null || entry.category.Length > 128
+                || entry.body == null || entry.body.Length > 65536
+                || entry.tags == null || entry.tags.Length > 64)
+                throw new FormatException("Файл содержит некорректную запись справочника.");
+            foreach (string tag in entry.tags)
+                if (string.IsNullOrWhiteSpace(tag) || tag.Length > 64)
+                    throw new FormatException("Файл содержит некорректную метку справочника.");
+        }
+    }
+
+    private static void WriteAtomically(string path, string content)
+    {
+        string fullPath = Path.GetFullPath(path);
+        string temporaryPath = fullPath + ".tmp";
+        File.WriteAllText(temporaryPath, content, Encoding.UTF8);
+        try
+        {
+            if (File.Exists(fullPath)) File.Replace(temporaryPath, fullPath, null);
+            else File.Move(temporaryPath, fullPath);
+        }
+        finally { if (File.Exists(temporaryPath)) File.Delete(temporaryPath); }
     }
 
     public static void UpsertStatBlock(StatBlockDefinition definition)
@@ -642,6 +705,40 @@ public static class SceneFileStore
             if (paths.Length > 0) Confirm(paths[0]);
         }, null, SimpleFileBrowser.FileBrowser.PickMode.Files, false, null, null,
             "Загрузить сессию", "Загрузить");
+#endif
+    }
+
+    public static void ExportReferenceLibraryDialog()
+    {
+#if UNITY_EDITOR
+        string path = EditorUtility.SaveFilePanel("Экспорт справочника", "", "references.json", "json");
+        if (!string.IsNullOrEmpty(path)) Safely(() => ExportReferenceLibrary(path));
+#else
+        SimpleFileBrowser.FileBrowser.ShowSaveDialog(paths =>
+        {
+            if (paths.Length > 0) Safely(() => ExportReferenceLibrary(paths[0]));
+        }, null, SimpleFileBrowser.FileBrowser.PickMode.Files, false, null,
+            "references.json", "Экспорт справочника", "Экспортировать");
+#endif
+    }
+
+    public static void ImportReferenceLibraryDialog()
+    {
+        void Confirm(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            DiceUI.Instance?.ConfirmAction("Заменить справочник?",
+                "Записи текущего справочника будут заменены содержимым выбранного файла.",
+                () => Safely(() => ImportReferenceLibrary(path)));
+        }
+#if UNITY_EDITOR
+        Confirm(EditorUtility.OpenFilePanel("Импорт справочника", "", "json"));
+#else
+        SimpleFileBrowser.FileBrowser.ShowLoadDialog(paths =>
+        {
+            if (paths.Length > 0) Confirm(paths[0]);
+        }, null, SimpleFileBrowser.FileBrowser.PickMode.Files, false, null, null,
+            "Импорт справочника", "Импортировать");
 #endif
     }
 }

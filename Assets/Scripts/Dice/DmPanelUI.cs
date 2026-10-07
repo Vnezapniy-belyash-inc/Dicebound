@@ -235,9 +235,11 @@ public class DmPanelUI : MonoBehaviour
         Button(parent, "Сохранить запись", 210, 30, 0, -414, SaveReference, VttUiSkin.Button);
         Button(parent, "Удалить", 130, 30, 220, -414, DeleteReference,
             new Color(0.28f, 0.11f, 0.14f));
+        Button(parent, "Экспорт…", 170, 28, 0, -450, SceneFileStore.ExportReferenceLibraryDialog, VttUiSkin.Button);
+        Button(parent, "Импорт (замена)…", 170, 28, 180, -450, SceneFileStore.ImportReferenceLibraryDialog, VttUiSkin.Button);
         _referenceHint = Label(parent, "Записи сохраняются в файл сессии.", 11, VttUiSkin.Muted,
             TextAnchor.UpperLeft, new Vector2(0, 1), new Vector2(0, 1),
-            new Vector2(350, 42), new Vector2(0, -451));
+            new Vector2(350, 24), new Vector2(0, -481));
     }
 
     private void RefreshReferences(bool force = false)
@@ -346,6 +348,13 @@ public class DmPanelUI : MonoBehaviour
             RefreshReferences(true);
         }
         catch (Exception ex) { _referenceHint.text = ex.Message; }
+    }
+
+    public void OnReferenceLibraryChanged()
+    {
+        _referenceSignature = null;
+        if (_page == 7) RefreshReferences(true);
+        if (_referenceHint != null) _referenceHint.text = "Справочник обновлён.";
     }
 
     private InputField CreateInput(Transform parent, string placeholderText, float x, float y,

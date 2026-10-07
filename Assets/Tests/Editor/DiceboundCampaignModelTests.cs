@@ -191,4 +191,34 @@ public class DiceboundCampaignModelTests
             if (File.Exists(scenePath)) File.Delete(scenePath);
         }
     }
+
+    [Test]
+    public void ReferenceLibraryExportFormatRoundTripsIndependently()
+    {
+        var entry = New("ReferenceEntry");
+        Set(entry, "id", "ref-1");
+        Set(entry, "title", "Локация");
+        Set(entry, "category", "Места");
+        Set(entry, "body", "Описание места");
+        Set(entry, "pinned", true);
+        var tags = Array.CreateInstance(typeof(string), 1);
+        tags.SetValue("север", 0);
+        Set(entry, "tags", tags);
+        var entries = Array.CreateInstance(TypeOf("ReferenceEntry"), 1);
+        entries.SetValue(entry, 0);
+        var file = New("ReferenceLibraryFile");
+        Set(file, "entries", entries);
+
+        string path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".json");
+        try
+        {
+            File.WriteAllText(path, UnityEngine.JsonUtility.ToJson(file));
+            var restored = UnityEngine.JsonUtility.FromJson(File.ReadAllText(path), TypeOf("ReferenceLibraryFile"));
+            var restoredEntry = Get<Array>(restored, "entries").GetValue(0);
+            Assert.That(Get<string>(restoredEntry, "body"), Is.EqualTo("Описание места"));
+            Assert.That(Get<bool>(restoredEntry, "pinned"), Is.True);
+            Assert.That((string)Get<Array>(restoredEntry, "tags").GetValue(0), Is.EqualTo("север"));
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
 }

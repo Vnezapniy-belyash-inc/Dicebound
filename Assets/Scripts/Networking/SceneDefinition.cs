@@ -148,6 +148,12 @@ using UnityEngine;
     public bool pinned;
 }
 
+[Serializable] public sealed class ReferenceLibraryFile
+{
+    public int version = 1;
+    public ReferenceEntry[] entries = Array.Empty<ReferenceEntry>();
+}
+
 /// <summary>Portable campaign container; the active encounter can be stored independently.</summary>
 [Serializable] public sealed class CampaignDefinition
 {
