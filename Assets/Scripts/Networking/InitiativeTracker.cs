@@ -197,7 +197,7 @@ public class InitiativeTracker : NetworkBehaviour
     public override void OnNetworkSpawn()
     {
         _netData.OnValueChanged += OnDataChanged;
-        ParseData(_netData.Value.ToString());
+        if (!IsServer) ParseData(_netData.Value.ToString());
         RebuildRows();
         UpdateHostControls();
     }
@@ -211,7 +211,7 @@ public class InitiativeTracker : NetworkBehaviour
 
     private void OnDataChanged(FixedString4096Bytes oldValue, FixedString4096Bytes newValue)
     {
-        ParseData(newValue.ToString());
+        if (!IsServer) ParseData(newValue.ToString());
         RebuildRows();
     }
 
