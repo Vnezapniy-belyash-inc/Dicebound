@@ -7,6 +7,51 @@ public class DiceboundStabilityTests
 {
     private static Type RuntimeType(string name) => Type.GetType(name + ", Assembly-CSharp", true);
     [Test]
+    public void CachedGuiStyleDetectsDestroyedSceneTextures()
+    {
+        var method = RuntimeType("VttUiSkin").GetMethod("HasGuiBackgrounds", BindingFlags.Static | BindingFlags.NonPublic);
+        var style = new GUIStyle();
+        var normal = new Texture2D(2, 2); var hover = new Texture2D(2, 2); var active = new Texture2D(2, 2);
+        try
+        {
+            style.normal.background = normal; style.hover.background = hover; style.active.background = active;
+            Assert.That(method.Invoke(null, new object[] { style }), Is.EqualTo(true));
+            UnityEngine.Object.DestroyImmediate(hover);
+            Assert.That(method.Invoke(null, new object[] { style }), Is.EqualTo(false), "Managed style must not mask a destroyed Unity resource.");
+            Assert.That(method.Invoke(null, new object[] { null }), Is.EqualTo(false));
+        }
+        finally
+        {
+            if (normal != null) UnityEngine.Object.DestroyImmediate(normal);
+            if (hover != null) UnityEngine.Object.DestroyImmediate(hover);
+            if (active != null) UnityEngine.Object.DestroyImmediate(active);
+        }
+    }
+
+    [Test]
+    public void RoundedUiCacheRecreatesDestroyedResourcesAndSurvivesSceneCleanup()
+    {
+        var method = RuntimeType("VttUiSkin").GetMethod("Rounded", BindingFlags.Static | BindingFlags.NonPublic);
+        var first = (Sprite)method.Invoke(null, new object[] { 29 });
+        Sprite rebuilt = null;
+        try
+        {
+            Assert.That((first.hideFlags & HideFlags.DontUnloadUnusedAsset) != 0, Is.True);
+            Assert.That((first.texture.hideFlags & HideFlags.DontUnloadUnusedAsset) != 0, Is.True);
+            UnityEngine.Object.DestroyImmediate(first.texture);
+            rebuilt = (Sprite)method.Invoke(null, new object[] { 29 });
+            Assert.That(rebuilt, Is.Not.SameAs(first));
+            Assert.That(rebuilt.texture, Is.Not.Null);
+            Assert.That(method.Invoke(null, new object[] { 29 }), Is.SameAs(rebuilt), "Valid cache must not allocate again.");
+        }
+        finally
+        {
+            if (first != null) UnityEngine.Object.DestroyImmediate(first);
+            if (rebuilt != null) { if (rebuilt.texture != null) UnityEngine.Object.DestroyImmediate(rebuilt.texture); UnityEngine.Object.DestroyImmediate(rebuilt); }
+        }
+    }
+
+    [Test]
     public void GridCoversMovedLargeMapWithThreeCellMarginAndStableDrawOrder()
     {
         var root = new GameObject("Grid coverage test");
