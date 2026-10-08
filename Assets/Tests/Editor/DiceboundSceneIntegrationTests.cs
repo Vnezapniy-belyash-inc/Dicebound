@@ -74,6 +74,7 @@ public class DiceboundSceneIntegrationTests
         restoredMaster = Call(token, "CaptureMasterData");
         Assert.That((bool)restoredMaster.GetType().GetField("hideHp").GetValue(restoredMaster), Is.True);
         Assert.That((bool)restoredMaster.GetType().GetField("hideConditions").GetValue(restoredMaster), Is.True);
+        Assert.That((bool)restoredMaster.GetType().GetField("hideArmorClass").GetValue(restoredMaster), Is.True);
         Assert.That(Read<int>(token, "NetworkVisibleCurrentHp"), Is.EqualTo(-1));
         Call(token, "ServerToggleCondition", "poisoned");
         Call(fog, "TogglePreview");

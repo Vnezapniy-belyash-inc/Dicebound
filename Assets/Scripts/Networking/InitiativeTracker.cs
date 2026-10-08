@@ -522,7 +522,7 @@ public class InitiativeTracker : NetworkBehaviour
     {
         if (!string.IsNullOrEmpty(entry.tokenId))
         {
-            var token = TokenController.FindSceneToken(entry.tokenId);
+            var token = TokenController.FindSceneTokenForManager(entry.tokenId, NetworkManager);
             return token != null ? token.NetworkVisibleCurrentHp : -1;
         }
         return _hpById.TryGetValue(entry.id, out int hp) ? hp : 0;

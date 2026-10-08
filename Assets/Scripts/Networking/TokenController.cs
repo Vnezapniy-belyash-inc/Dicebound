@@ -70,7 +70,7 @@ public class TokenController : NetworkDraggable
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     private readonly NetworkVariable<int> _netVisibleMaxHp = new(-1,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-    private readonly NetworkVariable<int> _netArmorClass = new(10,
+    private readonly NetworkVariable<int> _netArmorClass = new(-1,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     private readonly NetworkVariable<FixedString4096Bytes> _netVisibleConditions = new(
         new FixedString4096Bytes(""), NetworkVariableReadPermission.Everyone,
@@ -92,6 +92,8 @@ public class TokenController : NetworkDraggable
     public int DisplayedMaxHp => ShowMasterStats ? _masterData.maxHp : _netVisibleMaxHp.Value;
     public int NetworkVisibleCurrentHp => _netVisibleCurrentHp.Value;
     public int ArmorClass => IsServer ? _masterData.armorClass : _netArmorClass.Value;
+    public int DisplayedArmorClass => ShowMasterStats ? _masterData.armorClass : _netArmorClass.Value;
+    public int NetworkVisibleArmorClass => _netArmorClass.Value;
     public string[] VisibleConditionIds => ShowMasterStats ? (string[])_masterData.conditionIds.Clone()
         : string.IsNullOrEmpty(_netVisibleConditions.Value.ToString())
             ? Array.Empty<string>() : _netVisibleConditions.Value.ToString().Split('|');
@@ -299,9 +301,12 @@ public class TokenController : NetworkDraggable
     }
 
     public static TokenController FindSceneToken(string id)
+        => FindSceneTokenForManager(id, Unity.Netcode.NetworkManager.Singleton);
+
+    public static TokenController FindSceneTokenForManager(string id, NetworkManager manager)
     {
         foreach (var token in FindObjectsByType<TokenController>(FindObjectsInactive.Exclude))
-            if (token.IsSpawned && token.SceneId == id) return token;
+            if (token.IsSpawned && token.SceneId == id && (manager == null || token.NetworkManager == manager)) return token;
         return null;
     }
     public void AssignController(ulong client)
@@ -345,6 +350,7 @@ public class TokenController : NetworkDraggable
             maxHp = _masterData.maxHp,
             armorClass = _masterData.armorClass,
             hideHp = _masterData.hideHp,
+            hideArmorClass = _masterData.hideArmorClass,
             hideConditions = _masterData.hideConditions,
             conditionIds = (string[])_masterData.conditionIds.Clone(),
             statBlockId = _masterData.statBlockId
@@ -363,6 +369,7 @@ public class TokenController : NetworkDraggable
                 maxHp = Mathf.Clamp(data.maxHp, 0, 999999),
                 armorClass = Mathf.Clamp(data.armorClass, 0, 999),
                 hideHp = data.hideHp,
+                hideArmorClass = data.hideArmorClass,
                 hideConditions = data.hideConditions,
                 conditionIds = data.conditionIds == null ? Array.Empty<string>() : (string[])data.conditionIds.Clone(),
                 statBlockId = data.statBlockId
@@ -435,6 +442,8 @@ public class TokenController : NetworkDraggable
         }
 
         int mask = block.publicFieldsMask;
+        if (_masterData.hideHp) mask &= ~StatBlockPublicFields.HitPoints;
+        if (_masterData.hideArmorClass) mask &= ~StatBlockPublicFields.ArmorClass;
         var view = new PublicStatBlockView { visibleFields = mask };
         if ((mask & StatBlockPublicFields.Name) != 0) view.name = block.name;
         if ((mask & StatBlockPublicFields.Size) != 0) view.size = block.size;
@@ -511,6 +520,17 @@ public class TokenController : NetworkDraggable
         PublishMasterData();
     }
 
+    public void ServerSetArmorClassVisibility(bool hidden, bool recordUndo = true)
+    {
+        if (!IsServer || _masterData.hideArmorClass == hidden) return;
+        bool previous = _masterData.hideArmorClass;
+        string tokenId = SceneId;
+        if (recordUndo) GameMasterUndo.Record("видимость КД токена", () =>
+            FindSceneToken(tokenId)?.ServerSetArmorClassVisibility(previous, false));
+        _masterData.hideArmorClass = hidden;
+        PublishMasterData();
+    }
+
     public bool ServerToggleCondition(string conditionId)
     {
         if (!IsServer || string.IsNullOrWhiteSpace(conditionId) || conditionId.Length > 64
@@ -545,10 +565,11 @@ public class TokenController : NetworkDraggable
         if (!IsServer || _masterData == null) return;
         _netVisibleCurrentHp.Value = _masterData.hideHp ? -1 : _masterData.currentHp;
         _netVisibleMaxHp.Value = _masterData.hideHp ? -1 : _masterData.maxHp;
-        _netArmorClass.Value = _masterData.armorClass;
+        _netArmorClass.Value = _masterData.hideArmorClass ? -1 : _masterData.armorClass;
         string conditions = _masterData.hideConditions || _masterData.conditionIds == null
             ? string.Empty : string.Join("|", _masterData.conditionIds);
         _netVisibleConditions.Value = new FixedString4096Bytes(conditions);
+        PublishPublicStatBlock();
         InitiativeTracker.Instance?.RefreshToken(SceneId);
     }
 
@@ -916,7 +937,7 @@ public class TokenController : NetworkDraggable
             _conditionsPopup = false;
             _statBlockPopup = false;
             Vector2 mousePos = mouse.position.ReadValue();
-            float height = IsHost ? 610 : (HasPublicStatBlock ? 230 : 196);
+            float height = IsHost ? 632 : (HasPublicStatBlock ? 230 : 196);
             _menuRect = new Rect(
                 Mathf.Clamp(mousePos.x, 4, Mathf.Max(4, Screen.width - 264)),
                 Mathf.Clamp(Screen.height - mousePos.y, 4, Mathf.Max(4, Screen.height - height - 4)),
@@ -1095,6 +1116,10 @@ public class TokenController : NetworkDraggable
             bool hideConditions = GUI.Toggle(new Rect(_menuRect.x + 10, y, 240, 22), _masterData.hideConditions,
                 "Скрыть состояния от игроков");
             if (hideConditions != _masterData.hideConditions) ServerSetMasterVisibility(_masterData.hideHp, hideConditions);
+            y += 22;
+            bool hideArmorClass = GUI.Toggle(new Rect(_menuRect.x + 10, y, 240, 22), _masterData.hideArmorClass,
+                "Скрыть КД от игроков");
+            if (hideArmorClass != _masterData.hideArmorClass) ServerSetArmorClassVisibility(hideArmorClass);
             y += 24;
             if (GUI.Button(new Rect(_menuRect.x + 10, y, 240, 28), "Состояния…", VttUiSkin.ImGuiButton))
                 _conditionsPopup = !_conditionsPopup;
@@ -1390,10 +1415,11 @@ public class TokenController : NetworkDraggable
             GUI.color = Color.Lerp(new Color(0.8f, 0.18f, 0.18f), new Color(0.2f, 0.72f, 0.34f), ratio);
             if (ratio > 0) GUI.DrawTexture(new Rect(bar.x, bar.y, bar.width * ratio, bar.height), Texture2D.whiteTexture);
             GUI.color = previousColor;
-            GUI.Label(new Rect(4, 20, 152, 14), $"{currentHp}/{maxHp} HP · КД {ArmorClass}", _statsLabelStyle);
+            string armor = DisplayedArmorClass >= 0 ? $" · КД {DisplayedArmorClass}" : "";
+            GUI.Label(new Rect(4, 20, 152, 14), $"{currentHp}/{maxHp} HP{armor}", _statsLabelStyle);
         }
-        else
-            GUI.Label(new Rect(3, 20, 154, 15), $"КД {ArmorClass}", _statsLabelStyle);
+        else if (DisplayedArmorClass >= 0)
+            GUI.Label(new Rect(3, 20, 154, 15), $"КД {DisplayedArmorClass}", _statsLabelStyle);
         if (!string.IsNullOrEmpty(conditions))
             GUI.Label(new Rect(3, 34, 154, 16), conditions, _statsLabelStyle);
         GUI.color = previousColor;

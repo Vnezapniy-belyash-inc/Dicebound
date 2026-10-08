@@ -46,9 +46,9 @@ using UnityEngine;
 }
 [Serializable] public sealed class SceneDefinition
 {
-    // Version 2 adds a stable scene ID. Version 1 files are upgraded by
+    // Version 3 adds independent armor-class privacy. Older files are upgraded by
     // SceneSaveMigration before validation or application.
-    public int version = 2;
+    public int version = 3;
     public string sceneId = "";
     public string title = "Сцена";
     public string mapAssetId;
@@ -82,6 +82,7 @@ using UnityEngine;
     public int maxHp;
     public int armorClass = 10;
     public bool hideHp = true;
+    public bool hideArmorClass = true;
     public bool hideConditions = true;
     public string[] conditionIds = Array.Empty<string>();
     public string statBlockId;
@@ -224,15 +225,16 @@ public static class StatBlockPublicFields
 /// <summary>Converts existing single-scene v1 files without changing their authored state.</summary>
 public static class SceneSaveMigration
 {
-    public const int CurrentSceneVersion = 2;
+    public const int CurrentSceneVersion = 3;
 
     public static SceneDefinition UpgradeScene(SceneDefinition scene)
     {
         if (scene == null) throw new FormatException("Файл сцены пуст.");
-        if (scene.version == 1)
+        int originalVersion = scene.version;
+        if (originalVersion == 1 || originalVersion == 2)
         {
             scene.version = CurrentSceneVersion;
-            scene.sceneId = Guid.NewGuid().ToString("N");
+            if (string.IsNullOrWhiteSpace(scene.sceneId)) scene.sceneId = Guid.NewGuid().ToString("N");
         }
         else if (scene.version == CurrentSceneVersion)
         {
@@ -242,6 +244,10 @@ public static class SceneSaveMigration
         else throw new FormatException("Неподдерживаемая версия сцены.");
 
         scene.masterData ??= new SceneMasterData();
+        // AC was always public in v1/v2. Preserve that choice for existing saves.
+        if (originalVersion < 3 && scene.masterData.tokens != null)
+            foreach (var token in scene.masterData.tokens)
+                if (token != null) token.hideArmorClass = false;
         scene.transitions ??= Array.Empty<SceneTransition>();
 
         return scene;
