@@ -38,8 +38,8 @@ sealed class MeasurementSessionVisual
         root.transform.SetParent(parent, false);
 
         var lr = root.AddComponent<LineRenderer>();
-        var mat = new Material(Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color"));
-        lr.material = mat;
+        var mat = WorldOverlayMaterial.Create(WorldOverlayMaterial.MeasurementQueue);
+        lr.sharedMaterial = mat;
         lr.startWidth = lineWidth;
         lr.endWidth = lineWidth;
         lr.useWorldSpace = true;
@@ -51,7 +51,7 @@ sealed class MeasurementSessionVisual
         var sphereGo = new GameObject("SphereOriginMarker");
         sphereGo.transform.SetParent(root.transform, false);
         var sphereLr = sphereGo.AddComponent<LineRenderer>();
-        sphereLr.material = mat;
+        sphereLr.sharedMaterial = mat;
         sphereLr.startWidth = lineWidth * 1.2f;
         sphereLr.endWidth = lineWidth * 1.2f;
         sphereLr.useWorldSpace = true;
@@ -73,10 +73,10 @@ sealed class MeasurementSessionVisual
         }
 
         Color c = new Color(snap.ColorRgb.x, snap.ColorRgb.y, snap.ColorRgb.z, 0.85f);
-        _lr.material.color = c;
+        _lr.sharedMaterial.color = c;
         _lr.startColor = c;
         _lr.endColor = c;
-        _sphereOriginLr.material.color = c;
+        _sphereOriginLr.sharedMaterial.color = c;
         _sphereOriginLr.startColor = c;
         _sphereOriginLr.endColor = c;
 
@@ -135,8 +135,17 @@ sealed class MeasurementSessionVisual
     public void Destroy()
     {
         ClearPreviews();
+        if (_lr != null && _lr.sharedMaterial != null)
+            Object.Destroy(_lr.sharedMaterial);
         if (_root != null)
             Object.Destroy(_root);
+    }
+
+    public void RefreshFog()
+    {
+        _root.SetActive(!GameplayInputGate.IsHostCurtainBlocking);
+        WorldOverlayMaterial.RefreshFog(_lr.sharedMaterial);
+        if (_sharedPreviewMat != null) WorldOverlayMaterial.RefreshFog(_sharedPreviewMat);
     }
 
     private void DrawCircle(Vector3 center, float radius)
@@ -259,18 +268,13 @@ sealed class MeasurementSessionVisual
 
         if (_sharedPreviewMat == null)
         {
-            _sharedPreviewMat = new Material(Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color"));
-            _sharedPreviewMat.SetFloat("_Surface", 1f);
-            _sharedPreviewMat.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
-            _sharedPreviewMat.SetInt("_SrcBlend", 5);
-            _sharedPreviewMat.SetInt("_DstBlend", 10);
-            _sharedPreviewMat.SetInt("_ZWrite", 0);
-            _sharedPreviewMat.renderQueue = 3000;
+            _sharedPreviewMat = WorldOverlayMaterial.Create(WorldOverlayMaterial.PreviewQueue);
+            _sharedPreviewMat.hideFlags = HideFlags.HideAndDontSave;
         }
 
         var mr = go.GetComponent<MeshRenderer>();
-        mr.material = _sharedPreviewMat;
-        mr.material.color = new Color(0.4f, 0.4f, 0.4f, 0.3f);
+        mr.sharedMaterial = _sharedPreviewMat;
+        RefreshFog();
         mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         mr.receiveShadows = false;
         go.AddComponent<PreviewBlinker>();

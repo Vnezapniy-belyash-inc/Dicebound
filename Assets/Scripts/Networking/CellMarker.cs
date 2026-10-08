@@ -46,6 +46,7 @@ public class CellMarker : NetworkBehaviour
         && NetworkManager.Singleton.LocalClientId == SpawnerClientId;
 
     private MeshRenderer _renderer;
+    private Material _effectMaterial;
     private static GameObject _template;
     private static bool _handlerRegistered;
 
@@ -220,13 +221,8 @@ public class CellMarker : NetworkBehaviour
         _renderer = GetComponentInChildren<MeshRenderer>();
         if (_renderer != null)
         {
-            _renderer.material = new Material(Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color"));
-            _renderer.material.SetFloat("_Surface", 1f);
-            _renderer.material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
-            _renderer.material.SetInt("_SrcBlend", 5);
-            _renderer.material.SetInt("_DstBlend", 10);
-            _renderer.material.SetInt("_ZWrite", 0);
-            _renderer.material.renderQueue = 3000;
+            _effectMaterial = WorldOverlayMaterial.Create(WorldOverlayMaterial.EffectsQueue);
+            _renderer.sharedMaterial = _effectMaterial;
             _renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             _renderer.receiveShadows = false;
         }
@@ -238,11 +234,24 @@ public class CellMarker : NetworkBehaviour
         _netTexIndex.OnValueChanged += (old, val) => ApplyTexture(val);
     }
 
+    private void LateUpdate()
+    {
+        if (_renderer == null) return;
+        _renderer.enabled = IsSpawned && !GameplayInputGate.IsHostCurtainBlocking;
+        WorldOverlayMaterial.RefreshFog(_effectMaterial);
+    }
+
+    public override void OnDestroy()
+    {
+        if (_effectMaterial != null) Destroy(_effectMaterial);
+        base.OnDestroy();
+    }
+
     private void ApplyTexture(int index)
     {
         if (_renderer == null) return;
         index = Mathf.Clamp(index, 0, TextureColors.Length - 1);
-        _renderer.material.color = TextureColors[index];
+        _effectMaterial.color = TextureColors[index];
     }
 
     public void RequestRemove()

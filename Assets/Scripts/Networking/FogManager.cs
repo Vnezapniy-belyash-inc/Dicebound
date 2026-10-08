@@ -176,6 +176,8 @@ public sealed class FogManager : MonoBehaviour
         int index = Index(world);
         return index >= 0 && index < (_previewVisible?.Length ?? 0) && _previewVisible[index];
     }
+    public bool IsVisibleInDisplayedView(Vector3 world) => !Enabled ||
+        (Preview && (PreviewSourceId != null || PreviewTestSource) ? PreviewVisible(world) : IsVisible(world));
     public bool CanSeeToken(ulong client, TokenController token, bool preview = false)
     {
         if (NetworkPermissions.IsHostClient(client) && !preview) return true;

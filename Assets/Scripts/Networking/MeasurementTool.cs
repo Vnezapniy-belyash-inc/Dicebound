@@ -319,6 +319,11 @@ public class MeasurementTool : NetworkBehaviour
         }
     }
 
+    private void LateUpdate()
+    {
+        foreach (var visual in _visuals.Values) visual.RefreshFog();
+    }
+
     private Vector3 SnapForMode(Vector3 worldPos)
     {
         if (!TryGetLocalSnapshot(out var snap))
@@ -520,6 +525,8 @@ public class MeasurementTool : NetworkBehaviour
         Vector3 a = snap.PointA;
         Vector3 b = snap.PointB;
         if (!snap.HasPoints) return;
+        if (FogManager.Instance != null && FogManager.Instance.ShowingPlayerView &&
+            !FogManager.Instance.IsVisibleInDisplayedView(b)) return;
 
         Vector3 screenPos = _cam.WorldToScreenPoint(b);
         if (screenPos.z < 0) return;
@@ -768,16 +775,19 @@ public class MeasurementTool : NetworkBehaviour
 /// <summary>Мерцание серым для превью клеток.</summary>
 public class PreviewBlinker : MonoBehaviour
 {
-    private Material _mat;
+    private MeshRenderer _renderer;
+    private MaterialPropertyBlock _properties;
 
     private void Start()
     {
-        _mat = GetComponent<MeshRenderer>().material;
+        _renderer = GetComponent<MeshRenderer>();
+        _properties = new MaterialPropertyBlock();
     }
 
     private void Update()
     {
         float alpha = 0.15f + 0.35f * Mathf.Abs(Mathf.Sin(Time.time * 4f));
-        _mat.color = new Color(0.4f, 0.4f, 0.4f, alpha);
+        _properties.SetColor("_Color", new Color(0.4f, 0.4f, 0.4f, alpha));
+        _renderer.SetPropertyBlock(_properties);
     }
 }

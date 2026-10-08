@@ -7,6 +7,46 @@ public class DiceboundStabilityTests
 {
     private static Type RuntimeType(string name) => Type.GetType(name + ", Assembly-CSharp", true);
     [Test]
+    public void AreaAndEffectMaterialsRenderAfterMapWithFogClipping()
+    {
+        var type = RuntimeType("WorldOverlayMaterial");
+        int last = 3010;
+        foreach (var field in new[] { "EffectsQueue", "PreviewQueue", "MeasurementQueue" })
+        {
+            int queue = (int)type.GetField(field).GetValue(null);
+            var material = (Material)type.GetMethod("Create").Invoke(null, new object[] { queue });
+            try
+            {
+                Assert.That(queue, Is.GreaterThan(last).And.LessThan(3020));
+                Assert.That(material.renderQueue, Is.EqualTo(queue));
+                Assert.That(material.shader.name, Is.EqualTo("Dicebound/Markup"));
+                Assert.That(material.HasProperty("_FogMask"), Is.True);
+                Assert.That(material.GetFloat("_FogEnabled"), Is.EqualTo(1), "Uninitialised fog must conceal overlays.");
+            }
+            finally { UnityEngine.Object.DestroyImmediate(material); }
+            last = queue;
+        }
+    }
+
+    [Test]
+    public void PreviewBlinkUsesPropertyBlockWithoutCloningMaterial()
+    {
+        var go = GameObject.CreatePrimitive(PrimitiveType.Quad);
+        var material = new Material(Resources.Load<Shader>("DiceboundMarkup"));
+        try
+        {
+            var renderer = go.GetComponent<MeshRenderer>(); renderer.sharedMaterial = material;
+            var type = RuntimeType("PreviewBlinker"); var blink = go.AddComponent(type);
+            type.GetMethod("Start", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(blink, null);
+            type.GetMethod("Update", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(blink, null);
+            Assert.That(renderer.sharedMaterial, Is.SameAs(material));
+            var block = new MaterialPropertyBlock(); renderer.GetPropertyBlock(block);
+            Assert.That(block.GetColor("_Color").a, Is.InRange(0.15f, 0.5f));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(go); UnityEngine.Object.DestroyImmediate(material); }
+    }
+
+    [Test]
     public void CachedGuiStyleDetectsDestroyedSceneTextures()
     {
         var method = RuntimeType("VttUiSkin").GetMethod("HasGuiBackgrounds", BindingFlags.Static | BindingFlags.NonPublic);
