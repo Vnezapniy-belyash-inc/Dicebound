@@ -108,7 +108,9 @@ public class DiceboundTokenLabelTests
             _camera.WorldToScreenPoint(Vector3.zero).x;
         Assert.That(moved.center.x - first.center.x, Is.EqualTo(projectedMovement).Within(0.001f));
         Assert.That(moved.y, Is.EqualTo(first.y).Within(0.001f));
-        Assert.That(moved.size, Is.EqualTo(first.size));
+        // Projected float bounds can differ by a few ULPs after translation.
+        Assert.That(moved.width, Is.EqualTo(first.width).Within(0.001f));
+        Assert.That(moved.height, Is.EqualTo(first.height).Within(0.001f));
     }
 
     [TearDown]
