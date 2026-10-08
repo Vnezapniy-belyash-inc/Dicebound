@@ -6,6 +6,20 @@ using UnityEditor;
 
 public class DiceboundFogTests
 {
+    [TestCase(false)]
+    [TestCase(true)]
+    public void PreviewAndGroupApplySameManualOverrides(bool paused)
+    {
+        var visible = new[] { true, false, true, false };
+        var revealed = new[] { false, true, true, true };
+        var hidden = new[] { true, false, true, false };
+        TypeOf("FogManager").GetMethod("ApplyManualOverrides", BindingFlags.NonPublic | BindingFlags.Static)
+            .Invoke(null, new object[] { visible, revealed, hidden, paused });
+        Assert.That(visible, Is.EqualTo(new[] { false, !paused, false, !paused }));
+        Assert.That(revealed, Is.EqualTo(new[] { false, true, true, true }), "Preview must not change stored reveal history.");
+        Assert.That(hidden, Is.EqualTo(new[] { true, false, true, false }));
+    }
+
     private static Type TypeOf(string name) => Type.GetType(name + ", Assembly-CSharp", true);
     private static object Model() => Activator.CreateInstance(TypeOf("SceneGeometryModel"));
     private static object Call(object target, string method, params object[] args) => target.GetType().GetMethod(method).Invoke(target, args);

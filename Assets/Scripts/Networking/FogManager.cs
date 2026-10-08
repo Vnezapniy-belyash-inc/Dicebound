@@ -147,10 +147,9 @@ public sealed class FogManager : MonoBehaviour
                 sources.Add(new VisionSource(new Vector2(p.x, p.z), token.VisionFeet / 5f));
             }
         _visible = new FogVisibility(SceneEditor.Instance?.Model.Snapshot() ?? new SceneGeometry()).Calculate(_width, _height, sources);
+        ApplyManualOverrides(_visible, _manualVisible, _manualHidden, Paused);
         for (int i = 0; i < _visible.Length; i++)
         {
-            if (!Paused) _visible[i] |= _manualVisible[i];
-            _visible[i] &= !_manualHidden[i];
             // Disabling fog is a display mode, never a bulk discovery operation.
             if (Enabled && !Paused && _visible[i]) _explored[i] = true;
         }
@@ -175,6 +174,14 @@ public sealed class FogManager : MonoBehaviour
     {
         int index = Index(world);
         return index >= 0 && index < (_previewVisible?.Length ?? 0) && _previewVisible[index];
+    }
+    private static void ApplyManualOverrides(bool[] visible, bool[] revealed, bool[] hidden, bool paused)
+    {
+        for (int i = 0; i < visible.Length; i++)
+        {
+            if (!paused) visible[i] |= revealed[i];
+            visible[i] &= !hidden[i];
+        }
     }
     public bool IsVisibleInDisplayedView(Vector3 world) => !Enabled ||
         (Preview && (PreviewSourceId != null || PreviewTestSource) ? PreviewVisible(world) : IsVisible(world));
@@ -227,7 +234,6 @@ public sealed class FogManager : MonoBehaviour
     {
         if (!IsMaster) return;
         FinishManual();
-        if (Preview) TogglePreview();
         SceneEditor.Instance?.Deactivate(); MeasurementTool.Instance?.Deactivate(); EffectPaintTool.Instance?.Deactivate();
         ManualMode = mode; _lastManual = new Vector2Int(-1, -1);
     }
@@ -370,6 +376,7 @@ public sealed class FogManager : MonoBehaviour
                     if (token != null && !token.IsHidden) { Vector3 p = _grid.WorldToGridCoordinates(token.CommittedPosition); sources.Add(new VisionSource(new Vector2(p.x, p.z), token.VisionFeet / 5f)); }
                 }
                 _previewVisible = new FogVisibility(SceneEditor.Instance?.Model.Snapshot() ?? new SceneGeometry()).Calculate(_width, _height, sources);
+                ApplyManualOverrides(_previewVisible, _manualVisible, _manualHidden, Paused);
                 _previewDirty = false; _textureDirty = true;
             }
         }
