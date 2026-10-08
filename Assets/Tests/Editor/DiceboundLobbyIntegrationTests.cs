@@ -182,6 +182,7 @@ public class DiceboundLobbyIntegrationTests
         var campaign = Activator.CreateInstance(RuntimeType("CampaignDefinition"));
         var block = Activator.CreateInstance(RuntimeType("StatBlockDefinition"));
         block.GetType().GetField("id").SetValue(block, "privacy-template");
+        block.GetType().GetField("name").SetValue(block, "Privacy template");
         block.GetType().GetField("armorClass").SetValue(block, 23);
         block.GetType().GetField("hitPoints").SetValue(block, 997);
         block.GetType().GetField("publicFieldsMask").SetValue(block, 1 | 16 | 32);
@@ -189,6 +190,9 @@ public class DiceboundLobbyIntegrationTests
         campaign.GetType().GetField("statBlocks").SetValue(campaign, blocks);
         campaignField.SetValue(null, campaign);
         tokenType.GetMethod("ServerSetStatBlock").Invoke(token, new object[] { "privacy-template" });
+        // Privacy scenario uses distinct live values so a hidden template cannot leak them.
+        tokenType.GetMethod("ServerSetHealth").Invoke(token, new object[] { 137, 251, false });
+        tokenType.GetMethod("ServerSetArmorClass").Invoke(token, new object[] { 19, false });
         ulong objectId = token.GetComponent<NetworkObject>().NetworkObjectId;
         deadline = Time.realtimeSinceStartup + 10;
         while (!_client.SpawnManager.SpawnedObjects.ContainsKey(objectId) && Time.realtimeSinceStartup < deadline) yield return null;
@@ -200,6 +204,11 @@ public class DiceboundLobbyIntegrationTests
         Assert.That(tokenType.GetProperty("VisibleCurrentHp").GetValue(remote), Is.EqualTo(-1));
         Assert.That(tokenType.GetProperty("VisibleConditionIds").GetValue(remote), Is.Empty);
         Assert.That(tokenType.GetProperty("ArmorClass").GetValue(remote), Is.EqualTo(-1));
+        string hiddenInfo = (string)tokenType.GetMethod("GetDisplayedTokenInfo").Invoke(remote, null);
+        Assert.That(hiddenInfo, Does.Contain("Private token"));
+        Assert.That(hiddenInfo, Does.Not.Contain("КД:"));
+        Assert.That(hiddenInfo, Does.Not.Contain("ХП:"));
+        Assert.That(hiddenInfo, Does.Not.Contain("Отравлен"));
         Assert.That(tokenType.GetProperty("ArmorClass").GetValue(token), Is.EqualTo(19));
         deadline = Time.realtimeSinceStartup + 10;
         while (string.IsNullOrEmpty((string)tokenType.GetProperty("PublicStatBlockJson").GetValue(remote)) && Time.realtimeSinceStartup < deadline) yield return null;
@@ -208,6 +217,7 @@ public class DiceboundLobbyIntegrationTests
         deadline = Time.realtimeSinceStartup + 10;
         while ((int)tokenType.GetProperty("ArmorClass").GetValue(remote) != 19 && Time.realtimeSinceStartup < deadline) yield return null;
         Assert.That(tokenType.GetProperty("ArmorClass").GetValue(remote), Is.EqualTo(19));
+        Assert.That((string)tokenType.GetMethod("GetDisplayedTokenInfo").Invoke(remote, null), Does.Contain("КД: 19"));
         deadline = Time.realtimeSinceStartup + 10;
         while ((PublicStatMask(remote) & 16) == 0 && Time.realtimeSinceStartup < deadline) yield return null;
         AssertPublicStatPrivacy(remote, true, false);
@@ -242,6 +252,8 @@ public class DiceboundLobbyIntegrationTests
         Assert.That(tokenType.GetProperty("VisibleCurrentHp").GetValue(remote), Is.EqualTo(137));
         Assert.That(tokenType.GetProperty("VisibleMaxHp").GetValue(remote), Is.EqualTo(251));
         Assert.That((string[])tokenType.GetProperty("VisibleConditionIds").GetValue(remote), Does.Contain("poisoned"));
+        Assert.That((string)tokenType.GetMethod("GetDisplayedTokenInfo").Invoke(remote, null), Does.Contain("ХП: 137/251"));
+        Assert.That((string)tokenType.GetMethod("GetDisplayedTokenInfo").Invoke(remote, null), Does.Not.Contain("КД:"));
         deadline = Time.realtimeSinceStartup + 10;
         while ((PublicStatMask(remote) & 32) == 0 && Time.realtimeSinceStartup < deadline) yield return null;
         AssertPublicStatPrivacy(remote, false, true);
@@ -269,6 +281,34 @@ public class DiceboundLobbyIntegrationTests
         state = JsonUtility.FromJson(_initiativeReceived, stateType);
         Assert.That(((Array)stateType.GetField("entries").GetValue(state)).Length, Is.EqualTo(41));
         Assert.That(ReceivedInitiativeHp(tracker, stableId), Is.EqualTo(-1));
+        tokenType.GetMethod("ServerSetMasterVisibility").Invoke(token, new object[] { false, false });
+        tokenType.GetMethod("ServerSetArmorClassVisibility").Invoke(token, new object[] { false, false });
+        tokenType.GetMethod("ServerSetStatBlock").Invoke(token, new object[] { "" });
+        Assert.That(tokenType.GetMethod("ServerSetStatBlock").Invoke(token, new object[] { "privacy-template" }), Is.EqualTo(true));
+        deadline = Time.realtimeSinceStartup + 10;
+        while (((int)tokenType.GetProperty("VisibleCurrentHp").GetValue(remote) != 997
+            || (int)tokenType.GetProperty("ArmorClass").GetValue(remote) != 23) && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(tokenType.GetProperty("VisibleCurrentHp").GetValue(remote), Is.EqualTo(997), "Assigning a template must replicate its initial HP.");
+        Assert.That(tokenType.GetProperty("VisibleMaxHp").GetValue(remote), Is.EqualTo(997));
+        Assert.That(tokenType.GetProperty("ArmorClass").GetValue(remote), Is.EqualTo(23));
+        tokenType.GetMethod("ServerSetHealth").Invoke(token, new object[] { 400, 997, false });
+        tokenType.GetMethod("ServerSetStatBlock").Invoke(token, new object[] { "privacy-template" });
+        Assert.That(tokenType.GetProperty("VisibleCurrentHp").GetValue(token), Is.EqualTo(400), "Repeated assignment must preserve wounds.");
+        block.GetType().GetField("hitPoints").SetValue(block, 777);
+        block.GetType().GetField("armorClass").SetValue(block, 22);
+        tokenType.GetMethod("RefreshPublicStatBlock").Invoke(token, null);
+        Assert.That(tokenType.GetProperty("VisibleCurrentHp").GetValue(token), Is.EqualTo(400));
+        Assert.That(tokenType.GetProperty("VisibleMaxHp").GetValue(token), Is.EqualTo(997));
+        Assert.That(tokenType.GetProperty("ArmorClass").GetValue(token), Is.EqualTo(23));
+        RuntimeType("GameMasterUndo").GetMethod("Undo").Invoke(null, null);
+        deadline = Time.realtimeSinceStartup + 10;
+        while (((int)tokenType.GetProperty("VisibleCurrentHp").GetValue(remote) != 137
+            || (int)tokenType.GetProperty("ArmorClass").GetValue(remote) != 19) && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(tokenType.GetProperty("VisibleCurrentHp").GetValue(remote), Is.EqualTo(137), "Undo must restore original combat values on the connected client.");
+        Assert.That(tokenType.GetProperty("VisibleMaxHp").GetValue(remote), Is.EqualTo(251));
+        Assert.That(tokenType.GetProperty("ArmorClass").GetValue(remote), Is.EqualTo(19));
+        deadline = Time.realtimeSinceStartup + 10;
+        while (!(bool)tracker.GetType().GetProperty("AllClientsHaveCurrentState").GetValue(tracker) && Time.realtimeSinceStartup < deadline) yield return null;
         Assert.That((bool)tracker.GetType().GetProperty("AllClientsHaveCurrentState").GetValue(tracker), Is.True);
         Assert.That(_client.IsConnectedClient, Is.True);
     }

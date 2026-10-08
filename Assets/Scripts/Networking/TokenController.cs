@@ -375,6 +375,10 @@ public class TokenController : NetworkDraggable
                 statBlockId = data.statBlockId
             };
         _masterData.currentHp = Mathf.Min(_masterData.currentHp, _masterData.maxHp);
+        _masterCurrentHpInput = _masterData.currentHp.ToString();
+        _masterMaxHpInput = _masterData.maxHp.ToString();
+        _masterArmorClassInput = _masterData.armorClass.ToString();
+        _masterStatBlockInput = _masterData.statBlockId ?? "";
         PublishMasterData();
         PublishPublicStatBlock();
     }
@@ -414,10 +418,27 @@ public class TokenController : NetworkDraggable
 
     public bool ServerSetStatBlock(string statBlockId)
     {
-        if (!IsServer || statBlockId == null || statBlockId.Length > 64
-            || statBlockId.Contains("|") || statBlockId.Contains(",")) return false;
-        _masterData.statBlockId = string.IsNullOrWhiteSpace(statBlockId) ? null : statBlockId;
-        PublishPublicStatBlock();
+        if (!IsServer) return false;
+        string id = string.IsNullOrWhiteSpace(statBlockId) ? null : statBlockId.Trim();
+        if (id != null && (id.Length > 64 || id.Contains("|") || id.Contains(","))) return false;
+        var block = id == null ? null : Array.Find(SceneFileStore.GetStatBlocks(), item => item != null && item.id == id);
+        if (id != null && (block == null || block.armorClass < 0 || block.armorClass > 999
+            || block.hitPoints < 0 || block.hitPoints > 999999)) return false;
+        // Re-selecting a template or editing its library entry must not heal a combatant.
+        if (_masterData.statBlockId == id) return true;
+        var previous = CaptureMasterData();
+        string tokenId = SceneId;
+        GameMasterUndo.Record("статблок и параметры токена", () => FindSceneToken(tokenId)?.ServerApplyMasterData(previous));
+        _masterData.statBlockId = id;
+        if (block != null)
+        {
+            _masterData.armorClass = block.armorClass;
+            _masterData.currentHp = _masterData.maxHp = block.hitPoints;
+        }
+        PublishMasterData();
+        _masterCurrentHpInput = _masterData.currentHp.ToString();
+        _masterMaxHpInput = _masterData.maxHp.ToString();
+        _masterArmorClassInput = _masterData.armorClass.ToString();
         return true;
     }
 
@@ -871,7 +892,35 @@ public class TokenController : NetworkDraggable
     private bool _conditionsPopup;
     private Vector2 _conditionsScroll;
     private Rect _conditionsRect;
-    private bool HasPublicStatBlock => !IsHost && !string.IsNullOrEmpty(PublicStatBlockJson);
+    private int _hoverFrame = -10;
+    private Vector2 _tokenInfoScroll;
+    private bool HasPublicStatBlock => !ShowMasterStats && !string.IsNullOrEmpty(PublicStatBlockJson);
+    public bool CanEditMasterStats => ShowMasterStats;
+
+    /// <summary>The shared hover/menu projection; never reads private fields in player view.</summary>
+    public string GetDisplayedTokenInfo()
+    {
+        if (!IsSpawned || !IsVisibleToLocalPlayer) return string.Empty;
+        var info = new StringBuilder(TokenName);
+        if (DisplayedCurrentHp >= 0 && DisplayedMaxHp > 0)
+            info.Append($"\nХП: {DisplayedCurrentHp}/{DisplayedMaxHp}");
+        if (DisplayedArmorClass >= 0) info.Append($"\nКД: {DisplayedArmorClass}");
+        var conditions = VisibleConditionIds;
+        if (conditions.Length > 0)
+            info.Append("\nСостояния: " + string.Join(", ", Array.ConvertAll(conditions, TokenConditionCatalog.DisplayName)));
+        if (ShowMasterStats)
+        {
+            var block = Array.Find(SceneFileStore.GetStatBlocks(), item => item != null && item.id == _masterData.statBlockId);
+            if (block != null) info.Append("\nСтатблок: " + block.name);
+        }
+        else if (HasPublicStatBlock)
+        {
+            var view = JsonUtility.FromJson<PublicStatBlockView>(PublicStatBlockJson);
+            if (view != null) info.Append("\nСтатблок: " + ((view.visibleFields & StatBlockPublicFields.Name) != 0
+                ? view.name : "доступны открытые поля"));
+        }
+        return info.ToString();
+    }
 
     public static bool IsMenuTextFocused => _activeMenuToken != null &&
         _activeMenuToken._showMenu && _activeMenuToken._visionEditing;
@@ -911,11 +960,11 @@ public class TokenController : NetworkDraggable
     {
         if (SceneEditor.IsEditing || FogManager.IsManualEditing) return;
         if (!IsSpawned || !IsVisibleToLocalPlayer) return;
-        if (!IsSpawner && !IsHost && !HasPublicStatBlock) return;
         if (MeasurementTool.Instance != null && MeasurementTool.Instance.IsLocalActive) return;
         if (EffectPaintTool.Instance != null && EffectPaintTool.Instance.IsActive) return;
 
         if (!GameplayInputGate.AllowsWorldPointerInput) return;
+        _hoverFrame = Time.frameCount;
 
         var mouse = Mouse.current;
         if (mouse != null && mouse.rightButton.wasPressedThisFrame &&
@@ -937,7 +986,8 @@ public class TokenController : NetworkDraggable
             _conditionsPopup = false;
             _statBlockPopup = false;
             Vector2 mousePos = mouse.position.ReadValue();
-            float height = IsHost ? 632 : (HasPublicStatBlock ? 230 : 196);
+            bool ownActions = IsSpawner && !(IsHost && !ShowMasterStats);
+            float height = ShowMasterStats ? 706 : 156 + (ownActions ? 108 : 0) + (HasPublicStatBlock ? 62 : 0);
             _menuRect = new Rect(
                 Mathf.Clamp(mousePos.x, 4, Mathf.Max(4, Screen.width - 264)),
                 Mathf.Clamp(Screen.height - mousePos.y, 4, Mathf.Max(4, Screen.height - height - 4)),
@@ -1018,17 +1068,20 @@ public class TokenController : NetworkDraggable
             CloseMenu();
             return;
         }
-        if (!_showMenu) return;
-
-        bool canLoad = IsSpawner || IsHost;
-        bool canCopy = IsSpawner || IsHost;
-        bool canDelete = IsSpawner || IsHost;
-        bool hasPublicStatBlock = HasPublicStatBlock;
-        if (!canLoad && !canCopy && !canDelete && !hasPublicStatBlock)
+        if (!_showMenu)
         {
-            CloseMenu();
+            if (_activeMenuToken == null && _hoverFrame >= Time.frameCount - 1 && Mouse.current != null
+                && GameplayInputGate.AllowsWorldPointerInput && !SceneEditor.IsEditing && !FogManager.IsManualEditing)
+                DrawTokenHover();
             return;
         }
+
+        bool ownActions = IsSpawner && !(IsHost && !ShowMasterStats);
+        bool canLoad = ownActions || ShowMasterStats;
+        bool canCopy = ownActions || ShowMasterStats;
+        bool canDelete = ownActions || ShowMasterStats;
+        bool hasPublicStatBlock = HasPublicStatBlock;
+        if (!ShowMasterStats) { _conditionsPopup = false; _statBlockPopup = false; }
 
         GUI.Box(_menuRect, "", VttUiSkin.ImGuiPanel);
         var titleStyle = new GUIStyle(GUI.skin.label)
@@ -1038,10 +1091,16 @@ public class TokenController : NetworkDraggable
             alignment = TextAnchor.MiddleLeft
         };
         titleStyle.normal.textColor = VttUiSkin.Muted;
-        GUI.Label(new Rect(_menuRect.x + 12, _menuRect.y + 8, 236, 25),
-            TokenName, titleStyle);
+        var infoStyle = new GUIStyle(GUI.skin.label) { fontSize = 13, wordWrap = true, richText = false };
+        infoStyle.normal.textColor = VttUiSkin.Text;
+        string info = GetDisplayedTokenInfo();
+        var infoViewport = new Rect(_menuRect.x + 10, _menuRect.y + 8, 240, 96);
+        float infoHeight = Mathf.Max(96, infoStyle.CalcHeight(new GUIContent(info), 222));
+        _tokenInfoScroll = GUI.BeginScrollView(infoViewport, _tokenInfoScroll, new Rect(0, 0, 222, infoHeight));
+        GUI.Label(new Rect(0, 0, 222, infoHeight), info, infoStyle);
+        GUI.EndScrollView();
 
-        float y = _menuRect.y + 38f;
+        float y = _menuRect.y + 112f;
         if (canLoad)
         {
             if (GUI.Button(new Rect(_menuRect.x + 10, y, 240, 30),
@@ -1066,7 +1125,7 @@ public class TokenController : NetworkDraggable
         if (canCopy)
             y += 36f;
 
-        if (IsHost)
+        if (ShowMasterStats)
         {
             if (GUI.Button(new Rect(_menuRect.x + 10, y, 240, 30),
                 InitiativeTracker.Instance != null && InitiativeTracker.Instance.ContainsToken(SceneId)
@@ -1168,6 +1227,21 @@ public class TokenController : NetworkDraggable
             CloseMenu();
     }
 
+    private void DrawTokenHover()
+    {
+        string info = GetDisplayedTokenInfo();
+        if (string.IsNullOrEmpty(info)) return;
+        var style = new GUIStyle(GUI.skin.label) { fontSize = 14, wordWrap = true, richText = false };
+        style.normal.textColor = VttUiSkin.Text;
+        float width = Mathf.Min(320, Screen.width - 8);
+        float height = Mathf.Min(Screen.height - 8, style.CalcHeight(new GUIContent(info), width - 20) + 20);
+        Vector2 pointer = Mouse.current.position.ReadValue();
+        var rect = new Rect(Mathf.Clamp(pointer.x + 16, 4, Mathf.Max(4, Screen.width - width - 4)),
+            Mathf.Clamp(Screen.height - pointer.y + 16, 4, Mathf.Max(4, Screen.height - height - 4)), width, height);
+        GUI.Box(rect, "", VttUiSkin.ImGuiPanel);
+        GUI.Label(new Rect(rect.x + 10, rect.y + 10, width - 20, height - 20), info, style);
+    }
+
     private void DrawPublicStatBlock()
     {
         var data = JsonUtility.FromJson<PublicStatBlockView>(PublicStatBlockJson);
@@ -1266,9 +1340,6 @@ public class TokenController : NetworkDraggable
             return;
         }
         if (_masterData.statBlockId == id) return;
-        string previous = _masterData.statBlockId;
-        string tokenId = SceneId;
-        GameMasterUndo.Record("статблок токена", () => FindSceneToken(tokenId)?.ServerSetStatBlock(previous));
         ServerSetStatBlock(id);
         GUI.FocusControl(null);
     }

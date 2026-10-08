@@ -57,6 +57,7 @@ public class DiceboundSceneIntegrationTests
         Call(model, "SetEdge", 2, 2, false, false, false, true);
         Call(model, "SetObstacle", 3, 3, true, 0.4f, false);
         var token = Call(tokenManager, "CreateTokenAsHost", "Гоблин", true);
+        VerifyStatBlockAssignment(token);
         TypeOf("GameMasterUndo").GetMethod("Clear").Invoke(null, null);
         Call(token, "ServerSetHealth", 12, 12, true);
         TypeOf("GameMasterUndo").GetMethod("Undo").Invoke(null, null);
@@ -80,8 +81,15 @@ public class DiceboundSceneIntegrationTests
         Call(fog, "TogglePreview");
         Assert.That(Read<int>(token, "DisplayedCurrentHp"), Is.EqualTo(-1), "Player preview must hide private HP.");
         Assert.That(Read<int>(token, "DisplayedMaxHp"), Is.EqualTo(-1));
+        Assert.That(Read<int>(token, "DisplayedArmorClass"), Is.EqualTo(-1), "Player preview must hide private AC.");
+        Assert.That(Read<bool>(token, "CanEditMasterStats"), Is.False, "Preview menu must not render master editing controls.");
+        Assert.That((string)Call(token, "GetDisplayedTokenInfo"), Does.Not.Contain("КД:"));
+        Assert.That((string)Call(token, "GetDisplayedTokenInfo"), Does.Not.Contain("ХП:"));
+        Assert.That((string)Call(token, "GetDisplayedTokenInfo"), Does.Not.Contain("Отравлен"));
         Assert.That(Read<string[]>(token, "VisibleConditionIds"), Is.Empty, "Player preview must hide private conditions.");
         Call(fog, "TogglePreview");
+        Assert.That(Read<bool>(token, "CanEditMasterStats"), Is.True);
+        Assert.That((string)Call(token, "GetDisplayedTokenInfo"), Does.Contain("КД: 10"));
         Assert.That(Read<string[]>(token, "VisibleConditionIds"), Does.Contain("poisoned"), "Master view must retain private conditions.");
         TypeOf("GameMasterUndo").GetMethod("Undo").Invoke(null, null);
         restoredMaster = Call(token, "CaptureMasterData");
@@ -200,6 +208,55 @@ public class DiceboundSceneIntegrationTests
         if (!string.IsNullOrEmpty(_path) && File.Exists(_path)) File.Delete(_path);
         yield return null;
         if (Application.isPlaying) yield return new ExitPlayMode();
+    }
+
+    private static void VerifyStatBlockAssignment(object token)
+    {
+        var original = Call(token, "CaptureMasterData");
+        var block = Activator.CreateInstance(TypeOf("StatBlockDefinition"));
+        block.GetType().GetField("id").SetValue(block, "assign-a");
+        block.GetType().GetField("name").SetValue(block, "Assignment A");
+        block.GetType().GetField("hitPoints").SetValue(block, 42);
+        block.GetType().GetField("armorClass").SetValue(block, 16);
+        foreach (string field in new[] { "size", "creatureType", "alignment", "speed", "challengeRating", "description" })
+            block.GetType().GetField(field).SetValue(block, "");
+        TypeOf("SceneFileStore").GetMethod("UpsertStatBlock").Invoke(null, new[] { block });
+        Assert.That(Call(token, "ServerSetStatBlock", "assign-a"), Is.EqualTo(true));
+        Assert.That(Read<int>(token, "VisibleCurrentHp"), Is.EqualTo(42));
+        Assert.That(Read<int>(token, "VisibleMaxHp"), Is.EqualTo(42));
+        Assert.That(Read<int>(token, "ArmorClass"), Is.EqualTo(16));
+        Call(token, "ServerSetHealth", 9, 42, false);
+        Call(token, "ServerSetStatBlock", "assign-a");
+        Assert.That(Read<int>(token, "VisibleCurrentHp"), Is.EqualTo(9), "Reassignment must not heal.");
+        block.GetType().GetField("hitPoints").SetValue(block, 80);
+        block.GetType().GetField("armorClass").SetValue(block, 22);
+        TypeOf("SceneFileStore").GetMethod("UpsertStatBlock").Invoke(null, new[] { block });
+        Assert.That(Read<int>(token, "VisibleCurrentHp"), Is.EqualTo(9), "Editing a template must not reset live HP.");
+        Assert.That(Read<int>(token, "VisibleMaxHp"), Is.EqualTo(42));
+        Assert.That(Read<int>(token, "ArmorClass"), Is.EqualTo(16));
+        block = JsonUtility.FromJson(JsonUtility.ToJson(block), TypeOf("StatBlockDefinition"));
+        block.GetType().GetField("id").SetValue(block, "assign-b");
+        TypeOf("SceneFileStore").GetMethod("UpsertStatBlock").Invoke(null, new[] { block });
+        Call(token, "ServerToggleCondition", "poisoned");
+        var before = Call(token, "CaptureMasterData");
+        Assert.That(Call(token, "ServerSetStatBlock", "assign-b"), Is.EqualTo(true));
+        Assert.That(Read<int>(token, "VisibleCurrentHp"), Is.EqualTo(80));
+        Assert.That(Read<int>(token, "ArmorClass"), Is.EqualTo(22));
+        var assigned = Call(token, "CaptureMasterData");
+        foreach (string field in new[] { "hideHp", "hideArmorClass", "hideConditions" })
+            Assert.That(assigned.GetType().GetField(field).GetValue(assigned), Is.EqualTo(before.GetType().GetField(field).GetValue(before)));
+        Assert.That(Read<string[]>(token, "VisibleConditionIds"), Does.Contain("poisoned"));
+        TypeOf("GameMasterUndo").GetMethod("Undo").Invoke(null, null);
+        Assert.That(JsonUtility.ToJson(Call(token, "CaptureMasterData")), Is.EqualTo(JsonUtility.ToJson(before)));
+        Assert.That(token.GetType().GetField("_masterCurrentHpInput", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(token), Is.EqualTo("9"));
+        Assert.That(Call(token, "ServerSetStatBlock", "missing-template"), Is.EqualTo(false));
+        Assert.That(JsonUtility.ToJson(Call(token, "CaptureMasterData")), Is.EqualTo(JsonUtility.ToJson(before)));
+        Assert.That(Call(token, "ServerSetStatBlock", ""), Is.EqualTo(true));
+        Assert.That(Read<int>(token, "VisibleCurrentHp"), Is.EqualTo(9), "Detaching the template keeps combat values.");
+        TypeOf("GameMasterUndo").GetMethod("Undo").Invoke(null, null);
+        Assert.That(JsonUtility.ToJson(Call(token, "CaptureMasterData")), Is.EqualTo(JsonUtility.ToJson(before)));
+        Call(token, "ServerApplyMasterData", original);
+        TypeOf("GameMasterUndo").GetMethod("Clear").Invoke(null, null);
     }
 
     [UnityTest]
