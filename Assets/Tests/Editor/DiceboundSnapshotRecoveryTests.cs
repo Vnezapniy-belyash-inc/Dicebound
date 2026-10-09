@@ -11,6 +11,45 @@ public class DiceboundSnapshotRecoveryTests
     private const BindingFlags Private = BindingFlags.NonPublic | BindingFlags.Instance;
     private static Type Runtime(string name) => Type.GetType(name + ", Assembly-CSharp", true);
 
+    [TestCase(64, 96, 0)]
+    [TestCase(64, 64, 3)]
+    [TestCase(64, 0, 3)]
+    public void PartialMapProgressRestoresOnlyTheConsecutiveRetryBudget(int before, int after, int expected)
+    {
+        var method = Runtime("MapSync").GetMethod("MapAttemptAfterProgress", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.That(method.Invoke(null, new object[] { 3, before, after }), Is.EqualTo(expected));
+    }
+
+    [TestCase(false, 0, 1)]
+    [TestCase(false, 5, 0)]
+    [TestCase(true, 0, 33)]
+    public void FreshMapChunkResetsStallRetriesAndReportsOnlyContiguousProgress(bool gap, int index, int contiguous)
+    {
+        var root = new GameObject("Map progress recovery test");
+        try
+        {
+            var type = Runtime("MapSync");
+            root.AddComponent<NetworkObject>();
+            var sync = root.AddComponent(type);
+            void Set(string field, object value) => type.GetField(field, Private).SetValue(sync, value);
+            Set("_receivingMap", true); Set("_incomingVersion", 7);
+            Set("_incomingTotalChunks", 100); Set("_incomingBytes", 100000); Set("_retryCount", 3);
+            var chunks = (System.Collections.Generic.Dictionary<int, byte[]>)type.GetField("_incomingChunks", Private).GetValue(sync);
+            if (gap) for (int i = 1; i <= 32; i++) chunks[i] = new byte[1000];
+            using var writer = new FastBufferWriter(1012, Allocator.Temp);
+            writer.WriteValueSafe(7); writer.WriteValueSafe(index); writer.WriteValueSafe(1000); writer.WriteBytesSafe(new byte[1000]);
+            var receive = type.GetMethod("OnMapChunkReceived", Private);
+            using (var reader = new FastBufferReader(writer, Allocator.Temp)) receive.Invoke(sync, new object[] { 0UL, reader });
+            Assert.That(type.GetField("_retryCount", Private).GetValue(sync), Is.EqualTo(0));
+            Assert.That(type.GetField("_contiguousReceived", Private).GetValue(sync), Is.EqualTo(contiguous));
+            Set("_retryCount", 2);
+            using (var reader = new FastBufferReader(writer, Allocator.Temp)) receive.Invoke(sync, new object[] { 0UL, reader });
+            Assert.That(type.GetField("_retryCount", Private).GetValue(sync), Is.EqualTo(2), "Duplicate bytes are not new progress.");
+            Assert.That(chunks.Count, Is.EqualTo(gap ? 33 : 1));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(root); }
+    }
+
     [Test]
     public void DisposedMapTransferReleasesItsActiveSendSlot()
     {

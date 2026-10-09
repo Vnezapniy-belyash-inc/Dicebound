@@ -75,6 +75,7 @@ public class MapSync : NetworkBehaviour
     private readonly Dictionary<int, byte[]> _incomingChunks = new();
     private int _incomingVersion = -1;
     private int _incomingTotalChunks;
+    private int _contiguousReceived;
     private int _incomingBytes;
     private uint _incomingChecksum;
     private int _appliedVersion = -1;
@@ -99,6 +100,7 @@ public class MapSync : NetworkBehaviour
         UnregisterHandlers();
         _receivingMap = false;
         _incomingChunks.Clear();
+        _contiguousReceived = 0;
         _acknowledgedVersions.Clear();
         _receivedProgress.Clear();
         _cancelledSends.Clear();
@@ -169,6 +171,7 @@ public class MapSync : NetworkBehaviour
             DiceUI.Instance?.ShowToolNotice("Не удалось загрузить карту. Переподключитесь к сессии.");
             _receivingMap = false;
             _incomingChunks.Clear();
+            _contiguousReceived = 0;
             ImageTransferUI.Finish("map-receive", "Не удалось загрузить карту");
             return;
         }
@@ -218,6 +221,8 @@ public class MapSync : NetworkBehaviour
         }
     }
 
+    private static int MapAttemptAfterProgress(int attempt, int before, int after) => after > before ? 0 : attempt;
+
     private IEnumerator SendMapWithRetriesCore(ulong clientId, int generation)
     {
         if (!IsServer || _cachedPng == null) yield break;
@@ -229,7 +234,24 @@ public class MapSync : NetworkBehaviour
             ImageTransferUI.Show($"map-send-{clientId}", "Отправка карты", 0f,
                 $"Игроку {clientId}, попытка {attempt}/{MaxRetries + 1}",
                 () => CancelSend(clientId, version));
-            yield return SendMapToClientRoutine(clientId, generation);
+            int progressBefore = _receivedProgress.TryGetValue(clientId, out var before) && before.Version == version ? before.Count : 0;
+            var outcome = new MapSendOutcome();
+            yield return SendMapToClientRoutine(clientId, generation, outcome);
+            if (_acknowledgedVersions.TryGetValue(clientId, out int applied) && applied == version)
+            {
+                ImageTransferUI.Finish($"map-send-{clientId}", "Карта отправлена");
+                yield break;
+            }
+            // A failed intermediate batch cannot produce the final decode ACK.
+            // Retry it now instead of consuming another full ACK timeout.
+            if (!outcome.AllChunksSent)
+            {
+                if (attempt <= MaxRetries) Debug.LogWarning($"[MapSync] Incomplete map batch for {clientId}; retry {attempt}/{MaxRetries}");
+                int progressAfter = _receivedProgress.TryGetValue(clientId, out var after) && after.Version == version ? after.Count : 0;
+                attempt = MapAttemptAfterProgress(attempt, progressBefore, progressAfter);
+                yield return new WaitForSecondsRealtime(0.25f);
+                continue;
+            }
             float deadline = Time.unscaledTime + AckTimeoutSeconds;
             while (Time.unscaledTime < deadline && generation == SendGeneration(clientId))
             {
@@ -256,7 +278,9 @@ public class MapSync : NetworkBehaviour
 
     public IEnumerator SendMapToClientRoutine(ulong clientId) => SendMapToClientRoutine(clientId, SendGeneration(clientId));
 
-    private IEnumerator SendMapToClientRoutine(ulong clientId, int generation)
+    private sealed class MapSendOutcome { public bool AllChunksSent; }
+
+    private IEnumerator SendMapToClientRoutine(ulong clientId, int generation, MapSendOutcome outcome = null)
     {
         if (generation != SendGeneration(clientId) || !IsServer || clientId == NetworkManager.ServerClientId || _cachedPng == null)
             yield break;
@@ -319,6 +343,7 @@ public class MapSync : NetworkBehaviour
             }
             else if ((i + 1) % ChunksPerFrame == 0) yield return null;
         }
+        if (outcome != null && version == _mapVersion && generation == SendGeneration(clientId)) outcome.AllChunksSent = true;
     }
 
     private void OnMapMetaReceived(ulong senderId, FastBufferReader reader)
@@ -343,13 +368,14 @@ public class MapSync : NetworkBehaviour
         if (version != _incomingVersion || !_receivingMap)
         {
             _incomingChunks.Clear();
+            _contiguousReceived = 0;
             _incomingVersion = version;
             _incomingTotalChunks = total;
             _incomingBytes = bytes;
             _incomingChecksum = checksum;
             if (isNewVersion) _retryCount = 0;
         }
-        else SendProgress(version, _incomingChunks.Count);
+        else SendProgress(version, _contiguousReceived);
         _receivingMap = true;
         _lastProgressTime = Time.unscaledTime;
         ImageTransferUI.Show("map-receive", "Загрузка карты",
@@ -371,13 +397,18 @@ public class MapSync : NetworkBehaviour
         reader.ReadBytesSafe(ref chunk, size);
         if (_incomingChunks.ContainsKey(index)) return;
         _incomingChunks.Add(index, chunk);
+        _retryCount = 0; // Count consecutive stalls, not pauses across successful progress.
+        int previousContiguous = _contiguousReceived;
+        while (_incomingChunks.ContainsKey(_contiguousReceived)) _contiguousReceived++;
         _lastProgressTime = Time.unscaledTime;
-        if (_incomingChunks.Count % BatchChunks == 0 || _incomingChunks.Count == _incomingTotalChunks)
+        if (_incomingChunks.Count % BatchChunks == 0
+            || _contiguousReceived / BatchChunks > previousContiguous / BatchChunks
+            || _contiguousReceived == _incomingTotalChunks)
         {
             ImageTransferUI.Show("map-receive", "Загрузка карты",
                 (float)_incomingChunks.Count / _incomingTotalChunks, "Получение от сервера",
                 () => CancelReceive(version));
-            SendProgress(version, _incomingChunks.Count);
+            SendProgress(version, _contiguousReceived);
         }
         if (_incomingChunks.Count == _incomingTotalChunks) Reassemble();
     }
@@ -397,12 +428,14 @@ public class MapSync : NetworkBehaviour
         {
             Debug.LogWarning($"[MapSync] Map version {_incomingVersion} failed validation or decoding");
             _incomingChunks.Clear();
+            _contiguousReceived = 0;
             _lastProgressTime = Time.unscaledTime - ClientRetryAfterSeconds;
             return;
         }
         _appliedVersion = _incomingVersion;
         _receivingMap = false;
         _incomingChunks.Clear();
+        _contiguousReceived = 0;
         SendAck(_appliedVersion);
         ImageTransferUI.Finish("map-receive", "Карта загружена");
         Debug.Log($"[MapSync] Applied map version {_appliedVersion}, {_incomingBytes} bytes");
@@ -461,6 +494,7 @@ public class MapSync : NetworkBehaviour
         if (version != _incomingVersion) return;
         _receivingMap = false;
         _incomingChunks.Clear();
+        _contiguousReceived = 0;
         _cancelledIncomingVersion = Mathf.Max(_cancelledIncomingVersion, version);
         if (notify) SendCancel(NetworkManager.ServerClientId, version);
         ImageTransferUI.Finish("map-receive", "Загрузка карты отменена");
