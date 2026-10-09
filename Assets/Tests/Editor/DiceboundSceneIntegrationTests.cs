@@ -3,6 +3,7 @@ using System.Collections;
 using System.IO;
 using System.Reflection;
 using NUnit.Framework;
+using Unity.Collections;
 using Unity.Netcode;
 using Unity.Netcode.Transports.UTP;
 using UnityEditor;
@@ -22,6 +23,56 @@ public class DiceboundSceneIntegrationTests
     {
         var go = new GameObject(name); go.transform.SetParent(_root.transform);
         return go.AddComponent(TypeOf(type));
+    }
+
+    [UnityTest]
+    public IEnumerator PortraitRepairRequiresANewAcknowledgementAndPreservesImage()
+    {
+        UnityEditor.SceneManagement.EditorSceneManager.NewScene(UnityEditor.SceneManagement.NewSceneSetup.EmptyScene,
+            UnityEditor.SceneManagement.NewSceneMode.Single);
+        yield return new EnterPlayMode();
+        _root = new GameObject("Portrait repair test");
+        _manager = new GameObject("Portrait repair host").AddComponent<NetworkManager>();
+        var transport = _manager.gameObject.AddComponent<UnityTransport>();
+        transport.SetConnectionData("127.0.0.1", 17879);
+        _manager.NetworkConfig = new NetworkConfig { EnableSceneManagement = false, NetworkTransport = transport };
+        var prefab = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Token.prefab");
+        _manager.AddNetworkPrefab(prefab);
+        var grid = Add("GridManager", "Grid");
+        grid.GetType().GetField("gridWidth").SetValue(grid, 10);
+        grid.GetType().GetField("gridHeight").SetValue(grid, 10);
+        var tokens = Add("TokenManager", "Tokens");
+        tokens.GetType().GetField("tokenPrefab").SetValue(tokens, prefab.GetComponent<NetworkObject>());
+        yield return null;
+        Assert.That(_manager.StartHost(), Is.True);
+        yield return null;
+        var token = Call(tokens, "CreateTokenAsHost", "Portrait repair", true);
+        Assert.That(token, Is.Not.Null);
+        _texture = new Texture2D(4, 4);
+        _texture.SetPixels(new Color[16]); _texture.Apply();
+        byte[] image = _texture.EncodeToPNG();
+        var type = TypeOf("TokenImageSync");
+        ulong id = Read<ulong>(token, "NetworkObjectId");
+        Assert.That(type.GetMethod("BroadcastImage").Invoke(null, new object[] { id, image }), Is.EqualTo(true));
+        var versions = (System.Collections.Generic.Dictionary<ulong, int>)type.GetField("PortraitVersions", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null);
+        var cache = (System.Collections.Generic.Dictionary<ulong, byte[]>)type.GetField("PortraitCache", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null);
+        var sync = type.GetProperty("Instance").GetValue(null);
+        var acks = (System.Collections.Generic.Dictionary<(ulong, ulong), int>)type.GetField("_downloadAcks", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(sync);
+        int oldVersion = versions[id];
+        acks[(42UL, id)] = oldVersion;
+        byte[] previousPortrait = (byte[])Call(token, "GetPortraitJpg");
+        Assert.That(type.GetMethod("RestartPortraitForRepair").Invoke(null, new object[] { id }), Is.EqualTo(true));
+        Assert.That(versions[id], Is.EqualTo(oldVersion + 1));
+        Assert.That(cache[id], Is.SameAs(image), "Repair reuses the validated image bytes.");
+        Assert.That((byte[])Call(token, "GetPortraitJpg"), Is.EqualTo(previousPortrait));
+        Assert.That(acks[(42UL, id)], Is.Not.EqualTo(versions[id]), "The old object's ACK cannot satisfy the repaired portrait revision.");
+        acks.Remove((42UL, id));
+        using var writer = new FastBufferWriter(sizeof(ulong) + sizeof(int), Allocator.Temp);
+        writer.WriteValueSafe(id); writer.WriteValueSafe(oldVersion);
+        using var reader = new FastBufferReader(writer, Allocator.Temp);
+        type.GetMethod("OnDownloadAck", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(sync, new object[] { 42UL, reader });
+        Assert.That(acks.ContainsKey((42UL, id)), Is.False, "A delayed old ACK must be rejected after repair.");
+        Assert.That(type.GetMethod("RestartPortraitForRepair").Invoke(null, new object[] { ulong.MaxValue }), Is.EqualTo(false));
     }
 
     [UnityTest]

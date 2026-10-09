@@ -778,10 +778,15 @@ public class LateJoinSync : MonoBehaviour
                 obj.NetworkHide(clientId);
                 yield return null;
             }
+            bool hasPortrait = obj.GetComponent<TokenController>() != null
+                && TokenImageSync.TryGetCachedPortrait(id, out _);
+            // Invalidate the old object's portrait ACK before the new object can
+            // confirm its world manifest. Other visible clients receive the new
+            // revision as well, keeping one portrait version for the token.
+            if (hasPortrait) TokenImageSync.RestartPortraitForRepair(id);
             if (obj.IsSpawned) obj.NetworkShow(clientId);
             yield return null;
-            if (obj.GetComponent<TokenController>() != null
-                && TokenImageSync.TryGetCachedPortrait(id, out byte[] portrait))
+            if (hasPortrait && TokenImageSync.TryGetCachedPortrait(id, out byte[] portrait))
                 TokenImageSync.SendImageToClient(clientId, id, portrait);
             yield return null;
         }

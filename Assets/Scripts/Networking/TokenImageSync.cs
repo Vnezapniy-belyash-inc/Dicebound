@@ -367,6 +367,15 @@ public class TokenImageSync : MonoBehaviour
         return true;
     }
 
+    /// <summary>
+    /// A respawn loses the client's local texture. Use a new portrait revision so an
+    /// acknowledgement from the previous object cannot finish the repair transfer.
+    /// Call while the repaired object is hidden, before NetworkShow.
+    /// </summary>
+    public static bool RestartPortraitForRepair(ulong networkObjectId) =>
+        TryGetCachedPortrait(networkObjectId, out byte[] portrait)
+        && BroadcastImage(networkObjectId, portrait);
+
     public static void CachePortrait(ulong networkObjectId, byte[] jpgData)
     {
         if (!ValidPortrait(jpgData)) return;
