@@ -1,6 +1,6 @@
 # NET-RECOVERY-01 — ход проверки
 
-Дата: 09.10.2026. Статус: **в работе**, задача ещё не принята.
+Дата итоговой приёмки: 10.10.2026. Статус: **Готово**. Ниже сохранена история диагностики; промежуточные незавершённые результаты не заменяют итоговую приёмку в конце документа.
 
 ## Повторное подтверждение снимков
 
@@ -132,3 +132,27 @@ Player пересобран: `build_436ac63f8301`, Succeeded, 0 ошибок; `L
 После восстановления обработчика и повтора портрета новый ACK открыл сцену. Обе стороны получили портрет 884 байта с одинаковым SHA-256: `Logs/net-relay-world-repair-fixed-portrait-after.json`, equal=true. Карта, геометрия, туман, бой, владелец, приватность и ввод совпали: `Logs/net-relay-world-repair-fixed.json`. Кадры `Logs/net-relay-world-repair-fixed-blocked.png` и `Logs/net-relay-world-repair-fixed-portrait-ready.png` просмотрены: загрузочный занавес до готовности, обычный UI после, зависшего индикатора портрета нет.
 
 Следующие проверки NET: устаревший ACK карты, повтор разрыва большого портрета после исправлений повторов карты, заполненные сценарии по локальному транспорту и итоговый аудит всех критериев. Общая задача остаётся в работе.
+
+## Итоговая приёмка — 10 октября 2026
+
+NET-RECOVERY-01 принята на коде a113cf3. Unity 6000.5.1f1, отдельный Windows Player build_436ac63f8301, сборка Development для QA: Succeeded, 0 ошибок. Локальное соединение использует UnityTransport 127.0.0.1:7777; Relay проверен отдельной настоящей аллокацией. После локального отключения вход выполнялся вручную из лобби; через Relay подтверждено автоматическое переподключение. Время в отчётах — момент наблюдения готовности, не измерение точной длительности протокола.
+
+| Критерий | Локальный транспорт | Relay |
+|---|---|---|
+| Обрыв большой карты, блокировка и повторный вход | net-local-large-map-disconnect.json: 32/3695 частей, новый ID 7, все сравнения true | net-relay-large-map-disconnect.json: 32/3695 частей, автоматический вход ID 2, все сравнения true |
+| Обрыв большого портрета и восстановление содержимого | net-local-large-portrait-disconnect.json: 3/986 частей | net-relay-large-portrait-disconnect.json: 1/986 частей |
+| Геометрия, туман и бой: потеря нового снимка, отключение и новый вход | net-local-rich-disconnect-matrix.json: три сценария | net-relay-rich-disconnect-matrix.json: три сценария |
+| Старые ACK геометрии, тумана и боя не открывают стол | net-local-stale-snapshot-acks.json | net-relay-stale-snapshot-acks.json |
+| Старый ACK списка объектов не открывает стол | net-local-stale-world-ack.json | net-relay-stale-world-ack.json |
+| Старый ACK карты не открывает стол | net-local-stale-map-ack.json | net-relay-stale-map-ack.json |
+| Восстановление объекта требует нового ACK портрета | net-local-world-repair-fixed-held-portrait.json, net-local-world-repair-fixed.json | net-relay-world-repair-fixed-held-portrait.json, net-relay-world-repair-fixed.json |
+| Четыре последовательные паузы карты и сброс бюджета после прогресса | net-map-four-pauses.json, net-map-four-pauses-comparison.json | net-map-relay-four-pauses.json, net-map-relay-four-pauses-comparison.json |
+| Таймаут ответа сервера и восстановление | net-local-heartbeat-timeout-lobby.json: 30,36 с; net-local-heartbeat-timeout-recovered.json | net-heartbeat-timeout-reconnected.json, net-heartbeat-timeout-recovered.json: автоматический вход; код heartbeat с e394b3a не менялся |
+
+Все JSON выше находятся в Logs/. В обоих сценариях большого портрета после повторного входа фактические JPEG имеют 108205 байт и одинаковый SHA-256 E647DCB10C8A86469FEDEAA6CB74102C54B77611951DA501D23544103968AB5E. До завершения актуальных подтверждений стол закрыт и клавиатурный ввод запрещён; после восстановления разрешён. Владелец восстановлен по нику, закрытые ХП и КД на клиенте остаются -1.
+
+Итоговое состояние: Logs/net-final-recovery-scene-comparison.json — карта, геометрия, видимый/исследованный туман, 43 участника боя, раунд 4, владелец, приватность и ввод совпали. Полные применённые данные боя сохранены отдельно в Logs/net-final-recovery-scene-comparison-battle-host.json и Logs/net-final-recovery-scene-comparison-battle-client.json. Финальный QA-инструмент считает хеш по нормализованным реально применённым записям клиента; прежний диагностический client.battleHash из повторной серверной сериализации не использован для приёмки.
+
+Просмотрены кадры локального и Relay-восстановления портрета до/после загрузки, а также Logs/net-final-recovery-player-ready.png: занавес закрывает незавершённую сцену, после загрузки виден обычный UI без зависшего индикатора. Шумовая карта и случайная маска тумана — намеренные большие QA-данные.
+
+Unity-регрессия текущего кода: Logs/net-portrait-repair-regression.xml — 104 total, 103 passed, 0 failed, 1 skipped (онлайн Relay). Отдельный явный онлайн-прогон Logs/net-final-online-relay-tests.xml — 1 total, 1 passed, 0 failed, 0 skipped; флаг DICEBOUND_RELAY_TEST после прогона снят. Аудит содержимого отчётов Logs/net-final-acceptance-audit.json: 185 проверок, 0 ошибок, включая частичную передачу, старые ACK, повторный вход, фактические хеши и неизменность ранее проверенного кода карты/heartbeat. Это приёмка сетевой задачи; финальная регрессия всей цели и новая релизная сборка остаются REG-01.
