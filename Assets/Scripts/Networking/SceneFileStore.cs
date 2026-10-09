@@ -947,12 +947,23 @@ public static class SceneFileStore
         var scene = SceneSaveMigration.UpgradeScene(
             JsonUtility.FromJson<SceneDefinition>(File.ReadAllText(path)));
         scene.mapAssetId = null;
+        SceneValidation.Validate(scene);
+        Decode(scene.mapImage, MapSync.MaxMapBytes);
+        foreach (var token in scene.tokens) Decode(token.portrait, TokenImageSync.MaxPortraitBytes);
+        var previousCampaign = _campaign;
+        bool previousDirty = _campaignDirty;
+        string previousMapAssetId = _currentMapAssetId;
         _campaign = null;
         _campaignDirty = false;
         _currentMapAssetId = null;
-        foreach (var marker in UnityEngine.Object.FindObjectsByType<SceneTransitionMarker>(FindObjectsInactive.Include))
-            if (marker != null) marker.SetMarkerEnabled(false);
-        ApplyScene(scene, null);
+        try { ApplyScene(scene, null); }
+        catch
+        {
+            _campaign = previousCampaign;
+            _campaignDirty = previousDirty;
+            _currentMapAssetId = previousMapAssetId;
+            throw;
+        }
     }
 
     public static void LoadCampaign(string path)

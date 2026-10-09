@@ -762,7 +762,7 @@ public class DiceUI : MonoBehaviour
         _confirmBody.horizontalOverflow = HorizontalWrapMode.Wrap;
         MakeContextButton(box.transform, "Отмена", 12, -154, 190, 38,
             () => _confirmPanel.SetActive(false));
-        var accept = MakeContextButton(box.transform, "Удалить", 228, -154, 190, 38, null);
+        var accept = MakeContextButton(box.transform, "Подтвердить", 228, -154, 190, 38, null);
         accept.GetComponent<Image>().color = new Color(0.33f, 0.12f, 0.15f);
         _confirmAccept = accept.GetComponent<Button>();
         _confirmPanel.SetActive(false);

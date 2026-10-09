@@ -105,12 +105,20 @@ public class DiceboundSceneIntegrationTests
         Call(model, "SetEdge", 2, 2, false, false, true, false);
         Call(token, "RequestSetHidden", false);
         string savedJson = File.ReadAllText(_path);
+        var store = TypeOf("SceneFileStore");
+        string campaignBeforeInvalidLoad = JsonUtility.ToJson(store.GetMethod("CaptureCampaign").Invoke(null, new object[] { null }));
+        bool dirtyBeforeInvalidLoad = (bool)store.GetMethod("HasUnsavedChanges").Invoke(null, null);
+        Assert.That(store.GetProperty("HasCampaign").GetValue(null), Is.EqualTo(true));
         var broken = JsonUtility.FromJson(savedJson, TypeOf("SceneDefinition"));
         broken.GetType().GetField("mapImage").SetValue(broken, "invalid-base64");
         File.WriteAllText(_path, JsonUtility.ToJson(broken));
         Assert.Throws<TargetInvocationException>(() => TypeOf("SceneFileStore").GetMethod("Load").Invoke(null, new object[] { _path }));
         Assert.That(Read<bool>(token, "IsSpawned"), Is.True, "Invalid import must not delete existing tokens.");
         Assert.That(Read<bool>(token, "IsHidden"), Is.False, "Invalid import must preserve the current state.");
+        Assert.That(store.GetProperty("HasCampaign").GetValue(null), Is.EqualTo(true), "Invalid scene must not discard the campaign.");
+        Assert.That(JsonUtility.ToJson(store.GetMethod("CaptureCampaign").Invoke(null, new object[] { null })),
+            Is.EqualTo(campaignBeforeInvalidLoad), "Campaign metadata and libraries must remain intact.");
+        Assert.That(store.GetMethod("HasUnsavedChanges").Invoke(null, null), Is.EqualTo(dirtyBeforeInvalidLoad));
         File.WriteAllText(_path, savedJson);
         TypeOf("SceneFileStore").GetMethod("Load").Invoke(null, new object[] { _path });
         yield return null;

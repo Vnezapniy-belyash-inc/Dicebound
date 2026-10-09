@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
@@ -6,6 +7,39 @@ using UnityEngine;
 public class DiceboundStabilityTests
 {
     private static Type RuntimeType(string name) => Type.GetType(name + ", Assembly-CSharp", true);
+    [Test]
+    public void GeneralConfirmationDoesNotLabelRestoreAsDeleteAndReplacesPreviousAction()
+    {
+        var root = new GameObject("Confirmation test");
+        try
+        {
+            var canvas = new GameObject("Canvas", typeof(Canvas));
+            canvas.transform.SetParent(root.transform);
+            var type = RuntimeType("DiceUI");
+            var ui = root.AddComponent(type);
+            const BindingFlags flags = BindingFlags.NonPublic | BindingFlags.Instance;
+            type.GetField("_canvas", flags).SetValue(ui, canvas.GetComponent<Canvas>());
+            type.GetMethod("BuildConfirmationDialog", flags).Invoke(ui,
+                new object[] { Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf") });
+            int previousCalls = 0, restoreCalls = 0;
+            type.GetMethod("ConfirmAction").Invoke(ui, new object[] { "Удалить запись?", "", (Action)(() => previousCalls++) });
+            type.GetMethod("ConfirmAction").Invoke(ui, new object[] { "Восстановить автосохранение?", "", (Action)(() => restoreCalls++) });
+            var panel = (GameObject)type.GetField("_confirmPanel", flags).GetValue(ui);
+            var button = (Component)type.GetField("_confirmAccept", flags).GetValue(ui);
+            string label = null;
+            foreach (var component in button.GetComponentsInChildren<Component>(true))
+                if (component.GetType().Name == "Text") label = (string)component.GetType().GetProperty("text").GetValue(component);
+            Assert.That(label, Is.EqualTo("Подтвердить"));
+            Assert.That(panel.activeSelf, Is.True);
+            object click = button.GetType().GetProperty("onClick").GetValue(button);
+            click.GetType().GetMethod("Invoke").Invoke(click, null);
+            Assert.That(previousCalls, Is.Zero);
+            Assert.That(restoreCalls, Is.EqualTo(1));
+            Assert.That(panel.activeSelf, Is.False);
+        }
+        finally { UnityEngine.Object.DestroyImmediate(root); }
+    }
+
     [Test]
     public void AreaAndEffectMaterialsRenderAfterMapWithFogClipping()
     {
@@ -155,7 +189,8 @@ public class DiceboundStabilityTests
         Assert.That(payload.Length, Is.LessThan(4096));
         var args = new object[] { payload, visible.Length, null, null };
         type.GetMethod("Decode").Invoke(null, args);
-        Assert.That(args[2], Is.EqualTo(visible)); Assert.That(args[3], Is.EqualTo(explored));
+        Assert.That(((bool[])args[2]).SequenceEqual(visible), Is.True, "Every visible sample must round-trip.");
+        Assert.That(((bool[])args[3]).SequenceEqual(explored), Is.True, "Every explored sample must round-trip.");
         Assert.Throws<TargetInvocationException>(() => type.GetMethod("Decode").Invoke(null, new object[] { payload, visible.Length / 2, null, null }));
     }
     [Test]
