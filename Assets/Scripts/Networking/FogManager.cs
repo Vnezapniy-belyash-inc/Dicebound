@@ -43,6 +43,13 @@ public sealed class FogManager : MonoBehaviour
     private float _nextPublish;
     private readonly Dictionary<ulong, int> _clientAcks = new();
     public bool IsMaster => _network != null && _network.IsHost && _network.IsListening;
+    public bool HasClientCurrentRevision(ulong client) => _network != null && _network.IsServer
+        && _network.ConnectedClients.ContainsKey(client) && _revision > 0
+        && _clientAcks.TryGetValue(client, out int revision) && revision == _revision;
+    public void ResendStateToClient(ulong client)
+    {
+        if (_network != null && _network.IsServer && _network.ConnectedClients.ContainsKey(client)) Send(client);
+    }
     public bool AllClientsHaveCurrentRevision
     {
         get

@@ -23,6 +23,7 @@ public class DiceboundLobbyIntegrationTests
     private int _transferTotal, _transferReceived, _fogChanges;
     private byte[] _incomingImage;
     private bool? _fogEnabled;
+    private bool? _curtainReceived, _syncPendingReceived;
     private static Type RuntimeType(string name) => Type.GetType(name + ", Assembly-CSharp", true);
     private NetworkManager Manager(string name)
     {
@@ -107,6 +108,48 @@ public class DiceboundLobbyIntegrationTests
     [UnityTest]
     public IEnumerator MapTransferDoesNotBlockFogTogglesOrDisconnectClient()
     { return MapAndFog(false); }
+
+    [UnityTest]
+    public IEnumerator LoadingClientCurtainSurvivesMasterTogglesAndPreservesMasterCurtainOnCompletion()
+    {
+        yield return new EnterPlayMode();
+        _host = Manager("Client curtain host");
+        _scene = new GameObject("Client curtain test");
+        var type = RuntimeType("HostSceneCurtain");
+        type.GetMethod("EnsureInstance").Invoke(null, null);
+        var curtain = (Component)type.GetProperty("Instance").GetValue(null);
+        curtain.transform.SetParent(_scene.transform);
+        yield return null;
+        Assert.That(_host.StartHost(), Is.True);
+        _client = Manager("Loading client");
+        Assert.That(_client.StartClient(), Is.True);
+        for (int i = 0; i < 200 && !_client.IsConnectedClient; i++) yield return new WaitForSecondsRealtime(0.05f);
+        Assert.That(_client.IsConnectedClient, Is.True);
+        _curtainReceived = _syncPendingReceived = null;
+        _client.CustomMessagingManager.RegisterNamedMessageHandler("HostSceneCurtainState", (sender, reader) =>
+        {
+            Assert.That(sender, Is.EqualTo(NetworkManager.ServerClientId));
+            reader.ReadValueSafe(out bool down); reader.ReadValueSafe(out bool pending);
+            _curtainReceived = down; _syncPendingReceived = pending;
+        });
+        type.GetMethod("SendCurtainStateToClient").Invoke(curtain, new object[] { _client.LocalClientId });
+        for (int i = 0; i < 100 && _curtainReceived != true; i++) yield return new WaitForSecondsRealtime(0.02f);
+        Assert.That(_curtainReceived, Is.True);
+        Assert.That(_syncPendingReceived, Is.True);
+        type.GetMethod("ToggleCurtainOnHost").Invoke(curtain, null);
+        type.GetMethod("ToggleCurtainOnHost").Invoke(curtain, null);
+        yield return new WaitForSecondsRealtime(0.2f);
+        Assert.That(_curtainReceived, Is.True, "Opening the master's curtain must not expose an incomplete client.");
+        Assert.That(_syncPendingReceived, Is.True);
+        type.GetMethod("ToggleCurtainOnHost").Invoke(curtain, null);
+        type.GetMethod("CompleteClientSync").Invoke(curtain, new object[] { _client.LocalClientId });
+        for (int i = 0; i < 100 && _syncPendingReceived != false; i++) yield return new WaitForSecondsRealtime(0.02f);
+        Assert.That(_syncPendingReceived, Is.False);
+        Assert.That(_curtainReceived, Is.True, "Finishing loading must preserve the master's manually closed curtain.");
+        type.GetMethod("ToggleCurtainOnHost").Invoke(curtain, null);
+        for (int i = 0; i < 100 && _curtainReceived != false; i++) yield return new WaitForSecondsRealtime(0.02f);
+        Assert.That(_curtainReceived, Is.False);
+    }
 
     [UnityTest]
     public IEnumerator HighResolutionMapLoadsAndReachesClient()

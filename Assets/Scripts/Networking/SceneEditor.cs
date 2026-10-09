@@ -41,6 +41,13 @@ public sealed class SceneEditor : MonoBehaviour
     private bool _hasState;
     private int _loadGeneration;
     public bool IsMaster => _network != null && _network.IsListening && _network.IsHost;
+    public bool HasClientCurrentRevision(ulong client) => _network != null && _network.IsServer
+        && _network.ConnectedClients.ContainsKey(client) && _revision > 0
+        && _clientAcks.TryGetValue(client, out int revision) && revision == _revision;
+    public void ResendStateToClient(ulong client)
+    {
+        if (_network != null && _network.IsServer && _network.ConnectedClients.ContainsKey(client)) SendState(client);
+    }
     public bool AllClientsHaveCurrentRevision
     {
         get
@@ -236,7 +243,7 @@ public sealed class SceneEditor : MonoBehaviour
         {
             if (HostSceneCurtain.IsCurtainDown) HostSceneCurtain.Instance?.ToggleCurtainOnHost();
         }
-        else DiceUI.Instance?.ShowToolNotice("Не все игроки получили карту, объекты, портреты, разметку и туман сцены. Занавес оставлен закрытым; можно повторить передачу или показать карту вручную.");
+        else DiceUI.Instance?.ShowToolNotice("Не все игроки получили сцену. Стол оставлен закрытым; повторите загрузку или попросите игроков переподключиться.");
     }
     private void FinishStroke()
     {

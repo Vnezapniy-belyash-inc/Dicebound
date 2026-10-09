@@ -11,6 +11,71 @@ public class DiceboundSnapshotRecoveryTests
     private const BindingFlags Private = BindingFlags.NonPublic | BindingFlags.Instance;
     private static Type Runtime(string name) => Type.GetType(name + ", Assembly-CSharp", true);
 
+    [Test]
+    public void DisposedMapTransferReleasesItsActiveSendSlot()
+    {
+        var root = new GameObject("Disposed map transfer test");
+        try
+        {
+            var type = Runtime("MapSync");
+            root.AddComponent<NetworkObject>();
+            var sync = root.AddComponent(type);
+            var routine = (System.Collections.IEnumerator)type.GetMethod("SendMapWithRetriesToClientRoutine").Invoke(sync, new object[] { 42UL });
+            var active = (System.Collections.Generic.HashSet<(ulong, int)>)type.GetField("_activeSends", Private).GetValue(sync);
+            Assert.That(routine.MoveNext(), Is.True);
+            Assert.That(active.Contains((42UL, 0)), Is.True);
+            ((IDisposable)routine).Dispose();
+            Assert.That(active.Contains((42UL, 0)), Is.False, "Stopping a transfer must allow the same version to be retried.");
+        }
+        finally { UnityEngine.Object.DestroyImmediate(root); }
+    }
+
+    [Test]
+    public void AbortedMapTransferCannotRemoveReplacementSlotOrAnotherClient()
+    {
+        var root = new GameObject("Replaced map transfer test");
+        try
+        {
+            var type = Runtime("MapSync");
+            root.AddComponent<NetworkObject>();
+            var sync = root.AddComponent(type);
+            var send = type.GetMethod("SendMapWithRetriesToClientRoutine");
+            var old = (System.Collections.IEnumerator)send.Invoke(sync, new object[] { 42UL });
+            var active = (System.Collections.Generic.HashSet<(ulong, int)>)type.GetField("_activeSends", Private).GetValue(sync);
+            Assert.That(old.MoveNext(), Is.True);
+            active.Add((43UL, 0));
+            type.GetMethod("AbortTransferForClient").Invoke(sync, new object[] { 42UL });
+            Assert.That(active.Contains((42UL, 0)), Is.False);
+            Assert.That(active.Contains((43UL, 0)), Is.True);
+            var replacement = (System.Collections.IEnumerator)send.Invoke(sync, new object[] { 42UL });
+            Assert.That(replacement.MoveNext(), Is.True);
+            ((IDisposable)old).Dispose();
+            Assert.That(active.Contains((42UL, 0)), Is.True, "An old iterator must not release a replacement transfer.");
+            ((IDisposable)replacement).Dispose();
+            Assert.That(active.Contains((42UL, 0)), Is.False);
+        }
+        finally { UnityEngine.Object.DestroyImmediate(root); }
+    }
+
+    [TestCase(6, false)]
+    [TestCase(7, true)]
+    [TestCase(8, false)]
+    public void WorldReadinessRequiresTheExpectedManifestAck(int acknowledgement, bool ready)
+    {
+        var root = new GameObject("World acknowledgement test");
+        try
+        {
+            var type = Runtime("LateJoinSync");
+            var sync = root.AddComponent(type);
+            var expected = (System.Collections.Generic.Dictionary<ulong, int>)type.GetField("_sceneWorldExpectedVersions", Private).GetValue(sync);
+            var acks = (System.Collections.Generic.Dictionary<ulong, int>)type.GetField("_sceneWorldAcks", Private).GetValue(sync);
+            expected[42] = 7; acks[42] = acknowledgement;
+            Assert.That(type.GetMethod("HasClientCurrentWorld").Invoke(sync, new object[] { 42UL }), Is.EqualTo(ready));
+            Assert.That(type.GetMethod("HasClientCurrentWorld").Invoke(sync, new object[] { 43UL }), Is.EqualTo(false));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(root); }
+    }
+
     [TestCase("SceneEditor", 5, true, 5)]
     [TestCase("SceneEditor", 4, true, -1)]
     [TestCase("SceneEditor", 5, false, -1)]

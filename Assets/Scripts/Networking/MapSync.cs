@@ -26,6 +26,9 @@ public class MapSync : NetworkBehaviour
 
     public static MapSync Instance { get; private set; }
     public bool IsReceivingMap => _receivingMap;
+    public bool HasClientCurrentMap(ulong client) => IsServer && _cachedPng != null
+        && NetworkManager.ConnectedClients.ContainsKey(client)
+        && _acknowledgedVersions.TryGetValue(client, out int version) && version == _mapVersion;
     public float TransferWaitSeconds
     {
         get
@@ -53,6 +56,20 @@ public class MapSync : NetworkBehaviour
     private readonly Dictionary<ulong, (int Version, int Count)> _receivedProgress = new();
     private readonly HashSet<(ulong Client, int Version)> _cancelledSends = new();
     private readonly HashSet<(ulong Client, int Version)> _activeSends = new();
+    private readonly Dictionary<ulong, int> _sendGenerations = new();
+
+    private int SendGeneration(ulong client) => _sendGenerations.TryGetValue(client, out int generation) ? generation : 0;
+
+    public void AbortTransferForClient(ulong client)
+    {
+        // Unity does not dispose nested iterators when their parent coroutine is stopped.
+        // Invalidate them explicitly before releasing the slot for a replacement.
+        _sendGenerations[client] = unchecked(SendGeneration(client) + 1);
+        _activeSends.RemoveWhere(item => item.Client == client);
+        _cancelledSends.RemoveWhere(item => item.Client == client);
+        _receivedProgress.Remove(client);
+        ImageTransferUI.Remove($"map-send-{client}");
+    }
     private readonly Dictionary<ulong, float> _lastMapRequestTime = new();
 
     private readonly Dictionary<int, byte[]> _incomingChunks = new();
@@ -184,33 +201,37 @@ public class MapSync : NetworkBehaviour
     public IEnumerator SendMapWithRetriesToClientRoutine(ulong clientId)
     {
         int version = _mapVersion;
+        int generation = SendGeneration(clientId);
         if (!_activeSends.Add((clientId, version)))
         {
-            while (_activeSends.Contains((clientId, version))
+            while (generation == SendGeneration(clientId) && _activeSends.Contains((clientId, version))
                 && version == _mapVersion
                 && NetworkManager.Singleton != null
                 && NetworkManager.Singleton.ConnectedClients.ContainsKey(clientId))
                 yield return new WaitForSecondsRealtime(0.25f);
             yield break;
         }
-        yield return SendMapWithRetriesCore(clientId);
-        _activeSends.Remove((clientId, version));
+        try { yield return SendMapWithRetriesCore(clientId, generation); }
+        finally
+        {
+            if (generation == SendGeneration(clientId)) _activeSends.Remove((clientId, version));
+        }
     }
 
-    private IEnumerator SendMapWithRetriesCore(ulong clientId)
+    private IEnumerator SendMapWithRetriesCore(ulong clientId, int generation)
     {
         if (!IsServer || _cachedPng == null) yield break;
         int version = _mapVersion;
-        for (int attempt = 1; attempt <= MaxRetries + 1 && version == _mapVersion; attempt++)
+        for (int attempt = 1; attempt <= MaxRetries + 1 && version == _mapVersion && generation == SendGeneration(clientId); attempt++)
         {
             if (!NetworkManager.Singleton.ConnectedClients.ContainsKey(clientId)) yield break;
             if (_cancelledSends.Contains((clientId, version))) yield break;
             ImageTransferUI.Show($"map-send-{clientId}", "Отправка карты", 0f,
                 $"Игроку {clientId}, попытка {attempt}/{MaxRetries + 1}",
                 () => CancelSend(clientId, version));
-            yield return SendMapToClientRoutine(clientId);
+            yield return SendMapToClientRoutine(clientId, generation);
             float deadline = Time.unscaledTime + AckTimeoutSeconds;
-            while (Time.unscaledTime < deadline)
+            while (Time.unscaledTime < deadline && generation == SendGeneration(clientId))
             {
                 if (_acknowledgedVersions.TryGetValue(clientId, out int ack) && ack == version)
                 {
@@ -225,7 +246,7 @@ public class MapSync : NetworkBehaviour
             if (attempt <= MaxRetries)
                 Debug.LogWarning($"[MapSync] No map acknowledgement from {clientId}; retry {attempt}/{MaxRetries}");
         }
-        if (version == _mapVersion)
+        if (version == _mapVersion && generation == SendGeneration(clientId))
         {
             Debug.LogError($"[MapSync] Client {clientId} did not apply map version {version}");
             DiceUI.Instance?.ShowToolNotice($"Игрок {clientId} не получил карту.");
@@ -233,9 +254,11 @@ public class MapSync : NetworkBehaviour
         }
     }
 
-    public IEnumerator SendMapToClientRoutine(ulong clientId)
+    public IEnumerator SendMapToClientRoutine(ulong clientId) => SendMapToClientRoutine(clientId, SendGeneration(clientId));
+
+    private IEnumerator SendMapToClientRoutine(ulong clientId, int generation)
     {
-        if (!IsServer || clientId == NetworkManager.ServerClientId || _cachedPng == null)
+        if (generation != SendGeneration(clientId) || !IsServer || clientId == NetworkManager.ServerClientId || _cachedPng == null)
             yield break;
         int version = _mapVersion;
         byte[] data = _cachedPng;
@@ -253,7 +276,7 @@ public class MapSync : NetworkBehaviour
         }
         yield return null;
         int first = _receivedProgress.TryGetValue(clientId, out var progress) && progress.Version == version ? progress.Count : 0;
-        for (int i = first; i < total && version == _mapVersion; i++)
+        for (int i = first; i < total && version == _mapVersion && generation == SendGeneration(clientId); i++)
         {
             if (_cancelledSends.Contains((clientId, version))) yield break;
             if (!NetworkManager.Singleton.ConnectedClients.ContainsKey(clientId)) yield break;
@@ -262,8 +285,11 @@ public class MapSync : NetworkBehaviour
             int offset = i * ChunkSize;
             int size = Mathf.Min(ChunkSize, data.Length - offset);
             while (!NetworkTransferBudget.TryConsume(clientId, size + 12))
+            {
+                if (generation != SendGeneration(clientId)) yield break;
                 yield return null;
-            if (version != _mapVersion || !NetworkManager.Singleton.ConnectedClients.ContainsKey(clientId))
+            }
+            if (generation != SendGeneration(clientId) || version != _mapVersion || !NetworkManager.Singleton.ConnectedClients.ContainsKey(clientId))
                 yield break;
             if (_acknowledgedVersions.TryGetValue(clientId, out ack) && ack == version)
                 yield break;
@@ -282,7 +308,7 @@ public class MapSync : NetworkBehaviour
             if ((i + 1) % BatchChunks == 0 && i + 1 < total)
             {
                 float deadline = Time.unscaledTime + AckTimeoutSeconds;
-                while (Time.unscaledTime < deadline && version == _mapVersion
+                while (Time.unscaledTime < deadline && generation == SendGeneration(clientId) && version == _mapVersion
                     && !_cancelledSends.Contains((clientId, version))
                     && (!_receivedProgress.TryGetValue(clientId, out var received)
                         || received.Version != version || received.Count < i + 1))

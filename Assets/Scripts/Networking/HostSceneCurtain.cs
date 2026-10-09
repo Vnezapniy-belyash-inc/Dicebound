@@ -15,6 +15,26 @@ public class HostSceneCurtain : MonoBehaviour
     public static HostSceneCurtain Instance { get; private set; }
 
     private bool _curtainDown;
+    private bool _syncPending;
+    private readonly System.Collections.Generic.HashSet<ulong> _synchronizingClients = new();
+    public bool IsClientSynchronizing(ulong client) => _synchronizingClients.Contains(client);
+
+    public void BeginClientSync(ulong client)
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm == null || !nm.IsServer || client == NetworkManager.ServerClientId
+            || !nm.ConnectedClients.ContainsKey(client)) return;
+        _synchronizingClients.Add(client);
+        SendStateToClient(client, _curtainDown);
+    }
+
+    public void CompleteClientSync(ulong client)
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm == null || !nm.IsServer || !nm.ConnectedClients.ContainsKey(client)) return;
+        _synchronizingClients.Remove(client);
+        SendStateToClient(client, _curtainDown);
+    }
     private bool _handlerRegistered;
 
     private Canvas _clientCanvas;
@@ -67,6 +87,7 @@ public class HostSceneCurtain : MonoBehaviour
 
     private void OnNetworkReady()
     {
+        _synchronizingClients.Clear();
         _handlerRegistered = false;
         CancelInvoke(nameof(TryRegisterHandler));
         InvokeRepeating(nameof(TryRegisterHandler), 0.1f, 0.5f);
@@ -79,12 +100,15 @@ public class HostSceneCurtain : MonoBehaviour
 
         if (clientId == nm.LocalClientId && !nm.IsHost)
         {
+            _syncPending = true;
+            SetCurtainDown(true);
             _handlerRegistered = false;
             CancelInvoke(nameof(TryRegisterHandler));
             InvokeRepeating(nameof(TryRegisterHandler), 0.1f, 0.5f);
         }
 
         if (!nm.IsServer || clientId == NetworkManager.ServerClientId) return;
+        BeginClientSync(clientId);
         StartCoroutine(RetrySendStateToClient(clientId));
     }
 
@@ -114,9 +138,12 @@ public class HostSceneCurtain : MonoBehaviour
     {
         var nm = NetworkManager.Singleton;
         if (nm == null) return;
+        _synchronizingClients.Remove(clientId);
 
         if (clientId == nm.LocalClientId)
         {
+            _synchronizingClients.Clear();
+            _syncPending = false;
             _curtainDown = false;
             ApplyCurtainState();
             UnregisterHandler();
@@ -155,7 +182,7 @@ public class HostSceneCurtain : MonoBehaviour
         SetHostIndicatorVisible(false);
         SetClientOverlayVisible(_curtainDown);
         if (_overlayLabel != null)
-            _overlayLabel.text = "Мастер готовит сцену...";
+            _overlayLabel.text = _syncPending ? "Загрузка сцены…" : "Мастер готовит сцену...";
         if (_curtainDown)
             BlockSceneCameras();
         else
@@ -188,7 +215,11 @@ public class HostSceneCurtain : MonoBehaviour
 
     private void OnStateMessage(ulong senderId, FastBufferReader reader)
     {
+        var nm = NetworkManager.Singleton;
+        if (nm == null || nm.IsServer || senderId != NetworkManager.ServerClientId || !reader.TryBeginRead(sizeof(bool))) return;
         reader.ReadValueSafe(out bool down);
+        _syncPending = false;
+        if (reader.TryBeginRead(sizeof(bool))) reader.ReadValueSafe(out _syncPending);
         _curtainDown = down;
         ApplyCurtainState();
     }
@@ -201,9 +232,8 @@ public class HostSceneCurtain : MonoBehaviour
         var cmm = nm.CustomMessagingManager;
         if (cmm == null) return;
 
-        using var writer = new FastBufferWriter(sizeof(bool), Allocator.Temp);
-        writer.WriteValueSafe(down);
-        cmm.SendNamedMessageToAll(MSG_STATE, writer);
+        foreach (ulong client in nm.ConnectedClientsIds)
+            if (client != NetworkManager.ServerClientId) SendStateToClient(client, down);
     }
 
     private void SendStateToClient(ulong clientId, bool down)
@@ -211,8 +241,10 @@ public class HostSceneCurtain : MonoBehaviour
         var cmm = NetworkManager.Singleton?.CustomMessagingManager;
         if (cmm == null) return;
 
-        using var writer = new FastBufferWriter(sizeof(bool), Allocator.Temp);
-        writer.WriteValueSafe(down);
+        bool pending = _synchronizingClients.Contains(clientId);
+        using var writer = new FastBufferWriter(2 * sizeof(bool), Allocator.Temp);
+        writer.WriteValueSafe(down || pending);
+        writer.WriteValueSafe(pending);
         cmm.SendNamedMessage(MSG_STATE, clientId, writer);
     }
 
@@ -372,6 +404,7 @@ public class HostSceneCurtain : MonoBehaviour
         var oldColor = GUI.color;
         GUI.color = new Color(0.02f, 0.04f, 0.08f, 1f);
         GUI.DrawTexture(new Rect(0f, 0f, Screen.width, Screen.height), Texture2D.whiteTexture);
+        GUI.color = Color.white;
 
         var style = new GUIStyle(GUI.skin.label)
         {
@@ -380,7 +413,9 @@ public class HostSceneCurtain : MonoBehaviour
             alignment = TextAnchor.MiddleCenter
         };
         style.normal.textColor = new Color(0.82f, 0.86f, 0.94f, 1f);
-        GUI.Label(new Rect(0f, 0f, Screen.width, Screen.height), "Мастер готовит сцену...", style);
+        GUI.Label(new Rect(0f, 0f, Screen.width, Screen.height), _syncPending ? "Загрузка сцены…" : "Мастер готовит сцену...", style);
+        if (_syncPending && GUI.Button(new Rect(Screen.width * 0.5f - 100, Screen.height * 0.5f + 46, 200, 36), "Выйти в лобби"))
+            _ = GameNetworkManager.Instance?.ShutdownAndReset();
         GUI.color = oldColor;
     }
 }

@@ -36,8 +36,23 @@ public class LateJoinSync : MonoBehaviour
     private readonly HashSet<ulong> _sceneWorldClients = new();
     private readonly Dictionary<ulong, int> _sceneWorldExpectedVersions = new();
     private readonly Dictionary<ulong, int> _sceneWorldAcks = new();
+    private readonly Dictionary<ulong, List<ulong>> _worldManifests = new();
+    private readonly Dictionary<ulong, float> _nextStateRetry = new();
+
+    public bool HasClientCurrentWorld(ulong client) => _sceneWorldExpectedVersions.TryGetValue(client, out int expected)
+        && _sceneWorldAcks.TryGetValue(client, out int ack) && ack == expected;
+
+    public bool IsClientSceneReady(ulong client) => NetworkManager.Singleton != null
+        && NetworkManager.Singleton.IsServer && NetworkManager.Singleton.ConnectedClients.ContainsKey(client)
+        && !_syncRoutines.ContainsKey(client) && HasClientCurrentWorld(client)
+        && MapSync.Instance != null && MapSync.Instance.HasClientCurrentMap(client)
+        && SceneEditor.Instance != null && SceneEditor.Instance.HasClientCurrentRevision(client)
+        && FogManager.Instance != null && FogManager.Instance.HasClientCurrentRevision(client)
+        && TokenImageSync.HasClientCurrentPortraits(client)
+        && (InitiativeTracker.Instance == null || InitiativeTracker.Instance.HasClientCurrentState(client));
     private int _incomingManifestVersion = -1;
     private int _verifiedManifestVersion = -1;
+    private int _appliedManifestVersion = -1;
     private int _incomingManifestChunks;
     private int _incomingManifestCount;
     private readonly Dictionary<int, ulong[]> _manifestChunks = new();
@@ -128,6 +143,8 @@ public class LateJoinSync : MonoBehaviour
         _sceneWorldClients.Clear();
         _sceneWorldExpectedVersions.Clear();
         _sceneWorldAcks.Clear();
+        _worldManifests.Clear();
+        _nextStateRetry.Clear();
     }
 
     private void OnClientStopped(bool wasHost)
@@ -135,6 +152,7 @@ public class LateJoinSync : MonoBehaviour
         UnregisterClientHandlers();
         _incomingManifestVersion = -1;
         _verifiedManifestVersion = -1;
+        _appliedManifestVersion = -1;
         _manifestChunks.Clear();
         _goneWorldObjects.Clear();
         if (_verifyWorldRoutine != null) StopCoroutine(_verifyWorldRoutine);
@@ -163,6 +181,30 @@ public class LateJoinSync : MonoBehaviour
             SceneTransitionMarker.EnsureRegistered();
         }
         if (!nm.IsServer) return;
+        foreach (ulong client in nm.ConnectedClientsIds)
+        {
+            if (client == NetworkManager.ServerClientId || HostSceneCurtain.Instance?.IsClientSynchronizing(client) != true) continue;
+            if (IsClientSceneReady(client))
+            {
+                HostSceneCurtain.Instance.CompleteClientSync(client);
+                _nextStateRetry.Remove(client);
+            }
+            else if (!_nextStateRetry.TryGetValue(client, out float next) || Time.unscaledTime >= next)
+            {
+                _nextStateRetry[client] = Time.unscaledTime + 2f;
+                if (SceneEditor.Instance?.HasClientCurrentRevision(client) != true) SceneEditor.Instance?.ResendStateToClient(client);
+                if (FogManager.Instance?.HasClientCurrentRevision(client) != true) FogManager.Instance?.ResendStateToClient(client);
+                if (InitiativeTracker.Instance?.HasClientCurrentState(client) != true) InitiativeTracker.Instance?.ResendStateToClient(client);
+                if (!_syncRoutines.ContainsKey(client))
+                {
+                    if (!HasClientCurrentWorld(client) && _sceneWorldExpectedVersions.TryGetValue(client, out int expected)
+                        && _worldManifests.TryGetValue(client, out var ids))
+                        StartCoroutine(SendWorldManifestPayloadRoutine(client, ids, expected));
+                    if (!TokenImageSync.HasClientCurrentPortraits(client) && TokenImageSync.Instance != null)
+                        _syncRoutines[client] = StartCoroutine(RecoverPortraitsRoutine(client));
+                }
+            }
+        }
         int remaining = WorldObjectsPerFrame;
         bool progressed;
         do
@@ -292,6 +334,7 @@ public class LateJoinSync : MonoBehaviour
         {
             _incomingManifestVersion = -1;
             _verifiedManifestVersion = -1;
+            _appliedManifestVersion = -1;
             _manifestChunks.Clear();
             _goneWorldObjects.Clear();
             if (_verifyWorldRoutine != null) StopCoroutine(_verifyWorldRoutine);
@@ -300,6 +343,7 @@ public class LateJoinSync : MonoBehaviour
         _initialSyncStarted.Remove(clientId);
         if (_syncRoutines.TryGetValue(clientId, out Coroutine running))
             StopCoroutine(running);
+        MapSync.Instance?.AbortTransferForClient(clientId);
         _syncRoutines.Remove(clientId);
         if (_worldQueues.TryGetValue(clientId, out var queue))
             foreach (var obj in queue)
@@ -310,6 +354,8 @@ public class LateJoinSync : MonoBehaviour
         _sceneWorldClients.Remove(clientId);
         _sceneWorldExpectedVersions.Remove(clientId);
         _sceneWorldAcks.Remove(clientId);
+        _worldManifests.Remove(clientId);
+        _nextStateRetry.Remove(clientId);
     }
 
     private void OnClientReady(ulong clientId, FastBufferReader reader)
@@ -320,7 +366,8 @@ public class LateJoinSync : MonoBehaviour
         HostSceneCurtain.Instance?.SendCurtainStateToClient(clientId);
 
         if (_syncRoutines.ContainsKey(clientId)) return;
-        if (_initialSyncStarted.Contains(clientId))
+        BeginClientSynchronization(clientId);
+        if (_initialSyncStarted.Contains(clientId) && MapSync.Instance?.HasClientCurrentMap(clientId) == true)
             _syncRoutines[clientId] = StartCoroutine(PortraitsAndDiceOnlyRoutine(clientId));
         else
         {
@@ -412,11 +459,31 @@ public class LateJoinSync : MonoBehaviour
         var nm = NetworkManager.Singleton;
         if (nm == null || !nm.IsServer) return;
         if (clientId == nm.LocalClientId) return;
+        BeginClientSynchronization(clientId);
 
         if (_syncRoutines.TryGetValue(clientId, out Coroutine running))
             StopCoroutine(running);
 
+        MapSync.Instance?.AbortTransferForClient(clientId);
         _syncRoutines[clientId] = StartCoroutine(SyncClientRoutine(clientId));
+    }
+
+    private void BeginClientSynchronization(ulong clientId)
+    {
+        HostSceneCurtain.EnsureInstance();
+        HostSceneCurtain.Instance.BeginClientSync(clientId);
+        _sceneWorldExpectedVersions.Remove(clientId);
+        _sceneWorldAcks.Remove(clientId);
+        _worldManifests.Remove(clientId);
+        _nextStateRetry.Remove(clientId);
+    }
+
+    private IEnumerator RecoverPortraitsRoutine(ulong clientId)
+    {
+        yield return null;
+        if (TokenImageSync.Instance != null)
+            yield return TokenImageSync.Instance.SendAllPortraitsToClientRoutine(clientId);
+        _syncRoutines.Remove(clientId);
     }
 
     private IEnumerator SyncClientRoutine(ulong clientId)
@@ -476,7 +543,8 @@ public class LateJoinSync : MonoBehaviour
         }
         Debug.Log($"[LateJoin] Sending world manifest: {ids.Count} objects to client {clientId}");
         int version = ++_nextManifestVersion;
-        if (_sceneWorldClients.Contains(clientId)) _sceneWorldExpectedVersions[clientId] = version;
+        _sceneWorldExpectedVersions[clientId] = version;
+        _sceneWorldAcks.Remove(clientId);
         yield return SendWorldManifestPayloadRoutine(clientId, ids, version);
     }
 
@@ -488,10 +556,12 @@ public class LateJoinSync : MonoBehaviour
         _sceneWorldClients.Clear();
         _sceneWorldExpectedVersions.Clear();
         _sceneWorldAcks.Clear();
+        _worldManifests.Clear();
         foreach (ulong clientId in nm.ConnectedClientsIds)
         {
             if (clientId == NetworkManager.ServerClientId) continue;
             _sceneWorldClients.Add(clientId);
+            HostSceneCurtain.Instance?.BeginClientSync(clientId);
             int manifestVersion = ++_nextManifestVersion;
             _sceneWorldExpectedVersions[clientId] = manifestVersion;
             StartCoroutine(SynchronizeCurrentWorldRoutine(clientId, _sceneWorldVersion, manifestVersion));
@@ -515,6 +585,8 @@ public class LateJoinSync : MonoBehaviour
     {
         var nm = NetworkManager.Singleton;
         if (nm == null || !nm.IsServer || !nm.ConnectedClients.ContainsKey(clientId)) yield break;
+        if (!_sceneWorldExpectedVersions.TryGetValue(clientId, out int expected) || expected != version) yield break;
+        _worldManifests[clientId] = ids;
         int chunks = Mathf.Max(1, (ids.Count + ManifestIdsPerMessage - 1) / ManifestIdsPerMessage);
         for (int chunk = 0; chunk < chunks; chunk++)
         {
@@ -540,6 +612,7 @@ public class LateJoinSync : MonoBehaviour
     {
         var nm = NetworkManager.Singleton;
         if (nm == null || !nm.IsConnectedClient || nm.IsServer) return;
+        _appliedManifestVersion = version;
         using var writer = new FastBufferWriter(sizeof(int), Allocator.Temp);
         writer.WriteValueSafe(version);
         nm.CustomMessagingManager.SendNamedMessage(MSG_WORLD_ACK, NetworkManager.ServerClientId, writer);
@@ -548,7 +621,7 @@ public class LateJoinSync : MonoBehaviour
     private void OnWorldAck(ulong clientId, FastBufferReader reader)
     {
         var nm = NetworkManager.Singleton;
-        if (nm == null || !nm.IsServer || !_sceneWorldClients.Contains(clientId)
+        if (nm == null || !nm.IsServer
             || !nm.ConnectedClients.ContainsKey(clientId) || !reader.TryBeginRead(sizeof(int))) return;
         reader.ReadValueSafe(out int version);
         if (_sceneWorldExpectedVersions.TryGetValue(clientId, out int expected) && version == expected)
@@ -563,6 +636,11 @@ public class LateJoinSync : MonoBehaviour
         reader.ReadValueSafe(out int total);
         reader.ReadValueSafe(out int chunks);
         reader.ReadValueSafe(out int index);
+        if (version == _appliedManifestVersion)
+        {
+            SendWorldAck(version);
+            return;
+        }
         if (version <= _verifiedManifestVersion || version < _incomingManifestVersion
             || total < 0 || total > MaxManifestObjects
             || chunks != Mathf.Max(1, (total + ManifestIdsPerMessage - 1) / ManifestIdsPerMessage)
@@ -635,6 +713,7 @@ public class LateJoinSync : MonoBehaviour
                 DiceUI.Instance?.ShowToolNotice("Не все объекты карты загрузились. Переподключитесь.");
                 yield break;
             }
+        SendWorldAck(version);
     }
 
     private void OnWorldGone(ulong senderId, FastBufferReader reader)
