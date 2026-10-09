@@ -26,6 +26,79 @@ public class DiceboundSceneIntegrationTests
     }
 
     [UnityTest]
+    public IEnumerator CampaignSceneCrudPreservesCopiesAndClearsIncomingTransitions()
+    {
+        UnityEditor.SceneManagement.EditorSceneManager.NewScene(UnityEditor.SceneManagement.NewSceneSetup.EmptyScene,
+            UnityEditor.SceneManagement.NewSceneMode.Single);
+        yield return new EnterPlayMode();
+        _root = new GameObject("Campaign CRUD test");
+        _manager = new GameObject("Campaign CRUD host").AddComponent<NetworkManager>();
+        var transport = _manager.gameObject.AddComponent<UnityTransport>();
+        transport.SetConnectionData("127.0.0.1", 17879);
+        _manager.NetworkConfig = new NetworkConfig { EnableSceneManagement = false, NetworkTransport = transport };
+        var prefab = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Token.prefab");
+        _manager.AddNetworkPrefab(prefab);
+        var grid = Add("GridManager", "Grid");
+        grid.GetType().GetField("gridWidth").SetValue(grid, 10);
+        grid.GetType().GetField("gridHeight").SetValue(grid, 10);
+        var tokens = Add("TokenManager", "Tokens");
+        tokens.GetType().GetField("tokenPrefab").SetValue(tokens, prefab.GetComponent<NetworkObject>());
+        var mapObject = new GameObject("Map"); mapObject.transform.SetParent(_root.transform);
+        mapObject.AddComponent<NetworkObject>();
+        var map = mapObject.AddComponent(TypeOf("MapController"));
+        var plane = GameObject.CreatePrimitive(PrimitiveType.Plane); plane.transform.SetParent(mapObject.transform, false);
+        map.GetType().GetField("mapPlane").SetValue(map, plane);
+        var sync = mapObject.AddComponent(TypeOf("MapSync")); sync.GetType().GetField("mapController").SetValue(sync, map);
+        Add("SceneEditor", "Editor"); Add("FogManager", "Fog");
+        yield return null;
+        Assert.That(_manager.StartHost(), Is.True); yield return null;
+        _texture = new Texture2D(4, 4); _texture.SetPixels(new Color[16]); _texture.Apply();
+        Call(map, "ApplyImage", _texture.EncodeToPNG());
+        Call(tokens, "CreateTokenAsHost", "Original NPC", true);
+        var store = TypeOf("SceneFileStore");
+        store.GetMethod("EnsureCampaign").Invoke(null, null);
+        string originalId = (string)store.GetProperty("ActiveSceneId").GetValue(null);
+        store.GetMethod("RenameActiveScene").Invoke(null, new object[] { "  Original  " });
+        var scenes = (Array)store.GetMethod("GetCampaignScenes").Invoke(null, null);
+        Assert.That(scenes.Length, Is.EqualTo(1));
+        Assert.That(scenes.GetValue(0).GetType().GetField("title").GetValue(scenes.GetValue(0)), Is.EqualTo("Original"));
+        store.GetMethod("CreateSceneCopy").Invoke(null, null); yield return null;
+        string copyId = (string)store.GetProperty("ActiveSceneId").GetValue(null);
+        Assert.That(copyId, Is.Not.EqualTo(originalId));
+        scenes = (Array)store.GetMethod("GetCampaignScenes").Invoke(null, null);
+        Assert.That(scenes.Length, Is.EqualTo(2));
+        var copy = scenes.GetValue(1); var copiedScene = copy.GetType().GetField("scene").GetValue(copy);
+        Assert.That(((Array)copiedScene.GetType().GetField("tokens").GetValue(copiedScene)).Length, Is.EqualTo(1));
+        Assert.That(((Array)copiedScene.GetType().GetField("transitions").GetValue(copiedScene)).Length, Is.Zero);
+        store.GetMethod("RenameActiveScene").Invoke(null, new object[] { "Copy" });
+        Assert.That(scenes.GetValue(0).GetType().GetField("title").GetValue(scenes.GetValue(0)), Is.EqualTo("Original"));
+        store.GetMethod("CreateEmptyScene").Invoke(null, null); yield return null;
+        string emptyId = (string)store.GetProperty("ActiveSceneId").GetValue(null);
+        scenes = (Array)store.GetMethod("GetCampaignScenes").Invoke(null, null);
+        Assert.That(scenes.Length, Is.EqualTo(3));
+        var empty = scenes.GetValue(2); var emptyScene = empty.GetType().GetField("scene").GetValue(empty);
+        Assert.That(((Array)emptyScene.GetType().GetField("tokens").GetValue(emptyScene)).Length, Is.Zero);
+        store.GetMethod("CycleScene").Invoke(null, new object[] { 1 }); yield return null;
+        Assert.That(store.GetProperty("ActiveSceneId").GetValue(null), Is.EqualTo(originalId), "Forward wrap selects original.");
+        store.GetMethod("AddSceneTransition").Invoke(null, new object[] { "To empty", emptyId, 1, 1 });
+        store.GetMethod("CycleScene").Invoke(null, new object[] { -1 }); yield return null;
+        Assert.That(store.GetProperty("ActiveSceneId").GetValue(null), Is.EqualTo(emptyId), "Backward wrap selects last.");
+        store.GetMethod("DeleteActiveScene").Invoke(null, null); yield return null;
+        Assert.That(store.GetProperty("ActiveSceneId").GetValue(null), Is.EqualTo(originalId));
+        Assert.That(((Array)store.GetMethod("GetActiveSceneTransitions").Invoke(null, null)).Length, Is.Zero);
+        store.GetMethod("DeleteActiveScene").Invoke(null, null); yield return null;
+        Assert.That(store.GetProperty("ActiveSceneId").GetValue(null), Is.EqualTo(copyId));
+        store.GetMethod("DeleteActiveScene").Invoke(null, null); yield return null;
+        Assert.That(((Array)store.GetMethod("GetCampaignScenes").Invoke(null, null)).Length, Is.EqualTo(1));
+        Assert.That(store.GetProperty("ActiveSceneId").GetValue(null), Is.EqualTo(copyId), "Last scene cannot be deleted.");
+        _path = Path.Combine(Application.temporaryCachePath, "campaign-crud-test.json");
+        store.GetMethod("SaveCampaign").Invoke(null, new object[] { _path, "CRUD test" });
+        store.GetMethod("LoadCampaign").Invoke(null, new object[] { _path }); yield return null;
+        Assert.That(store.GetProperty("ActiveSceneId").GetValue(null), Is.EqualTo(copyId));
+        Assert.That(((Array)store.GetMethod("GetCampaignScenes").Invoke(null, null)).Length, Is.EqualTo(1));
+    }
+
+    [UnityTest]
     public IEnumerator PortraitRepairRequiresANewAcknowledgementAndPreservesImage()
     {
         UnityEditor.SceneManagement.EditorSceneManager.NewScene(UnityEditor.SceneManagement.NewSceneSetup.EmptyScene,
