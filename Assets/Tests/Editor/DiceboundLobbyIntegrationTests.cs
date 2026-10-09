@@ -16,6 +16,7 @@ public class DiceboundLobbyIntegrationTests
     private NetworkManager _host, _client;
     private Component _registry;
     private string _reply;
+    private int _heartbeatReceived;
     private string _initiativeReceived;
     private object _originalCampaign;
     private GameObject _scene;
@@ -33,6 +34,45 @@ public class DiceboundLobbyIntegrationTests
         transport.SetConnectionData("127.0.0.1", 17881);
         manager.NetworkConfig = new NetworkConfig { EnableSceneManagement = false, NetworkTransport = transport };
         return manager;
+    }
+
+    [TestCase(29.9f, false)]
+    [TestCase(30f, true)]
+    [TestCase(90f, true)]
+    public void ServerHeartbeatExpiresAfterThirtySeconds(float elapsed, bool expired)
+    {
+        var method = RuntimeType("GameNetworkManager").GetMethod("HeartbeatExpired", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.That(method.Invoke(null, new object[] { 100f + elapsed, 100f }), Is.EqualTo(expired));
+    }
+
+    [UnityTest]
+    public IEnumerator ServerRepliesToConnectedClientHeartbeat()
+    {
+        UnityEditor.SceneManagement.EditorSceneManager.NewScene(UnityEditor.SceneManagement.NewSceneSetup.EmptyScene, UnityEditor.SceneManagement.NewSceneMode.Single);
+        yield return new EnterPlayMode();
+        _host = Manager("Heartbeat host");
+        _host.gameObject.AddComponent(RuntimeType("GameNetworkManager"));
+        Assert.That(_host.StartHost(), Is.True);
+        _client = Manager("Heartbeat client");
+        Assert.That(_client.StartClient(), Is.True);
+        float deadline = Time.realtimeSinceStartup + 10f;
+        while (!_client.IsConnectedClient && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(_client.IsConnectedClient, Is.True);
+        Assert.That(_client.CustomMessagingManager, Is.Not.Null);
+        _heartbeatReceived = -1;
+        _client.CustomMessagingManager.RegisterNamedMessageHandler("SessionHeartbeatReplyV1", (sender, reader) =>
+        {
+            Assert.That(sender, Is.EqualTo(NetworkManager.ServerClientId));
+            reader.ReadValueSafe(out _heartbeatReceived);
+        });
+        using (var writer = new FastBufferWriter(sizeof(int), Allocator.Temp))
+        {
+            writer.WriteValueSafe(42);
+            _client.CustomMessagingManager.SendNamedMessage("SessionHeartbeatRequestV1", NetworkManager.ServerClientId, writer);
+        }
+        deadline = Time.realtimeSinceStartup + 5f;
+        while (_heartbeatReceived < 0 && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(_heartbeatReceived, Is.EqualTo(42));
     }
 
     private IEnumerator RegisterRemote(string nickname)
