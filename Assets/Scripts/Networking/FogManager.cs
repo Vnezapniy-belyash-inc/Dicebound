@@ -339,7 +339,12 @@ public sealed class FogManager : MonoBehaviour
         {
             reader.ReadValueSafe(out int revision); reader.ReadValueSafe(out int width); reader.ReadValueSafe(out int height);
             reader.ReadValueSafe(out bool enabled); reader.ReadValueSafe(out int length);
-            if (revision <= _received || width <= 0 || width > 256 || height <= 0 || height > 256
+            if (revision <= _received)
+            {
+                if (revision == _received && revision > 0 && _hasState) _pendingRevisionAck = revision;
+                return;
+            }
+            if (width <= 0 || width > 256 || height <= 0 || height > 256
                 || length <= 0 || length > 512 * 1024 || !reader.TryBeginRead(length)) return;
             var payload = new byte[length]; reader.ReadBytesSafe(ref payload, length);
             FogStateCodec.Decode(payload, width * height * 16, out var visible, out var explored);

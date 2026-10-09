@@ -150,7 +150,12 @@ public sealed class SceneEditor : MonoBehaviour
             reader.ReadValueSafe(out int revision); reader.ReadValueSafe(out int width); reader.ReadValueSafe(out int height);
             reader.ReadValueSafe(out float size); reader.ReadValueSafe(out Vector3 origin); reader.ReadValueSafe(out Quaternion rotation);
             reader.ReadValueSafe(out int length);
-            if (revision <= _receivedRevision || length <= 0 || length > MaxStateBytes || !reader.TryBeginRead(length)) return;
+            if (revision <= _receivedRevision)
+            {
+                if (revision == _receivedRevision && revision > 0 && _hasState) _pendingRevisionAck = revision;
+                return;
+            }
+            if (length <= 0 || length > MaxStateBytes || !reader.TryBeginRead(length)) return;
             var bytes = new byte[length]; reader.ReadBytesSafe(ref bytes, length);
             var geometry = JsonUtility.FromJson<SceneGeometry>(Encoding.UTF8.GetString(bytes));
             if (width <= 0 || width > 256 || height <= 0 || height > 256 || !SceneValidation.Finite(size) || size < 0.1f || size > 10) return;
