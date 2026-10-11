@@ -79,9 +79,16 @@ public class CharacterData : MonoBehaviour
     };
 
     [Header("Пассивные чувства")]
-    public int passiveWisdomPerception  => 10 + WisMod + (IsSkillProfOrExp("Восприятие") ? proficiencyBonus : 0);
-    public int passiveWisdomInsight     => 10 + WisMod + (IsSkillProfOrExp("Проницательность") ? proficiencyBonus : 0);
-    public int passiveIntAnalysis       => 10 + IntMod + (IsSkillProfOrExp("Анализ") ? proficiencyBonus : 0);
+    public int passiveWisdomPerception  => PassiveSkill("Восприятие", WisMod);
+    public int passiveWisdomInsight     => PassiveSkill("Проницательность", WisMod);
+    public int passiveIntAnalysis       => PassiveSkill("Анализ", IntMod);
+
+    private int PassiveSkill(string name, int fallbackModifier)
+    {
+        foreach (var skill in skills ?? System.Array.Empty<SkillEntry>())
+            if (skill != null && skill.name == name) return 10 + GetSkillBonus(skill);
+        return 10 + fallbackModifier;
+    }
 
     [Header("Прочие владения и языки")]
     [TextArea(2, 5)]

@@ -41,6 +41,13 @@ public sealed class SceneEditor : MonoBehaviour
     private bool _hasState;
     private int _loadGeneration;
     public bool IsMaster => _network != null && _network.IsListening && _network.IsHost;
+    public bool HasClientCurrentRevision(ulong client) => _network != null && _network.IsServer
+        && _network.ConnectedClients.ContainsKey(client) && _revision > 0
+        && _clientAcks.TryGetValue(client, out int revision) && revision == _revision;
+    public void ResendStateToClient(ulong client)
+    {
+        if (_network != null && _network.IsServer && _network.ConnectedClients.ContainsKey(client)) SendState(client);
+    }
     public bool AllClientsHaveCurrentRevision
     {
         get
@@ -150,7 +157,12 @@ public sealed class SceneEditor : MonoBehaviour
             reader.ReadValueSafe(out int revision); reader.ReadValueSafe(out int width); reader.ReadValueSafe(out int height);
             reader.ReadValueSafe(out float size); reader.ReadValueSafe(out Vector3 origin); reader.ReadValueSafe(out Quaternion rotation);
             reader.ReadValueSafe(out int length);
-            if (revision <= _receivedRevision || length <= 0 || length > MaxStateBytes || !reader.TryBeginRead(length)) return;
+            if (revision <= _receivedRevision)
+            {
+                if (revision == _receivedRevision && revision > 0 && _hasState) _pendingRevisionAck = revision;
+                return;
+            }
+            if (length <= 0 || length > MaxStateBytes || !reader.TryBeginRead(length)) return;
             var bytes = new byte[length]; reader.ReadBytesSafe(ref bytes, length);
             var geometry = JsonUtility.FromJson<SceneGeometry>(Encoding.UTF8.GetString(bytes));
             if (width <= 0 || width > 256 || height <= 0 || height > 256 || !SceneValidation.Finite(size) || size < 0.1f || size > 10) return;
@@ -231,7 +243,7 @@ public sealed class SceneEditor : MonoBehaviour
         {
             if (HostSceneCurtain.IsCurtainDown) HostSceneCurtain.Instance?.ToggleCurtainOnHost();
         }
-        else DiceUI.Instance?.ShowToolNotice("Не все игроки получили карту, объекты, портреты, разметку и туман сцены. Занавес оставлен закрытым; можно повторить передачу или показать карту вручную.");
+        else DiceUI.Instance?.ShowToolNotice("Не все игроки получили сцену. Стол оставлен закрытым; повторите загрузку или попросите игроков переподключиться.");
     }
     private void FinishStroke()
     {

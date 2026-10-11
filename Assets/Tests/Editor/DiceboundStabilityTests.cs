@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
@@ -6,6 +7,124 @@ using UnityEngine;
 public class DiceboundStabilityTests
 {
     private static Type RuntimeType(string name) => Type.GetType(name + ", Assembly-CSharp", true);
+    [Test]
+    public void GeneralConfirmationDoesNotLabelRestoreAsDeleteAndReplacesPreviousAction()
+    {
+        var root = new GameObject("Confirmation test");
+        try
+        {
+            var canvas = new GameObject("Canvas", typeof(Canvas));
+            canvas.transform.SetParent(root.transform);
+            var type = RuntimeType("DiceUI");
+            var ui = root.AddComponent(type);
+            const BindingFlags flags = BindingFlags.NonPublic | BindingFlags.Instance;
+            type.GetField("_canvas", flags).SetValue(ui, canvas.GetComponent<Canvas>());
+            type.GetMethod("BuildConfirmationDialog", flags).Invoke(ui,
+                new object[] { Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf") });
+            int previousCalls = 0, restoreCalls = 0;
+            type.GetMethod("ConfirmAction").Invoke(ui, new object[] { "Удалить запись?", "", (Action)(() => previousCalls++) });
+            type.GetMethod("ConfirmAction").Invoke(ui, new object[] { "Восстановить автосохранение?", "", (Action)(() => restoreCalls++) });
+            var panel = (GameObject)type.GetField("_confirmPanel", flags).GetValue(ui);
+            var button = (Component)type.GetField("_confirmAccept", flags).GetValue(ui);
+            string label = null;
+            foreach (var component in button.GetComponentsInChildren<Component>(true))
+                if (component.GetType().Name == "Text") label = (string)component.GetType().GetProperty("text").GetValue(component);
+            Assert.That(label, Is.EqualTo("Подтвердить"));
+            Assert.That(panel.activeSelf, Is.True);
+            object click = button.GetType().GetProperty("onClick").GetValue(button);
+            click.GetType().GetMethod("Invoke").Invoke(click, null);
+            Assert.That(previousCalls, Is.Zero);
+            Assert.That(restoreCalls, Is.EqualTo(1));
+            Assert.That(panel.activeSelf, Is.False);
+        }
+        finally { UnityEngine.Object.DestroyImmediate(root); }
+    }
+
+    [Test]
+    public void AreaAndEffectMaterialsRenderAfterMapWithFogClipping()
+    {
+        var type = RuntimeType("WorldOverlayMaterial");
+        int last = 3010;
+        foreach (var field in new[] { "EffectsQueue", "PreviewQueue", "MeasurementQueue" })
+        {
+            int queue = (int)type.GetField(field).GetValue(null);
+            var material = (Material)type.GetMethod("Create").Invoke(null, new object[] { queue });
+            try
+            {
+                Assert.That(queue, Is.GreaterThan(last).And.LessThan(3020));
+                Assert.That(material.renderQueue, Is.EqualTo(queue));
+                Assert.That(material.shader.name, Is.EqualTo("Dicebound/Markup"));
+                Assert.That(material.HasProperty("_FogMask"), Is.True);
+                Assert.That(material.GetFloat("_FogEnabled"), Is.EqualTo(1), "Uninitialised fog must conceal overlays.");
+            }
+            finally { UnityEngine.Object.DestroyImmediate(material); }
+            last = queue;
+        }
+    }
+
+    [Test]
+    public void PreviewBlinkUsesPropertyBlockWithoutCloningMaterial()
+    {
+        var go = GameObject.CreatePrimitive(PrimitiveType.Quad);
+        var material = new Material(Resources.Load<Shader>("DiceboundMarkup"));
+        try
+        {
+            var renderer = go.GetComponent<MeshRenderer>(); renderer.sharedMaterial = material;
+            var type = RuntimeType("PreviewBlinker"); var blink = go.AddComponent(type);
+            type.GetMethod("Start", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(blink, null);
+            type.GetMethod("Update", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(blink, null);
+            Assert.That(renderer.sharedMaterial, Is.SameAs(material));
+            var block = new MaterialPropertyBlock(); renderer.GetPropertyBlock(block);
+            Assert.That(block.GetColor("_Color").a, Is.InRange(0.15f, 0.5f));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(go); UnityEngine.Object.DestroyImmediate(material); }
+    }
+
+    [Test]
+    public void CachedGuiStyleDetectsDestroyedSceneTextures()
+    {
+        var method = RuntimeType("VttUiSkin").GetMethod("HasGuiBackgrounds", BindingFlags.Static | BindingFlags.NonPublic);
+        var style = new GUIStyle();
+        var normal = new Texture2D(2, 2); var hover = new Texture2D(2, 2); var active = new Texture2D(2, 2);
+        try
+        {
+            style.normal.background = normal; style.hover.background = hover; style.active.background = active;
+            Assert.That(method.Invoke(null, new object[] { style }), Is.EqualTo(true));
+            UnityEngine.Object.DestroyImmediate(hover);
+            Assert.That(method.Invoke(null, new object[] { style }), Is.EqualTo(false), "Managed style must not mask a destroyed Unity resource.");
+            Assert.That(method.Invoke(null, new object[] { null }), Is.EqualTo(false));
+        }
+        finally
+        {
+            if (normal != null) UnityEngine.Object.DestroyImmediate(normal);
+            if (hover != null) UnityEngine.Object.DestroyImmediate(hover);
+            if (active != null) UnityEngine.Object.DestroyImmediate(active);
+        }
+    }
+
+    [Test]
+    public void RoundedUiCacheRecreatesDestroyedResourcesAndSurvivesSceneCleanup()
+    {
+        var method = RuntimeType("VttUiSkin").GetMethod("Rounded", BindingFlags.Static | BindingFlags.NonPublic);
+        var first = (Sprite)method.Invoke(null, new object[] { 29 });
+        Sprite rebuilt = null;
+        try
+        {
+            Assert.That((first.hideFlags & HideFlags.DontUnloadUnusedAsset) != 0, Is.True);
+            Assert.That((first.texture.hideFlags & HideFlags.DontUnloadUnusedAsset) != 0, Is.True);
+            UnityEngine.Object.DestroyImmediate(first.texture);
+            rebuilt = (Sprite)method.Invoke(null, new object[] { 29 });
+            Assert.That(rebuilt, Is.Not.SameAs(first));
+            Assert.That(rebuilt.texture, Is.Not.Null);
+            Assert.That(method.Invoke(null, new object[] { 29 }), Is.SameAs(rebuilt), "Valid cache must not allocate again.");
+        }
+        finally
+        {
+            if (first != null) UnityEngine.Object.DestroyImmediate(first);
+            if (rebuilt != null) { if (rebuilt.texture != null) UnityEngine.Object.DestroyImmediate(rebuilt.texture); UnityEngine.Object.DestroyImmediate(rebuilt); }
+        }
+    }
+
     [Test]
     public void GridCoversMovedLargeMapWithThreeCellMarginAndStableDrawOrder()
     {
@@ -70,7 +189,8 @@ public class DiceboundStabilityTests
         Assert.That(payload.Length, Is.LessThan(4096));
         var args = new object[] { payload, visible.Length, null, null };
         type.GetMethod("Decode").Invoke(null, args);
-        Assert.That(args[2], Is.EqualTo(visible)); Assert.That(args[3], Is.EqualTo(explored));
+        Assert.That(((bool[])args[2]).SequenceEqual(visible), Is.True, "Every visible sample must round-trip.");
+        Assert.That(((bool[])args[3]).SequenceEqual(explored), Is.True, "Every explored sample must round-trip.");
         Assert.Throws<TargetInvocationException>(() => type.GetMethod("Decode").Invoke(null, new object[] { payload, visible.Length / 2, null, null }));
     }
     [Test]

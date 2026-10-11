@@ -30,6 +30,46 @@ public class MapController : NetworkBehaviour
     private Material _mapMaterial;
     private Texture2D _currentTexture;
     private byte[] _currentImageBytes;
+    private readonly MapImageCache _imageCache = new();
+    private string _currentImageHash;
+    public string CurrentImageHash => _currentImageHash;
+
+    public void ClearMapLocal()
+    {
+        _imageCache.SetActive(null, null);
+        _imageCache.Store(_currentTexture, _currentImageBytes);
+        _currentTexture = null; _currentImageBytes = null; _currentImageHash = null;
+        if (_mapMaterial != null)
+        {
+            ApplyTextureToMapMaterial(null);
+            _mapMaterial.color = Color.clear;
+            if (_mapMaterial.HasProperty("_BaseColor")) _mapMaterial.SetColor("_BaseColor", Color.clear);
+        }
+    }
+
+    public bool TryApplyCachedMap(string hash)
+    {
+        if (_mapMaterial == null || string.IsNullOrEmpty(hash)) return false;
+        if (_currentTexture != null && _currentImageBytes != null && hash == _currentImageHash
+            && MapImageCache.Hash(_currentImageBytes) == hash)
+        {
+            ApplyTextureToMapMaterial(_currentTexture); HideGameBoard(); FitPlaneToTexture(); ApplyScale(_netScale.Value);
+            return true;
+        }
+        if (!_imageCache.Take(hash, out var texture, out var bytes)) return false;
+        InstallMap(texture, bytes, hash);
+        return true;
+    }
+
+    private void InstallMap(Texture2D texture, byte[] bytes, string hash)
+    {
+        var previous = _currentTexture;
+        var previousBytes = _currentImageBytes;
+        _currentTexture = texture; _currentImageBytes = bytes; _currentImageHash = hash;
+        ApplyTextureToMapMaterial(texture); HideGameBoard(); FitPlaneToTexture(); ApplyScale(_netScale.Value);
+        _imageCache.SetActive(texture, bytes);
+        _imageCache.Store(previous, previousBytes);
+    }
     private Shader _fogShader;
     private Vector3 _baseScale = new Vector3(2f, 1, 2f); // переопределится при загрузке
     private Vector3 _originalPlaneScale; // чистый размер MapPlane до масштабирования
@@ -181,54 +221,49 @@ public class MapController : NetworkBehaviour
         PickImageFiles(paths =>
         {
             if (paths == null || paths.Length == 0) return;
-            if (paths.Length > 32)
-            {
-                DiceUI.Instance?.ShowToolNotice("За один импорт можно выбрать не более 32 изображений.");
-                return;
-            }
-            var names = new List<string>();
-            var prepared = new List<byte[]>();
-            int skipped = 0;
-            long totalPreparedBytes = 0;
-            foreach (string path in paths)
-            {
-                try
-                {
-                    var info = new FileInfo(path);
-                    if (!info.Exists || info.Length <= 0 || info.Length > 96L * 1024 * 1024)
-                        throw new FormatException("Исходный файл пуст или превышает 96 МБ.");
-                    byte[] bytes = PrepareImageForStorage(File.ReadAllBytes(path));
-                    if (bytes == null) throw new FormatException("Файл не удалось обработать как изображение карты.");
-                    totalPreparedBytes += bytes.Length;
-                    if (totalPreparedBytes > 96L * 1024 * 1024)
-                    {
-                        DiceUI.Instance?.ShowToolNotice("Пакет превышает 96 МБ. Импортируйте карты несколькими наборами.");
-                        return;
-                    }
-                    names.Add(Path.GetFileName(path));
-                    prepared.Add(bytes);
-                }
-                catch (Exception ex)
-                {
-                    skipped++;
-                    Debug.LogWarning("[Map] Skipped catalog image " + path + ": " + ex.Message);
-                }
-            }
-            if (prepared.Count == 0)
-            {
-                DiceUI.Instance?.ShowToolNotice("Не удалось импортировать ни одного изображения.");
-                return;
-            }
             try
             {
-                int count = SceneFileStore.ImportMapAssets(names.ToArray(), prepared.ToArray());
-                DmPanelUI.Instance?.RefreshMapCatalog(true);
-                string message = "В каталог добавлено карт: " + count;
-                if (skipped > 0) message += "; пропущено файлов: " + skipped;
-                DiceUI.Instance?.ShowToolNotice(message + ". Сохраните сессию, чтобы записать изменения.");
+                int count = ImportImagePathsToLibrary(paths);
+                ReportCatalogImport("В каталог добавлено карт: " + count
+                    + ". Сохраните сессию, чтобы записать изменения.");
             }
-            catch (Exception ex) { DiceUI.Instance?.ShowToolNotice("Каталог карт: " + ex.Message); }
+            catch (Exception ex) { ReportCatalogImport("Каталог карт: " + ex.Message); }
         });
+    }
+
+    private static void ReportCatalogImport(string message)
+    {
+        DmPanelUI.Instance?.ShowMapCatalogNotice(message);
+        DiceUI.Instance?.ShowToolNotice(message);
+    }
+
+    public int ImportImagePathsToLibrary(string[] paths)
+    {
+        if (!IsHost) throw new InvalidOperationException("Только мастер импортирует карты.");
+        if (paths == null || paths.Length == 0) return 0;
+        if (paths.Length > SceneFileStore.MaxMapImportFiles)
+            throw new FormatException("За один импорт можно выбрать не более 32 изображений.");
+        var names = new string[paths.Length];
+        var prepared = new byte[paths.Length][];
+        long totalBytes = 0;
+        for (int i = 0; i < paths.Length; i++)
+        {
+            if (string.IsNullOrWhiteSpace(paths[i]))
+                throw new FormatException("Не задан путь к карте. Пакет не импортирован.");
+            var info = new FileInfo(paths[i]);
+            if (!info.Exists || info.Length <= 0 || info.Length > 96L * 1024 * 1024)
+                throw new FormatException("Файл «" + info.Name + "» пуст, отсутствует или превышает 96 МБ.");
+            var bytes = PrepareImageForStorage(File.ReadAllBytes(info.FullName));
+            if (bytes == null) throw new FormatException("Не удалось обработать карту «" + info.Name + "». Пакет не импортирован.");
+            totalBytes += bytes.Length;
+            if (totalBytes > SceneFileStore.MaxMapImportBatchBytes)
+                throw new FormatException("Пакет превышает 96 МБ. Импортируйте карты несколькими наборами.");
+            names[i] = info.Name;
+            prepared[i] = bytes;
+        }
+        int count = SceneFileStore.ImportMapAssets(names, prepared);
+        DmPanelUI.Instance?.RefreshMapCatalog(true);
+        return count;
     }
 
     private static byte[] PrepareImageForStorage(byte[] source)
@@ -267,6 +302,17 @@ public class MapController : NetworkBehaviour
 #if UNITY_EDITOR
         string folder = EditorUtility.OpenFolderPanel("Выберите папку с картами", "", "");
         if (string.IsNullOrEmpty(folder)) { onPicked(null); return; }
+        onPicked(CollectImagePathsFromFolder(folder));
+#else
+        SimpleFileBrowser.FileBrowser.ShowLoadDialog(
+            paths => onPicked(paths), () => onPicked(null),
+            SimpleFileBrowser.FileBrowser.PickMode.Files, true, null, null,
+            "Выберите несколько карт", "Импортировать");
+#endif
+    }
+
+    private static string[] CollectImagePathsFromFolder(string folder)
+    {
         string[] files = Directory.GetFiles(folder);
         var images = new List<string>();
         foreach (string path in files)
@@ -276,13 +322,7 @@ public class MapController : NetworkBehaviour
                 || extension == ".bmp" || extension == ".tga") images.Add(path);
         }
         images.Sort(StringComparer.OrdinalIgnoreCase);
-        onPicked(images.ToArray());
-#else
-        SimpleFileBrowser.FileBrowser.ShowLoadDialog(
-            paths => onPicked(paths), () => onPicked(null),
-            SimpleFileBrowser.FileBrowser.PickMode.Files, true, null, null,
-            "Выберите несколько карт", "Импортировать");
-#endif
+        return images.ToArray();
     }
 
     private static void PickImageFile(Action<string> onPicked)
@@ -323,6 +363,7 @@ public class MapController : NetworkBehaviour
     private bool ApplyImageInternal(byte[] pngData)
     {
         if (pngData == null || pngData.Length == 0) return false;
+        if (TryApplyCachedMap(MapImageCache.Hash(pngData))) return true;
         Texture2D tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
         if (!tex.LoadImage(pngData))
         {
@@ -359,16 +400,7 @@ public class MapController : NetworkBehaviour
             stored = tex.EncodeToPNG();
         }
 
-        if (_currentTexture != null) Destroy(_currentTexture);
-        _currentTexture = tex;
-        _currentImageBytes = stored;
-        ApplyTextureToMapMaterial(tex);
-
-        // Скрываем GameBoard (теперь карта на MapPlane)
-        HideGameBoard();
-
-        FitPlaneToTexture();
-        ApplyScale(_netScale.Value);
+        InstallMap(tex, stored, MapImageCache.Hash(stored));
 
         Debug.Log($"[Map] Loaded: {tex.width}x{tex.height}");
         return true;
@@ -590,15 +622,19 @@ public class MapController : NetworkBehaviour
         if (data != null && data.Length > 0) ApplyImage(data);
         else
         {
-            if (_currentTexture != null) Destroy(_currentTexture);
-            _currentTexture = null;
-            _currentImageBytes = null;
-            if (_mapMaterial != null) _mapMaterial.color = new Color(1, 1, 1, 0);
+            ClearMapLocal();
+            MapSync.Instance?.SendMapToAll(System.Array.Empty<byte>());
         }
     }
 
     private new void OnDestroy()
     {
+        _imageCache.Dispose();
+        if (_currentTexture != null) Destroy(_currentTexture);
+        _currentTexture = null;
+        _currentImageBytes = null;
+        _currentImageHash = null;
+        if (Instance == this) Instance = null;
         if (_scaleInputField != null)
             _scaleInputField.onEndEdit.RemoveListener(OnScaleInputChanged);
         if (NetworkManager.Singleton != null)

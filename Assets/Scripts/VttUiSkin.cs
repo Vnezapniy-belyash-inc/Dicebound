@@ -19,12 +19,22 @@ public static class VttUiSkin
     static readonly Dictionary<string, Sprite> Icons = new();
     static GUIStyle _imGuiPanel, _imGuiButton, _imGuiDangerButton;
 
-    public static GUIStyle ImGuiPanel => _imGuiPanel ??= MakeGuiStyle(Panel, Panel, Panel, false);
-    public static GUIStyle ImGuiButton => _imGuiButton ??= MakeGuiStyle(Button,
+    public static GUIStyle ImGuiPanel => LiveGuiStyle(ref _imGuiPanel, Panel, Panel, Panel, false);
+    public static GUIStyle ImGuiButton => LiveGuiStyle(ref _imGuiButton, Button,
         new Color(0.16f, 0.25f, 0.36f), new Color(0.10f, 0.29f, 0.48f), true);
-    public static GUIStyle ImGuiDangerButton => _imGuiDangerButton ??= MakeGuiStyle(
+    public static GUIStyle ImGuiDangerButton => LiveGuiStyle(ref _imGuiDangerButton,
         new Color(0.28f, 0.11f, 0.14f), new Color(0.39f, 0.14f, 0.17f),
         new Color(0.48f, 0.17f, 0.20f), true);
+
+    // GUIStyle is managed and survives scene reloads even when its Unity textures do not.
+    static bool HasGuiBackgrounds(GUIStyle style) => style != null
+        && style.normal.background != null && style.hover.background != null && style.active.background != null;
+
+    static GUIStyle LiveGuiStyle(ref GUIStyle style, Color normal, Color hover, Color pressed, bool button)
+    {
+        if (!HasGuiBackgrounds(style)) style = MakeGuiStyle(normal, hover, pressed, button);
+        return style;
+    }
 
     static GUIStyle MakeGuiStyle(Color normal, Color hover, Color pressed, bool button)
     {
@@ -51,6 +61,8 @@ public static class VttUiSkin
             pixels[i] = new Color32(tint.r, tint.g, tint.b,
                 (byte)(pixels[i].a * tint.a / 255));
         var texture = new Texture2D(source.width, source.height, TextureFormat.RGBA32, false);
+        texture.name = "VTT IMGUI background";
+        texture.hideFlags = HideFlags.HideAndDontSave;
         texture.SetPixels32(pixels);
         texture.Apply();
         return texture;
@@ -86,7 +98,7 @@ public static class VttUiSkin
 
     public static Sprite Icon(string key)
     {
-        if (Icons.TryGetValue(key, out var icon)) return icon;
+        if (Icons.TryGetValue(key, out var icon) && icon != null && icon.texture != null) return icon;
         icon = Resources.Load<Sprite>("UI/Icons/" + key);
         if (icon == null)
         {
@@ -116,11 +128,13 @@ public static class VttUiSkin
                 }
                 var whiteTexture = new Texture2D(icon.texture.width, icon.texture.height,
                     TextureFormat.RGBA32, false);
+                whiteTexture.hideFlags = HideFlags.HideAndDontSave;
                 whiteTexture.SetPixels32(pixels);
                 whiteTexture.Apply();
                 icon = Sprite.Create(whiteTexture,
                     new Rect(0, 0, whiteTexture.width, whiteTexture.height),
                     new Vector2(0.5f, 0.5f), icon.pixelsPerUnit);
+                icon.hideFlags = HideFlags.HideAndDontSave;
             }
         }
         Icons[key] = icon;
@@ -130,10 +144,11 @@ public static class VttUiSkin
     static Sprite Rounded(int radius)
     {
         radius = Mathf.Clamp(radius, 0, 30);
-        if (Sprites.TryGetValue(radius, out var sprite)) return sprite;
+        if (Sprites.TryGetValue(radius, out var sprite) && sprite != null && sprite.texture != null) return sprite;
         const int size = 64;
         var texture = new Texture2D(size, size, TextureFormat.RGBA32, false);
         texture.name = "VTT UI rounded " + radius;
+        texture.hideFlags = HideFlags.HideAndDontSave;
         texture.filterMode = FilterMode.Bilinear;
         var pixels = new Color32[size * size];
         float r = Mathf.Max(0.5f, radius);
@@ -149,6 +164,7 @@ public static class VttUiSkin
         texture.Apply();
         sprite = Sprite.Create(texture, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 100,
             0, SpriteMeshType.FullRect, new Vector4(radius, radius, radius, radius));
+        sprite.hideFlags = HideFlags.HideAndDontSave;
         Sprites[radius] = sprite;
         return sprite;
     }

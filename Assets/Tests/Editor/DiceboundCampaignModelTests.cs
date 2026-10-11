@@ -14,7 +14,7 @@ public class DiceboundCampaignModelTests
     private static object ValidScene(string id)
     {
         var scene = New("SceneDefinition");
-        Set(scene, "version", 2);
+        Set(scene, "version", TypeOf("SceneSaveMigration").GetField("CurrentSceneVersion").GetRawConstantValue());
         Set(scene, "sceneId", id);
         Set(scene, "title", id);
         Set(scene, "gridWidth", 4);
@@ -105,11 +105,84 @@ public class DiceboundCampaignModelTests
 
         var upgraded = TypeOf("SceneSaveMigration").GetMethod("UpgradeScene").Invoke(null, new[] { scene });
 
-        Assert.That(Get<int>(upgraded, "version"), Is.EqualTo(2));
+        Assert.That(Get<int>(upgraded, "version"), Is.EqualTo(3));
         Assert.That(Get<string>(upgraded, "sceneId"), Is.Not.Empty);
         Assert.That(Get<string>(upgraded, "mapImage"), Is.EqualTo(Convert.ToBase64String(new byte[] { 1, 2, 3 })));
         TypeOf("SceneValidation").GetMethod("Validate", new[] { TypeOf("SceneDefinition") })
             .Invoke(null, new[] { upgraded });
+    }
+
+    [TestCase(1)]
+    [TestCase(2)]
+    public void LegacyArmorClassVisibilityMigratesAndRemainsPublic(int version)
+    {
+        var scene = ValidScene("legacy-ac");
+        Set(scene, "version", version);
+        var master = New("MasterTokenData");
+        Set(master, "tokenId", "token");
+        Set(master, "armorClass", 19);
+        var masters = Array.CreateInstance(TypeOf("MasterTokenData"), 1);
+        masters.SetValue(master, 0);
+        Set(Get<object>(scene, "masterData"), "tokens", masters);
+        string json = JsonUtility.ToJson(scene).Replace("\"hideArmorClass\":true,", "");
+        var loaded = JsonUtility.FromJson(json, TypeOf("SceneDefinition"));
+        TypeOf("SceneSaveMigration").GetMethod("UpgradeScene").Invoke(null, new[] { loaded });
+        var restored = Get<Array>(Get<object>(loaded, "masterData"), "tokens").GetValue(0);
+        Assert.That(Get<bool>(restored, "hideArmorClass"), Is.False);
+        Assert.That(Get<int>(restored, "armorClass"), Is.EqualTo(19));
+        Set(restored, "hideArmorClass", true);
+        TypeOf("SceneSaveMigration").GetMethod("UpgradeScene").Invoke(null, new[] { loaded });
+        Assert.That(Get<bool>(restored, "hideArmorClass"), Is.True, "Repeated migration preserves v3 privacy.");
+    }
+
+    [Test]
+    public void NewMasterTokenDefaultsToPrivateArmorClassAndRoundTripsVisibility()
+    {
+        var master = New("MasterTokenData");
+        Assert.That(Get<bool>(master, "hideArmorClass"), Is.True);
+        Set(master, "armorClass", 18);
+        foreach (bool hidden in new[] { false, true })
+        {
+            Set(master, "hideArmorClass", hidden);
+            var loaded = JsonUtility.FromJson(JsonUtility.ToJson(master), TypeOf("MasterTokenData"));
+            Assert.That(Get<bool>(loaded, "hideArmorClass"), Is.EqualTo(hidden));
+            Assert.That(Get<int>(loaded, "armorClass"), Is.EqualTo(18));
+        }
+    }
+
+    [TestCase(1)]
+    [TestCase(2)]
+    public void CampaignImportUpgradesEmbeddedSceneArmorPrivacy(int sceneVersion)
+    {
+        var scene = ValidScene("legacy-campaign-scene");
+        Set(scene, "version", sceneVersion);
+        var token = New("SceneToken");
+        Set(token, "id", "legacy-token"); Set(token, "name", "Legacy");
+        Set(token, "scale", Vector3.one);
+        var tokens = Array.CreateInstance(TypeOf("SceneToken"), 1); tokens.SetValue(token, 0);
+        Set(scene, "tokens", tokens);
+        var master = New("MasterTokenData");
+        Set(master, "tokenId", "legacy-token"); Set(master, "armorClass", 17);
+        var masters = Array.CreateInstance(TypeOf("MasterTokenData"), 1); masters.SetValue(master, 0);
+        Set(Get<object>(scene, "masterData"), "tokens", masters);
+        var campaign = New("CampaignDefinition");
+        Set(campaign, "campaignId", "legacy-campaign"); Set(campaign, "activeSceneId", "legacy-campaign-scene");
+        var entry = New("CampaignScene");
+        Set(entry, "sceneId", "legacy-campaign-scene"); Set(entry, "title", "Legacy"); Set(entry, "scene", scene);
+        var entries = Array.CreateInstance(TypeOf("CampaignScene"), 1); entries.SetValue(entry, 0);
+        Set(campaign, "scenes", entries);
+        string path = Path.Combine(Application.temporaryCachePath, "privacy-migration-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(path, JsonUtility.ToJson(campaign).Replace("\"hideArmorClass\":true,", ""));
+            var loaded = TypeOf("CampaignFileStore").GetMethod("LoadCompatible").Invoke(null, new object[] { path });
+            var loadedScene = Get<object>(Get<Array>(loaded, "scenes").GetValue(0), "scene");
+            Assert.That(Get<int>(loadedScene, "version"), Is.EqualTo(3));
+            var loadedMaster = Get<Array>(Get<object>(loadedScene, "masterData"), "tokens").GetValue(0);
+            Assert.That(Get<bool>(loadedMaster, "hideArmorClass"), Is.False);
+            Assert.That(Get<int>(loadedMaster, "armorClass"), Is.EqualTo(17));
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
     }
 
     [Test]

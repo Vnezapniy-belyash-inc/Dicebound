@@ -46,9 +46,9 @@ using UnityEngine;
 }
 [Serializable] public sealed class SceneDefinition
 {
-    // Version 2 adds a stable scene ID. Version 1 files are upgraded by
+    // Version 3 adds independent armor-class privacy. Older files are upgraded by
     // SceneSaveMigration before validation or application.
-    public int version = 2;
+    public int version = 3;
     public string sceneId = "";
     public string title = "Сцена";
     public string mapAssetId;
@@ -72,6 +72,8 @@ using UnityEngine;
     public string targetSceneId;
     public int x, y;
     public bool markerEnabled;
+    public bool hasArrivalPoint;
+    public int arrivalX, arrivalY;
 }
 
 /// <summary>Master-only, scene-local token data. Never put this in replicated token state.</summary>
@@ -82,6 +84,7 @@ using UnityEngine;
     public int maxHp;
     public int armorClass = 10;
     public bool hideHp = true;
+    public bool hideArmorClass = true;
     public bool hideConditions = true;
     public string[] conditionIds = Array.Empty<string>();
     public string statBlockId;
@@ -224,15 +227,16 @@ public static class StatBlockPublicFields
 /// <summary>Converts existing single-scene v1 files without changing their authored state.</summary>
 public static class SceneSaveMigration
 {
-    public const int CurrentSceneVersion = 2;
+    public const int CurrentSceneVersion = 3;
 
     public static SceneDefinition UpgradeScene(SceneDefinition scene)
     {
         if (scene == null) throw new FormatException("Файл сцены пуст.");
-        if (scene.version == 1)
+        int originalVersion = scene.version;
+        if (originalVersion == 1 || originalVersion == 2)
         {
             scene.version = CurrentSceneVersion;
-            scene.sceneId = Guid.NewGuid().ToString("N");
+            if (string.IsNullOrWhiteSpace(scene.sceneId)) scene.sceneId = Guid.NewGuid().ToString("N");
         }
         else if (scene.version == CurrentSceneVersion)
         {
@@ -242,6 +246,10 @@ public static class SceneSaveMigration
         else throw new FormatException("Неподдерживаемая версия сцены.");
 
         scene.masterData ??= new SceneMasterData();
+        // AC was always public in v1/v2. Preserve that choice for existing saves.
+        if (originalVersion < 3 && scene.masterData.tokens != null)
+            foreach (var token in scene.masterData.tokens)
+                if (token != null) token.hideArmorClass = false;
         scene.transitions ??= Array.Empty<SceneTransition>();
 
         return scene;
@@ -395,6 +403,7 @@ public static class SceneValidation
             Require(entry.scene.transitions.Length <= 256, "В сцене слишком много переходов.");
             var transitionIds = new HashSet<string>();
             foreach (var transition in entry.scene.transitions)
+            {
                 Require(transition != null && !string.IsNullOrWhiteSpace(transition.id)
                     && transition.id.Length <= 64 && transitionIds.Add(transition.id)
                     && !string.IsNullOrWhiteSpace(transition.title) && transition.title.Length <= 128
@@ -402,6 +411,14 @@ public static class SceneValidation
                     && transition.x >= -10000 && transition.x <= 10000
                     && transition.y >= -10000 && transition.y <= 10000,
                     "Некорректный переход между сценами.");
+                if (transition.hasArrivalPoint)
+                {
+                    var target = Array.Find(campaign.scenes, item => item.sceneId == transition.targetSceneId);
+                    Require(transition.arrivalX >= 0 && transition.arrivalX < target.scene.gridWidth
+                        && transition.arrivalY >= 0 && transition.arrivalY < target.scene.gridHeight,
+                        "Точка прибытия находится за пределами целевой сцены.");
+                }
+            }
         }
         Require(campaign.statBlocks != null && campaign.statBlocks.Length <= 4096,
             "Некорректный каталог статблоков.");

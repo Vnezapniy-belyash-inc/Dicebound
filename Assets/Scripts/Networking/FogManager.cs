@@ -43,6 +43,13 @@ public sealed class FogManager : MonoBehaviour
     private float _nextPublish;
     private readonly Dictionary<ulong, int> _clientAcks = new();
     public bool IsMaster => _network != null && _network.IsHost && _network.IsListening;
+    public bool HasClientCurrentRevision(ulong client) => _network != null && _network.IsServer
+        && _network.ConnectedClients.ContainsKey(client) && _revision > 0
+        && _clientAcks.TryGetValue(client, out int revision) && revision == _revision;
+    public void ResendStateToClient(ulong client)
+    {
+        if (_network != null && _network.IsServer && _network.ConnectedClients.ContainsKey(client)) Send(client);
+    }
     public bool AllClientsHaveCurrentRevision
     {
         get
@@ -147,10 +154,9 @@ public sealed class FogManager : MonoBehaviour
                 sources.Add(new VisionSource(new Vector2(p.x, p.z), token.VisionFeet / 5f));
             }
         _visible = new FogVisibility(SceneEditor.Instance?.Model.Snapshot() ?? new SceneGeometry()).Calculate(_width, _height, sources);
+        ApplyManualOverrides(_visible, _manualVisible, _manualHidden, Paused);
         for (int i = 0; i < _visible.Length; i++)
         {
-            if (!Paused) _visible[i] |= _manualVisible[i];
-            _visible[i] &= !_manualHidden[i];
             // Disabling fog is a display mode, never a bulk discovery operation.
             if (Enabled && !Paused && _visible[i]) _explored[i] = true;
         }
@@ -176,6 +182,16 @@ public sealed class FogManager : MonoBehaviour
         int index = Index(world);
         return index >= 0 && index < (_previewVisible?.Length ?? 0) && _previewVisible[index];
     }
+    private static void ApplyManualOverrides(bool[] visible, bool[] revealed, bool[] hidden, bool paused)
+    {
+        for (int i = 0; i < visible.Length; i++)
+        {
+            if (!paused) visible[i] |= revealed[i];
+            visible[i] &= !hidden[i];
+        }
+    }
+    public bool IsVisibleInDisplayedView(Vector3 world) => !Enabled ||
+        (Preview && (PreviewSourceId != null || PreviewTestSource) ? PreviewVisible(world) : IsVisible(world));
     public bool CanSeeToken(ulong client, TokenController token, bool preview = false)
     {
         if (NetworkPermissions.IsHostClient(client) && !preview) return true;
@@ -225,7 +241,6 @@ public sealed class FogManager : MonoBehaviour
     {
         if (!IsMaster) return;
         FinishManual();
-        if (Preview) TogglePreview();
         SceneEditor.Instance?.Deactivate(); MeasurementTool.Instance?.Deactivate(); EffectPaintTool.Instance?.Deactivate();
         ManualMode = mode; _lastManual = new Vector2Int(-1, -1);
     }
@@ -331,7 +346,12 @@ public sealed class FogManager : MonoBehaviour
         {
             reader.ReadValueSafe(out int revision); reader.ReadValueSafe(out int width); reader.ReadValueSafe(out int height);
             reader.ReadValueSafe(out bool enabled); reader.ReadValueSafe(out int length);
-            if (revision <= _received || width <= 0 || width > 256 || height <= 0 || height > 256
+            if (revision <= _received)
+            {
+                if (revision == _received && revision > 0 && _hasState) _pendingRevisionAck = revision;
+                return;
+            }
+            if (width <= 0 || width > 256 || height <= 0 || height > 256
                 || length <= 0 || length > 512 * 1024 || !reader.TryBeginRead(length)) return;
             var payload = new byte[length]; reader.ReadBytesSafe(ref payload, length);
             FogStateCodec.Decode(payload, width * height * 16, out var visible, out var explored);
@@ -368,6 +388,7 @@ public sealed class FogManager : MonoBehaviour
                     if (token != null && !token.IsHidden) { Vector3 p = _grid.WorldToGridCoordinates(token.CommittedPosition); sources.Add(new VisionSource(new Vector2(p.x, p.z), token.VisionFeet / 5f)); }
                 }
                 _previewVisible = new FogVisibility(SceneEditor.Instance?.Model.Snapshot() ?? new SceneGeometry()).Calculate(_width, _height, sources);
+                ApplyManualOverrides(_previewVisible, _manualVisible, _manualHidden, Paused);
                 _previewDirty = false; _textureDirty = true;
             }
         }

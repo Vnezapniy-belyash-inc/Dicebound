@@ -16,12 +16,15 @@ public class DiceboundLobbyIntegrationTests
     private NetworkManager _host, _client;
     private Component _registry;
     private string _reply;
+    private int _heartbeatReceived;
     private string _initiativeReceived;
+    private object _originalCampaign;
     private GameObject _scene;
     private Texture2D _mapTexture;
     private int _transferTotal, _transferReceived, _fogChanges;
     private byte[] _incomingImage;
     private bool? _fogEnabled;
+    private bool? _curtainReceived, _syncPendingReceived;
     private static Type RuntimeType(string name) => Type.GetType(name + ", Assembly-CSharp", true);
     private NetworkManager Manager(string name)
     {
@@ -31,6 +34,45 @@ public class DiceboundLobbyIntegrationTests
         transport.SetConnectionData("127.0.0.1", 17881);
         manager.NetworkConfig = new NetworkConfig { EnableSceneManagement = false, NetworkTransport = transport };
         return manager;
+    }
+
+    [TestCase(29.9f, false)]
+    [TestCase(30f, true)]
+    [TestCase(90f, true)]
+    public void ServerHeartbeatExpiresAfterThirtySeconds(float elapsed, bool expired)
+    {
+        var method = RuntimeType("GameNetworkManager").GetMethod("HeartbeatExpired", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.That(method.Invoke(null, new object[] { 100f + elapsed, 100f }), Is.EqualTo(expired));
+    }
+
+    [UnityTest]
+    public IEnumerator ServerRepliesToConnectedClientHeartbeat()
+    {
+        UnityEditor.SceneManagement.EditorSceneManager.NewScene(UnityEditor.SceneManagement.NewSceneSetup.EmptyScene, UnityEditor.SceneManagement.NewSceneMode.Single);
+        yield return new EnterPlayMode();
+        _host = Manager("Heartbeat host");
+        _host.gameObject.AddComponent(RuntimeType("GameNetworkManager"));
+        Assert.That(_host.StartHost(), Is.True);
+        _client = Manager("Heartbeat client");
+        Assert.That(_client.StartClient(), Is.True);
+        float deadline = Time.realtimeSinceStartup + 10f;
+        while (!_client.IsConnectedClient && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(_client.IsConnectedClient, Is.True);
+        Assert.That(_client.CustomMessagingManager, Is.Not.Null);
+        _heartbeatReceived = -1;
+        _client.CustomMessagingManager.RegisterNamedMessageHandler("SessionHeartbeatReplyV1", (sender, reader) =>
+        {
+            Assert.That(sender, Is.EqualTo(NetworkManager.ServerClientId));
+            reader.ReadValueSafe(out _heartbeatReceived);
+        });
+        using (var writer = new FastBufferWriter(sizeof(int), Allocator.Temp))
+        {
+            writer.WriteValueSafe(42);
+            _client.CustomMessagingManager.SendNamedMessage("SessionHeartbeatRequestV1", NetworkManager.ServerClientId, writer);
+        }
+        deadline = Time.realtimeSinceStartup + 5f;
+        while (_heartbeatReceived < 0 && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(_heartbeatReceived, Is.EqualTo(42));
     }
 
     private IEnumerator RegisterRemote(string nickname)
@@ -108,6 +150,48 @@ public class DiceboundLobbyIntegrationTests
     { return MapAndFog(false); }
 
     [UnityTest]
+    public IEnumerator LoadingClientCurtainSurvivesMasterTogglesAndPreservesMasterCurtainOnCompletion()
+    {
+        yield return new EnterPlayMode();
+        _host = Manager("Client curtain host");
+        _scene = new GameObject("Client curtain test");
+        var type = RuntimeType("HostSceneCurtain");
+        type.GetMethod("EnsureInstance").Invoke(null, null);
+        var curtain = (Component)type.GetProperty("Instance").GetValue(null);
+        curtain.transform.SetParent(_scene.transform);
+        yield return null;
+        Assert.That(_host.StartHost(), Is.True);
+        _client = Manager("Loading client");
+        Assert.That(_client.StartClient(), Is.True);
+        for (int i = 0; i < 200 && !_client.IsConnectedClient; i++) yield return new WaitForSecondsRealtime(0.05f);
+        Assert.That(_client.IsConnectedClient, Is.True);
+        _curtainReceived = _syncPendingReceived = null;
+        _client.CustomMessagingManager.RegisterNamedMessageHandler("HostSceneCurtainState", (sender, reader) =>
+        {
+            Assert.That(sender, Is.EqualTo(NetworkManager.ServerClientId));
+            reader.ReadValueSafe(out bool down); reader.ReadValueSafe(out bool pending);
+            _curtainReceived = down; _syncPendingReceived = pending;
+        });
+        type.GetMethod("SendCurtainStateToClient").Invoke(curtain, new object[] { _client.LocalClientId });
+        for (int i = 0; i < 100 && _curtainReceived != true; i++) yield return new WaitForSecondsRealtime(0.02f);
+        Assert.That(_curtainReceived, Is.True);
+        Assert.That(_syncPendingReceived, Is.True);
+        type.GetMethod("ToggleCurtainOnHost").Invoke(curtain, null);
+        type.GetMethod("ToggleCurtainOnHost").Invoke(curtain, null);
+        yield return new WaitForSecondsRealtime(0.2f);
+        Assert.That(_curtainReceived, Is.True, "Opening the master's curtain must not expose an incomplete client.");
+        Assert.That(_syncPendingReceived, Is.True);
+        type.GetMethod("ToggleCurtainOnHost").Invoke(curtain, null);
+        type.GetMethod("CompleteClientSync").Invoke(curtain, new object[] { _client.LocalClientId });
+        for (int i = 0; i < 100 && _syncPendingReceived != false; i++) yield return new WaitForSecondsRealtime(0.02f);
+        Assert.That(_syncPendingReceived, Is.False);
+        Assert.That(_curtainReceived, Is.True, "Finishing loading must preserve the master's manually closed curtain.");
+        type.GetMethod("ToggleCurtainOnHost").Invoke(curtain, null);
+        for (int i = 0; i < 100 && _curtainReceived != false; i++) yield return new WaitForSecondsRealtime(0.02f);
+        Assert.That(_curtainReceived, Is.False);
+    }
+
+    [UnityTest]
     public IEnumerator HighResolutionMapLoadsAndReachesClient()
     {
         if (SystemInfo.maxTextureSize < 10080) Assert.Ignore("The graphics backend cannot create a 10080-pixel source texture.");
@@ -176,6 +260,22 @@ public class DiceboundLobbyIntegrationTests
         tokenType.GetMethod("ServerSetHealth").Invoke(token, new object[] { 137, 251, false });
         tokenType.GetMethod("ServerSetArmorClass").Invoke(token, new object[] { 19, false });
         tokenType.GetMethod("ServerToggleCondition").Invoke(token, new object[] { "poisoned" });
+        var campaignField = RuntimeType("SceneFileStore").GetField("_campaign", BindingFlags.NonPublic | BindingFlags.Static);
+        _originalCampaign = campaignField.GetValue(null);
+        var campaign = Activator.CreateInstance(RuntimeType("CampaignDefinition"));
+        var block = Activator.CreateInstance(RuntimeType("StatBlockDefinition"));
+        block.GetType().GetField("id").SetValue(block, "privacy-template");
+        block.GetType().GetField("name").SetValue(block, "Privacy template");
+        block.GetType().GetField("armorClass").SetValue(block, 23);
+        block.GetType().GetField("hitPoints").SetValue(block, 997);
+        block.GetType().GetField("publicFieldsMask").SetValue(block, 1 | 16 | 32);
+        var blocks = Array.CreateInstance(block.GetType(), 1); blocks.SetValue(block, 0);
+        campaign.GetType().GetField("statBlocks").SetValue(campaign, blocks);
+        campaignField.SetValue(null, campaign);
+        tokenType.GetMethod("ServerSetStatBlock").Invoke(token, new object[] { "privacy-template" });
+        // Privacy scenario uses distinct live values so a hidden template cannot leak them.
+        tokenType.GetMethod("ServerSetHealth").Invoke(token, new object[] { 137, 251, false });
+        tokenType.GetMethod("ServerSetArmorClass").Invoke(token, new object[] { 19, false });
         ulong objectId = token.GetComponent<NetworkObject>().NetworkObjectId;
         deadline = Time.realtimeSinceStartup + 10;
         while (!_client.SpawnManager.SpawnedObjects.ContainsKey(objectId) && Time.realtimeSinceStartup < deadline) yield return null;
@@ -186,7 +286,31 @@ public class DiceboundLobbyIntegrationTests
         Assert.That((bool)tokenType.GetProperty("IsServer").GetValue(remote), Is.False);
         Assert.That(tokenType.GetProperty("VisibleCurrentHp").GetValue(remote), Is.EqualTo(-1));
         Assert.That(tokenType.GetProperty("VisibleConditionIds").GetValue(remote), Is.Empty);
+        Assert.That(tokenType.GetProperty("ArmorClass").GetValue(remote), Is.EqualTo(-1));
+        string hiddenInfo = (string)tokenType.GetMethod("GetDisplayedTokenInfo").Invoke(remote, null);
+        Assert.That(hiddenInfo, Does.Contain("Private token"));
+        Assert.That(hiddenInfo, Does.Not.Contain("КД:"));
+        Assert.That(hiddenInfo, Does.Not.Contain("ХП:"));
+        Assert.That(hiddenInfo, Does.Not.Contain("Отравлен"));
+        Assert.That(tokenType.GetProperty("ArmorClass").GetValue(token), Is.EqualTo(19));
+        deadline = Time.realtimeSinceStartup + 10;
+        while (string.IsNullOrEmpty((string)tokenType.GetProperty("PublicStatBlockJson").GetValue(remote)) && Time.realtimeSinceStartup < deadline) yield return null;
+        AssertPublicStatPrivacy(remote, false, false);
+        tokenType.GetMethod("ServerSetArmorClassVisibility").Invoke(token, new object[] { false, true });
+        deadline = Time.realtimeSinceStartup + 10;
+        while ((int)tokenType.GetProperty("ArmorClass").GetValue(remote) != 19 && Time.realtimeSinceStartup < deadline) yield return null;
         Assert.That(tokenType.GetProperty("ArmorClass").GetValue(remote), Is.EqualTo(19));
+        Assert.That((string)tokenType.GetMethod("GetDisplayedTokenInfo").Invoke(remote, null), Does.Contain("КД: 19"));
+        deadline = Time.realtimeSinceStartup + 10;
+        while ((PublicStatMask(remote) & 16) == 0 && Time.realtimeSinceStartup < deadline) yield return null;
+        AssertPublicStatPrivacy(remote, true, false);
+        RuntimeType("GameMasterUndo").GetMethod("Undo").Invoke(null, null);
+        deadline = Time.realtimeSinceStartup + 10;
+        while ((int)tokenType.GetProperty("ArmorClass").GetValue(remote) != -1 && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(tokenType.GetProperty("ArmorClass").GetValue(remote), Is.EqualTo(-1));
+        deadline = Time.realtimeSinceStartup + 10;
+        while ((PublicStatMask(remote) & 16) != 0 && Time.realtimeSinceStartup < deadline) yield return null;
+        AssertPublicStatPrivacy(remote, false, false);
 
         tracker.GetType().GetMethod("AddToken").Invoke(tracker, new object[] { token });
         for (int i = 0; i < 40; i++)
@@ -211,6 +335,11 @@ public class DiceboundLobbyIntegrationTests
         Assert.That(tokenType.GetProperty("VisibleCurrentHp").GetValue(remote), Is.EqualTo(137));
         Assert.That(tokenType.GetProperty("VisibleMaxHp").GetValue(remote), Is.EqualTo(251));
         Assert.That((string[])tokenType.GetProperty("VisibleConditionIds").GetValue(remote), Does.Contain("poisoned"));
+        Assert.That((string)tokenType.GetMethod("GetDisplayedTokenInfo").Invoke(remote, null), Does.Contain("ХП: 137/251"));
+        Assert.That((string)tokenType.GetMethod("GetDisplayedTokenInfo").Invoke(remote, null), Does.Not.Contain("КД:"));
+        deadline = Time.realtimeSinceStartup + 10;
+        while ((PublicStatMask(remote) & 32) == 0 && Time.realtimeSinceStartup < deadline) yield return null;
+        AssertPublicStatPrivacy(remote, false, true);
         string stableId = (string)tokenType.GetProperty("SceneId").GetValue(token);
         deadline = Time.realtimeSinceStartup + 10;
         while (ReceivedInitiativeHp(tracker, stableId) != 137 && Time.realtimeSinceStartup < deadline) yield return null;
@@ -220,6 +349,9 @@ public class DiceboundLobbyIntegrationTests
         while ((int)tokenType.GetProperty("VisibleCurrentHp").GetValue(remote) != -1 && Time.realtimeSinceStartup < deadline) yield return null;
         Assert.That(tokenType.GetProperty("VisibleCurrentHp").GetValue(remote), Is.EqualTo(-1));
         Assert.That((string[])tokenType.GetProperty("VisibleConditionIds").GetValue(remote), Is.Empty);
+        deadline = Time.realtimeSinceStartup + 10;
+        while ((PublicStatMask(remote) & 32) != 0 && Time.realtimeSinceStartup < deadline) yield return null;
+        AssertPublicStatPrivacy(remote, false, false);
         deadline = Time.realtimeSinceStartup + 10;
         while (ReceivedInitiativeHp(tracker, stableId) != -1 && Time.realtimeSinceStartup < deadline) yield return null;
         Assert.That(ReceivedInitiativeHp(tracker, stableId), Is.EqualTo(-1));
@@ -232,8 +364,53 @@ public class DiceboundLobbyIntegrationTests
         state = JsonUtility.FromJson(_initiativeReceived, stateType);
         Assert.That(((Array)stateType.GetField("entries").GetValue(state)).Length, Is.EqualTo(41));
         Assert.That(ReceivedInitiativeHp(tracker, stableId), Is.EqualTo(-1));
+        tokenType.GetMethod("ServerSetMasterVisibility").Invoke(token, new object[] { false, false });
+        tokenType.GetMethod("ServerSetArmorClassVisibility").Invoke(token, new object[] { false, false });
+        tokenType.GetMethod("ServerSetStatBlock").Invoke(token, new object[] { "" });
+        Assert.That(tokenType.GetMethod("ServerSetStatBlock").Invoke(token, new object[] { "privacy-template" }), Is.EqualTo(true));
+        deadline = Time.realtimeSinceStartup + 10;
+        while (((int)tokenType.GetProperty("VisibleCurrentHp").GetValue(remote) != 997
+            || (int)tokenType.GetProperty("ArmorClass").GetValue(remote) != 23) && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(tokenType.GetProperty("VisibleCurrentHp").GetValue(remote), Is.EqualTo(997), "Assigning a template must replicate its initial HP.");
+        Assert.That(tokenType.GetProperty("VisibleMaxHp").GetValue(remote), Is.EqualTo(997));
+        Assert.That(tokenType.GetProperty("ArmorClass").GetValue(remote), Is.EqualTo(23));
+        tokenType.GetMethod("ServerSetHealth").Invoke(token, new object[] { 400, 997, false });
+        tokenType.GetMethod("ServerSetStatBlock").Invoke(token, new object[] { "privacy-template" });
+        Assert.That(tokenType.GetProperty("VisibleCurrentHp").GetValue(token), Is.EqualTo(400), "Repeated assignment must preserve wounds.");
+        block.GetType().GetField("hitPoints").SetValue(block, 777);
+        block.GetType().GetField("armorClass").SetValue(block, 22);
+        tokenType.GetMethod("RefreshPublicStatBlock").Invoke(token, null);
+        Assert.That(tokenType.GetProperty("VisibleCurrentHp").GetValue(token), Is.EqualTo(400));
+        Assert.That(tokenType.GetProperty("VisibleMaxHp").GetValue(token), Is.EqualTo(997));
+        Assert.That(tokenType.GetProperty("ArmorClass").GetValue(token), Is.EqualTo(23));
+        RuntimeType("GameMasterUndo").GetMethod("Undo").Invoke(null, null);
+        deadline = Time.realtimeSinceStartup + 10;
+        while (((int)tokenType.GetProperty("VisibleCurrentHp").GetValue(remote) != 137
+            || (int)tokenType.GetProperty("ArmorClass").GetValue(remote) != 19) && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(tokenType.GetProperty("VisibleCurrentHp").GetValue(remote), Is.EqualTo(137), "Undo must restore original combat values on the connected client.");
+        Assert.That(tokenType.GetProperty("VisibleMaxHp").GetValue(remote), Is.EqualTo(251));
+        Assert.That(tokenType.GetProperty("ArmorClass").GetValue(remote), Is.EqualTo(19));
+        deadline = Time.realtimeSinceStartup + 10;
+        while (!(bool)tracker.GetType().GetProperty("AllClientsHaveCurrentState").GetValue(tracker) && Time.realtimeSinceStartup < deadline) yield return null;
         Assert.That((bool)tracker.GetType().GetProperty("AllClientsHaveCurrentState").GetValue(tracker), Is.True);
         Assert.That(_client.IsConnectedClient, Is.True);
+    }
+
+    private static int PublicStatMask(Component token)
+    {
+        string json = (string)token.GetType().GetProperty("PublicStatBlockJson").GetValue(token);
+        var view = JsonUtility.FromJson(json, RuntimeType("PublicStatBlockView"));
+        return (int)view.GetType().GetField("visibleFields").GetValue(view);
+    }
+
+    private static void AssertPublicStatPrivacy(Component token, bool ac, bool hp)
+    {
+        string json = (string)token.GetType().GetProperty("PublicStatBlockJson").GetValue(token);
+        var view = JsonUtility.FromJson(json, RuntimeType("PublicStatBlockView"));
+        Assert.That((PublicStatMask(token) & 16) != 0, Is.EqualTo(ac));
+        Assert.That((PublicStatMask(token) & 32) != 0, Is.EqualTo(hp));
+        Assert.That(view.GetType().GetField("armorClass").GetValue(view), Is.EqualTo(ac ? 23 : 0));
+        Assert.That(view.GetType().GetField("hitPoints").GetValue(view), Is.EqualTo(hp ? 997 : 0));
     }
 
     private int ReceivedInitiativeHp(Component tracker, string tokenId)
@@ -373,6 +550,8 @@ public class DiceboundLobbyIntegrationTests
     [UnityTearDown]
     public IEnumerator Cleanup()
     {
+        RuntimeType("SceneFileStore").GetField("_campaign", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, _originalCampaign);
+        _originalCampaign = null;
         if (_client != null) _client.Shutdown();
         if (_host != null) _host.Shutdown();
         yield return null;

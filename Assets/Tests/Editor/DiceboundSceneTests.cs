@@ -69,7 +69,7 @@ public class DiceboundSceneTests
     }
 
     [Test] public void UnsupportedVersionIsRejectedBeforeApplication()
-    { var scene = Scene(); Set(scene, "version", 3); Invalid(scene); }
+    { var scene = Scene(); Set(scene, "version", 999); Invalid(scene); }
     [Test] public void NonFiniteGridSizeIsRejected()
     { var scene = Scene(); Set(scene, "cellSize", float.NaN); Invalid(scene); }
 

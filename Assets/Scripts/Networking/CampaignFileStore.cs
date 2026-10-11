@@ -77,6 +77,9 @@ public static class CampaignFileStore
         if (isCampaign)
         {
             if (campaign == null) throw new FormatException("Файл кампании повреждён.");
+            if (campaign.scenes != null)
+                foreach (var entry in campaign.scenes)
+                    if (entry?.scene != null) SceneSaveMigration.UpgradeScene(entry.scene);
             SceneValidation.Validate(campaign);
             ValidateEmbeddedImageBudget(campaign);
             return campaign;

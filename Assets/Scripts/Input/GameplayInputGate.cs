@@ -35,6 +35,7 @@ public static class GameplayInputGate
 
     /// <summary>True when the pointer is over any UI element (EventSystem raycast).</summary>
     public static bool IsPointerOverUI =>
+        PublicReferenceLibrary.IsOpen || PublicReferenceLibrary.IsPointerOverButton || SceneArrivalPicker.IsOpen || DisplaySettingsUI.IsOpen || DisplaySettingsUI.IsPointerOverButton ||
         TokenController.IsPointerOverMenu ||
         EventSystem.current != null && EventSystem.current.IsPointerOverGameObject();
 
@@ -43,14 +44,14 @@ public static class GameplayInputGate
         HostSceneCurtain.IsBlockingLocalPlayer;
 
     /// <summary>IMGUI overlays (measurement labels, token menus) — blocked for blinded clients.</summary>
-    public static bool AllowsImGuiOverlays => !IsHostCurtainBlocking &&
+    public static bool AllowsImGuiOverlays => !PublicReferenceLibrary.IsOpen && !SceneArrivalPicker.IsOpen && !DisplaySettingsUI.IsOpen && !IsHostCurtainBlocking &&
         !(DiceUI.Instance != null && DiceUI.Instance.IsConfirmationOpen);
 
     /// <summary>
     /// Keyboard shortcuts: panel toggles, map rotate, camera movement keys, debug keys, etc.
     /// </summary>
     public static bool AllowsKeyboardHotkeys =>
-        !IsTextInputFocused && !IsHostCurtainBlocking &&
+        !PublicReferenceLibrary.IsOpen && !SceneArrivalPicker.IsOpen && !DisplaySettingsUI.IsOpen && !IsTextInputFocused && !IsHostCurtainBlocking &&
         !(DiceUI.Instance != null && DiceUI.Instance.IsConfirmationOpen);
 
     /// <summary>
@@ -58,5 +59,5 @@ public static class GameplayInputGate
     /// Blocked while typing or when the cursor is over UI.
     /// </summary>
     public static bool AllowsWorldPointerInput =>
-        !IsTextInputFocused && !IsPointerOverUI && !IsHostCurtainBlocking;
+        !DisplaySettingsUI.IsOpen && !IsTextInputFocused && !IsPointerOverUI && !IsHostCurtainBlocking;
 }
