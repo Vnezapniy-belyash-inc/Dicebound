@@ -30,7 +30,7 @@ public class TokenController : NetworkDraggable
     private Bounds _labelBounds;
     private GridManager _labelGrid;
     private GUIStyle _labelStyle;
-    private GUIStyle _statsLabelStyle;
+    private bool _isHovered;
     private bool _hasInitialServerState;
     private ulong _initialCreator;
     private bool _initialHero;
@@ -134,9 +134,9 @@ public class TokenController : NetworkDraggable
     public ulong SpawnerClientId => _netSpawnerClientId.Value;
 
     public bool IsSpawner =>
-        NetworkManager.Singleton != null
+        NetworkManager != null
         && ControllerClientId != ulong.MaxValue
-        && NetworkManager.Singleton.LocalClientId == ControllerClientId;
+        && NetworkManager.LocalClientId == ControllerClientId;
 
     public static TokenController Instance { get; private set; }
 
@@ -660,6 +660,7 @@ public class TokenController : NetworkDraggable
     private void Update()
     {
         UpdateDragState();
+        UpdateTokenPointer();
         if (_showMenu && Keyboard.current?.escapeKey.wasPressedThisFrame == true) CloseMenu();
         if (_showMenu && (SceneEditor.IsEditing || FogManager.IsManualEditing || !IsVisibleToLocalPlayer || !GameplayInputGate.AllowsImGuiOverlays)) CloseMenu();
     }
@@ -872,6 +873,43 @@ public class TokenController : NetworkDraggable
         TokenManager.Instance?.CopyToken(this, sender);
     }
 
+    public void RequestRename(string name)
+    {
+        if (!IsSpawned || !IsVisibleToLocalPlayer || (!IsSpawner && !IsHost)
+            || string.IsNullOrWhiteSpace(name)) return;
+        RequestRenameServerRpc(new FixedString128Bytes(TokenNameRegistry.Normalize(name)));
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void RequestRenameServerRpc(FixedString128Bytes name, RpcParams rpcParams = default)
+    {
+        ServerRename(rpcParams.Receive.SenderClientId, name.ToString());
+    }
+
+    public bool ServerRename(ulong sender, string name)
+    {
+        if (!IsServer || !NetworkPermissions.CanUploadTokenPortrait(sender, this)
+            || string.IsNullOrWhiteSpace(name) || TokenManager.Instance == null) return false;
+        string basis = TokenNameRegistry.Normalize(name);
+        if (basis == TokenName) return true;
+        string previousName = TokenName, previousBase = NameBase;
+        string allocated = TokenManager.Instance.AllocateTokenName(basis);
+        if (NetworkPermissions.IsHostClient(sender))
+        {
+            string id = SceneId;
+            GameMasterUndo.Record("имя токена", () => FindSceneToken(id)?.ApplyServerName(previousName, previousBase));
+        }
+        ApplyServerName(allocated, basis);
+        return true;
+    }
+
+    private void ApplyServerName(string name, string basis)
+    {
+        if (!IsServer) return;
+        _nameBase = basis;
+        _netName.Value = new FixedString128Bytes(name);
+    }
+
     // ═══ Контекстное меню (OnGUI) ═══
 
     private static TokenController _activeMenuToken;
@@ -892,7 +930,10 @@ public class TokenController : NetworkDraggable
     private bool _conditionsPopup;
     private Vector2 _conditionsScroll;
     private Rect _conditionsRect;
-    private int _hoverFrame = -10;
+    private static int _pointerFrame = -1;
+    private static TokenController _pointerToken;
+    private string _nameInput = "";
+    private bool _nameEditing;
     private Vector2 _tokenInfoScroll;
     private bool HasPublicStatBlock => !ShowMasterStats && !string.IsNullOrEmpty(PublicStatBlockJson);
     public bool CanEditMasterStats => ShowMasterStats;
@@ -923,7 +964,7 @@ public class TokenController : NetworkDraggable
     }
 
     public static bool IsMenuTextFocused => _activeMenuToken != null &&
-        _activeMenuToken._showMenu && _activeMenuToken._visionEditing;
+        _activeMenuToken._showMenu && (_activeMenuToken._visionEditing || _activeMenuToken._nameEditing);
     public static bool IsPointerOverMenu
     {
         get
@@ -944,6 +985,7 @@ public class TokenController : NetworkDraggable
         if (_showMenu) _menuClosedFrame = Time.frameCount;
         _showMenu = false;
         _visionEditing = false;
+        _nameEditing = false;
         _conditionsPopup = false;
         _statBlockPopup = false;
         _showPublicStatBlock = false;
@@ -956,7 +998,27 @@ public class TokenController : NetworkDraggable
         return _portraitTexture.EncodeToJPG(50);
     }
 
-    private void OnMouseOver()
+    // Poll once per frame, including while the pointer is stationary.
+    private void UpdateTokenPointer()
+    {
+        _isHovered = false;
+        var camera = Camera.main;
+        var mouse = Mouse.current;
+        if (camera == null || mouse == null) return;
+        if (_pointerFrame != Time.frameCount)
+        {
+            _pointerFrame = Time.frameCount;
+            _pointerToken = null;
+            Vector2 pointer = mouse.position.ReadValue();
+            if (camera.pixelRect.Contains(pointer) && Physics.Raycast(camera.ScreenPointToRay(pointer),
+                out RaycastHit hit, Mathf.Infinity, camera.cullingMask, QueryTriggerInteraction.Ignore))
+                _pointerToken = hit.collider.GetComponentInParent<TokenController>();
+        }
+        if (_pointerToken != this) return;
+        HandleTokenPointer();
+    }
+
+    private void HandleTokenPointer()
     {
         if (SceneEditor.IsEditing || FogManager.IsManualEditing) return;
         if (!IsSpawned || !IsVisibleToLocalPlayer) return;
@@ -964,7 +1026,7 @@ public class TokenController : NetworkDraggable
         if (EffectPaintTool.Instance != null && EffectPaintTool.Instance.IsActive) return;
 
         if (!GameplayInputGate.AllowsWorldPointerInput) return;
-        _hoverFrame = Time.frameCount;
+        _isHovered = true;
 
         var mouse = Mouse.current;
         if (mouse != null && mouse.rightButton.wasPressedThisFrame &&
@@ -976,6 +1038,8 @@ public class TokenController : NetworkDraggable
             _activeMenuToken = this;
 
             _showMenu = true;
+            _nameInput = TokenName;
+            _nameEditing = false;
             _visionInput = VisionFeet.ToString();
             _visionError = null;
             _visionEditing = false;
@@ -987,7 +1051,7 @@ public class TokenController : NetworkDraggable
             _statBlockPopup = false;
             Vector2 mousePos = mouse.position.ReadValue();
             bool ownActions = IsSpawner && !(IsHost && !ShowMasterStats);
-            float height = ShowMasterStats ? 706 : 156 + (ownActions ? 108 : 0) + (HasPublicStatBlock ? 62 : 0);
+            float height = ShowMasterStats ? 744 : 156 + (ownActions ? 146 : 0) + (HasPublicStatBlock ? 62 : 0);
             _menuRect = new Rect(
                 Mathf.Clamp(mousePos.x, 4, Mathf.Max(4, Screen.width - 264)),
                 Mathf.Clamp(Screen.height - mousePos.y, 4, Mathf.Max(4, Screen.height - height - 4)),
@@ -1070,7 +1134,7 @@ public class TokenController : NetworkDraggable
         }
         if (!_showMenu)
         {
-            if (_activeMenuToken == null && _hoverFrame >= Time.frameCount - 1 && Mouse.current != null
+            if (_activeMenuToken == null && _isHovered && Mouse.current != null
                 && GameplayInputGate.AllowsWorldPointerInput && !SceneEditor.IsEditing && !FogManager.IsManualEditing)
                 DrawTokenHover();
             return;
@@ -1101,6 +1165,25 @@ public class TokenController : NetworkDraggable
         GUI.EndScrollView();
 
         float y = _menuRect.y + 112f;
+        if (ownActions || ShowMasterStats)
+        {
+            GUI.SetNextControlName("TokenNameInput");
+            _nameInput = GUI.TextField(new Rect(_menuRect.x + 10, y, 156, 28), _nameInput, 128);
+            _nameEditing = GUI.GetNameOfFocusedControl() == "TokenNameInput";
+            bool submitName = GUI.Button(new Rect(_menuRect.x + 172, y, 78, 28), "Имя ✓", VttUiSkin.ImGuiButton);
+            if (_nameEditing && Event.current.type == EventType.KeyDown && (Event.current.keyCode == KeyCode.Return || Event.current.keyCode == KeyCode.KeypadEnter))
+            {
+                submitName = true;
+                Event.current.Use();
+            }
+            if (submitName && !string.IsNullOrWhiteSpace(_nameInput))
+            {
+                RequestRename(_nameInput);
+                GUI.FocusControl(null);
+                _nameEditing = false;
+            }
+            y += 38;
+        }
         if (canLoad)
         {
             if (GUI.Button(new Rect(_menuRect.x + 10, y, 240, 30),
@@ -1452,7 +1535,7 @@ public class TokenController : NetworkDraggable
         {
             wordWrap = false,
             richText = false,
-            clipping = TextClipping.Clip,
+            clipping = TextClipping.Overflow,
             padding = new RectOffset(4, 4, 0, 0),
             fontSize = TokenLabelLayout.DesignFontSize
         };
@@ -1463,36 +1546,9 @@ public class TokenController : NetworkDraggable
             Quaternion.identity, new Vector3(scale, scale, 1));
         Color previousColor = GUI.color;
         if (IsHidden) GUI.color = new Color(previousColor.r, previousColor.g, previousColor.b, previousColor.a * 0.35f);
-        GUI.Label(new Rect(0, 0, TokenLabelLayout.DesignWidth, TokenLabelLayout.DesignHeight), "", _labelStyle);
-        _statsLabelStyle ??= new GUIStyle(GUI.skin.label)
-        {
-            fontSize = 10,
-            alignment = TextAnchor.MiddleCenter,
-            clipping = TextClipping.Clip,
-            padding = new RectOffset(2, 2, 0, 0)
-        };
-        _statsLabelStyle.normal.textColor = VttUiSkin.Text;
-        GUI.Label(new Rect(3, 1, 154, 19), IsHero ? TokenName + " · герой" : TokenName, _statsLabelStyle);
-        int currentHp = DisplayedCurrentHp;
-        int maxHp = DisplayedMaxHp;
-        string conditions = string.Join(" · ", Array.ConvertAll(VisibleConditionIds,
-            TokenConditionCatalog.DisplayName));
-        if (currentHp >= 0 && maxHp > 0)
-        {
-            Rect bar = new Rect(5, 21, 150, 12);
-            GUI.color = new Color(0.06f, 0.07f, 0.09f, 0.94f);
-            GUI.DrawTexture(bar, Texture2D.whiteTexture);
-            float ratio = Mathf.Clamp01((float)currentHp / maxHp);
-            GUI.color = Color.Lerp(new Color(0.8f, 0.18f, 0.18f), new Color(0.2f, 0.72f, 0.34f), ratio);
-            if (ratio > 0) GUI.DrawTexture(new Rect(bar.x, bar.y, bar.width * ratio, bar.height), Texture2D.whiteTexture);
-            GUI.color = previousColor;
-            string armor = DisplayedArmorClass >= 0 ? $" · КД {DisplayedArmorClass}" : "";
-            GUI.Label(new Rect(4, 20, 152, 14), $"{currentHp}/{maxHp} HP{armor}", _statsLabelStyle);
-        }
-        else if (DisplayedArmorClass >= 0)
-            GUI.Label(new Rect(3, 20, 154, 15), $"КД {DisplayedArmorClass}", _statsLabelStyle);
-        if (!string.IsNullOrEmpty(conditions))
-            GUI.Label(new Rect(3, 34, 154, 16), conditions, _statsLabelStyle);
+        _labelStyle.alignment = TextAnchor.MiddleCenter;
+        _labelStyle.normal.textColor = VttUiSkin.Text;
+        GUI.Label(new Rect(0, 0, TokenLabelLayout.DesignWidth, TokenLabelLayout.DesignHeight), TokenName, _labelStyle);
         GUI.color = previousColor;
         GUI.matrix = previousMatrix;
     }
