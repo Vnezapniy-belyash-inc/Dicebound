@@ -16,6 +16,7 @@ public class DiceboundSceneIntegrationTests
     private GameObject _root;
     private Texture2D _texture;
     private string _path;
+    private string[] _fixturePaths = Array.Empty<string>();
     private static Type TypeOf(string name) => Type.GetType(name + ", Assembly-CSharp", true);
     private static object Call(object item, string name, params object[] args) => item.GetType().GetMethod(name).Invoke(item, args);
     private static T Read<T>(object item, string name) => (T)item.GetType().GetProperty(name).GetValue(item);
@@ -23,6 +24,248 @@ public class DiceboundSceneIntegrationTests
     {
         var go = new GameObject(name); go.transform.SetParent(_root.transform);
         return go.AddComponent(TypeOf(type));
+    }
+
+    private void CreateMapCatalogHost()
+    {
+        _root = new GameObject("Map catalog test");
+        _manager = new GameObject("Map catalog host").AddComponent<NetworkManager>();
+        var transport = _manager.gameObject.AddComponent<UnityTransport>(); transport.SetConnectionData("127.0.0.1", 17879);
+        _manager.NetworkConfig = new NetworkConfig { EnableSceneManagement = false, NetworkTransport = transport };
+        var grid = Add("GridManager", "Grid");
+        grid.GetType().GetField("gridWidth").SetValue(grid, 10); grid.GetType().GetField("gridHeight").SetValue(grid, 10);
+        var prefab = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Token.prefab");
+        _manager.AddNetworkPrefab(prefab);
+        var tokens = Add("TokenManager", "Tokens");
+        tokens.GetType().GetField("tokenPrefab").SetValue(tokens, prefab.GetComponent<NetworkObject>());
+        var mapObject = new GameObject("Map"); mapObject.transform.SetParent(_root.transform);
+        mapObject.AddComponent<NetworkObject>();
+        var map = mapObject.AddComponent(TypeOf("MapController"));
+        var plane = GameObject.CreatePrimitive(PrimitiveType.Plane); plane.transform.SetParent(mapObject.transform, false);
+        map.GetType().GetField("mapPlane").SetValue(map, plane);
+        var sync = mapObject.AddComponent(TypeOf("MapSync")); sync.GetType().GetField("mapController").SetValue(sync, map);
+        Add("SceneEditor", "Editor"); Add("FogManager", "Fog");
+    }
+
+    private void CreateMapCatalogImage()
+    {
+        _texture = new Texture2D(4, 4); _texture.SetPixels(new Color[16]); _texture.Apply();
+        var map = TypeOf("MapController").GetProperty("Instance").GetValue(null);
+        Call(map, "ApplyImage", _texture.EncodeToPNG());
+    }
+
+    [UnityTest]
+    public IEnumerator MapCatalogRejectedBatchDoesNotCreateOrChangeCampaign()
+    {
+        UnityEditor.SceneManagement.EditorSceneManager.NewScene(UnityEditor.SceneManagement.NewSceneSetup.EmptyScene,
+            UnityEditor.SceneManagement.NewSceneMode.Single);
+        yield return new EnterPlayMode();
+        CreateMapCatalogHost(); yield return null;
+        Assert.That(_manager.StartHost(), Is.True); yield return null;
+        CreateMapCatalogImage();
+        VerifyMapCatalogRejectedBatch();
+    }
+
+    private void VerifyMapCatalogRejectedBatch()
+    {
+        var store = TypeOf("SceneFileStore");
+        var campaignField = store.GetField("_campaign", BindingFlags.NonPublic | BindingFlags.Static);
+        var dirtyField = store.GetField("_campaignDirty", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.That(campaignField.GetValue(null), Is.Null);
+        bool beforeDirty = (bool)dirtyField.GetValue(null);
+        Assert.Throws<TargetInvocationException>(() => store.GetMethod("ImportMapAssets").Invoke(null,
+            new object[] { new[] { "valid.png", "empty.png" }, new[] { _texture.EncodeToPNG(), Array.Empty<byte>() } }));
+        Assert.That(campaignField.GetValue(null), Is.Null, "A rejected import must not create a campaign.");
+        Assert.That(dirtyField.GetValue(null), Is.EqualTo(beforeDirty));
+        store.GetMethod("EnsureCampaign").Invoke(null, null);
+        string before = JsonUtility.ToJson(campaignField.GetValue(null));
+        beforeDirty = (bool)dirtyField.GetValue(null);
+        var map = TypeOf("MapController").GetProperty("Instance").GetValue(null);
+        Call(map, "SetScale", 1.3f);
+        Assert.Throws<TargetInvocationException>(() => store.GetMethod("ImportMapAssets").Invoke(null,
+            new object[] { new[] { "valid.png", "empty.png" }, new[] { _texture.EncodeToPNG(), Array.Empty<byte>() } }));
+        Assert.That(JsonUtility.ToJson(campaignField.GetValue(null)), Is.EqualTo(before), "Rejection must not capture live edits into stored metadata.");
+        Assert.That(dirtyField.GetValue(null), Is.EqualTo(beforeDirty));
+    }
+
+    [UnityTest]
+    public IEnumerator MapCatalogCorruptImageRejectsWholeBatch()
+    {
+        UnityEditor.SceneManagement.EditorSceneManager.NewScene(UnityEditor.SceneManagement.NewSceneSetup.EmptyScene,
+            UnityEditor.SceneManagement.NewSceneMode.Single);
+        yield return new EnterPlayMode();
+        CreateMapCatalogHost(); yield return null;
+        Assert.That(_manager.StartHost(), Is.True); yield return null;
+        CreateMapCatalogImage();
+        VerifyMapCatalogCorruptImage();
+    }
+
+    private void VerifyMapCatalogCorruptImage()
+    {
+        var store = TypeOf("SceneFileStore");
+        var field = store.GetField("_campaign", BindingFlags.NonPublic | BindingFlags.Static);
+        var exception = Assert.Throws<TargetInvocationException>(() => store.GetMethod("ImportMapAssets").Invoke(null,
+            new object[] { new[] { "valid.png", "corrupt.png" }, new[] { _texture.EncodeToPNG(), new byte[] { 1, 2, 3 } } }));
+        Assert.That(exception.InnerException, Is.TypeOf<FormatException>());
+        Assert.That(field.GetValue(null), Is.Null);
+        Assert.That(((Array)store.GetMethod("GetMapAssets").Invoke(null, null)).Length, Is.Zero);
+    }
+
+    [UnityTest]
+    public IEnumerator MapCatalogFileBatchAndFolderPreserveAtomicityAndPersistence()
+    {
+        UnityEditor.SceneManagement.EditorSceneManager.NewScene(UnityEditor.SceneManagement.NewSceneSetup.EmptyScene,
+            UnityEditor.SceneManagement.NewSceneMode.Single);
+        yield return new EnterPlayMode();
+        CreateMapCatalogHost(); yield return null;
+        Assert.That(_manager.StartHost(), Is.True); yield return null;
+        CreateMapCatalogImage();
+        VerifyMapCatalogFiles();
+    }
+
+    private void VerifyMapCatalogFiles()
+    {
+        string folder = Path.GetFullPath(Path.Combine(Application.dataPath, "..", "Logs", "MapCatalogFileTest-" + Guid.NewGuid().ToString("N")));
+        Directory.CreateDirectory(folder);
+        _fixturePaths = new[] { Path.Combine(folder, "valid.png"), Path.Combine(folder, "corrupt.png"), Path.Combine(folder, "note.txt") };
+        File.WriteAllBytes(_fixturePaths[0], _texture.EncodeToPNG());
+        File.WriteAllBytes(_fixturePaths[1], new byte[] { 1, 2, 3 });
+        File.WriteAllText(_fixturePaths[2], "Not a map");
+        var mapType = TypeOf("MapController");
+        var map = mapType.GetProperty("Instance").GetValue(null);
+        var paths = (string[])mapType.GetMethod("CollectImagePathsFromFolder", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, new object[] { folder });
+        Assert.That(paths.Length, Is.EqualTo(2));
+        Assert.That(paths, Is.EqualTo(new[] { _fixturePaths[1], _fixturePaths[0] }), "Editor folder collection is sorted and excludes text files.");
+        var error = Assert.Throws<TargetInvocationException>(() => Call(map, "ImportImagePathsToLibrary", (object)paths));
+        Assert.That(error.InnerException, Is.TypeOf<FormatException>());
+        var store = TypeOf("SceneFileStore");
+        Assert.That(store.GetProperty("HasCampaign").GetValue(null), Is.EqualTo(false));
+        File.WriteAllBytes(_fixturePaths[1], _texture.EncodeToPNG());
+        Assert.That(Call(map, "ImportImagePathsToLibrary", (object)paths), Is.EqualTo(2));
+        var assets = (Array)store.GetMethod("GetMapAssets").Invoke(null, null);
+        Assert.That(assets.Length, Is.EqualTo(2));
+        string firstId = (string)assets.GetValue(0).GetType().GetField("id").GetValue(assets.GetValue(0));
+        string secondId = (string)assets.GetValue(1).GetType().GetField("id").GetValue(assets.GetValue(1));
+        store.GetMethod("SelectMapAsset").Invoke(null, new object[] { firstId });
+        error = Assert.Throws<TargetInvocationException>(() => store.GetMethod("DeleteMapAsset").Invoke(null, new object[] { firstId }));
+        Assert.That(error.InnerException, Is.TypeOf<InvalidOperationException>());
+        Assert.That(((Array)store.GetMethod("GetMapAssets").Invoke(null, null)).Length, Is.EqualTo(2));
+        store.GetMethod("DeleteMapAsset").Invoke(null, new object[] { secondId });
+        string expected = JsonUtility.ToJson(store.GetMethod("CaptureCampaign").Invoke(null, new object[] { null }));
+        _path = Path.Combine(folder, "campaign.json");
+        store.GetMethod("SaveCampaign").Invoke(null, new object[] { _path, null });
+        store.GetMethod("LoadCampaign").Invoke(null, new object[] { _path });
+        Assert.That(JsonUtility.ToJson(store.GetMethod("CaptureCampaign").Invoke(null, new object[] { null })), Is.EqualTo(expected));
+        Assert.That(((Array)store.GetMethod("GetMapAssets").Invoke(null, null)).Length, Is.EqualTo(1));
+    }
+
+    [UnityTest]
+    public IEnumerator MapCatalogDuplicateNamesAndCountLimitsAreTransactional()
+    {
+        UnityEditor.SceneManagement.EditorSceneManager.NewScene(UnityEditor.SceneManagement.NewSceneSetup.EmptyScene,
+            UnityEditor.SceneManagement.NewSceneMode.Single);
+        yield return new EnterPlayMode();
+        CreateMapCatalogHost(); yield return null;
+        Assert.That(_manager.StartHost(), Is.True); yield return null;
+        CreateMapCatalogImage();
+        VerifyMapCatalogNamesAndLimits();
+    }
+
+    private void VerifyMapCatalogNamesAndLimits()
+    {
+        var store = TypeOf("SceneFileStore");
+        var import = store.GetMethod("ImportMapAssets");
+        byte[] png = _texture.EncodeToPNG();
+        Assert.That(import.Invoke(null, new object[] { new[] { "Forest.png", "forest.jpg", "Forest.png" }, new[] { png, png, png } }), Is.EqualTo(3));
+        var assets = (Array)store.GetMethod("GetMapAssets").Invoke(null, null);
+        Assert.That(assets.GetValue(0).GetType().GetField("name").GetValue(assets.GetValue(0)), Is.EqualTo("Forest"));
+        Assert.That(assets.GetValue(1).GetType().GetField("name").GetValue(assets.GetValue(1)), Is.EqualTo("forest (2)"));
+        Assert.That(assets.GetValue(2).GetType().GetField("name").GetValue(assets.GetValue(2)), Is.EqualTo("Forest (3)"));
+        var field = store.GetField("_campaign", BindingFlags.NonPublic | BindingFlags.Static);
+        string before = JsonUtility.ToJson(field.GetValue(null));
+        Assert.Throws<TargetInvocationException>(() => import.Invoke(null, new object[] { new string[33], new byte[33][] }));
+        Assert.That(JsonUtility.ToJson(field.GetValue(null)), Is.EqualTo(before));
+        for (int offset = 3; offset < 256;)
+        {
+            int count = Math.Min(32, 256 - offset);
+            var names = new string[count]; var images = new byte[count][];
+            for (int i = 0; i < count; i++) { names[i] = "capacity-" + (offset + i) + ".png"; images[i] = png; }
+            Assert.That(import.Invoke(null, new object[] { names, images }), Is.EqualTo(count));
+            offset += count;
+        }
+        Assert.That(((Array)store.GetMethod("GetMapAssets").Invoke(null, null)).Length, Is.EqualTo(256));
+        before = JsonUtility.ToJson(field.GetValue(null));
+        var error = Assert.Throws<TargetInvocationException>(() => import.Invoke(null, new object[] { new[] { "overflow.png" }, new[] { png } }));
+        Assert.That(error.InnerException, Is.TypeOf<InvalidOperationException>());
+        Assert.That(JsonUtility.ToJson(field.GetValue(null)), Is.EqualTo(before));
+    }
+
+    [UnityTest]
+    public IEnumerator MapCatalogPreparedByteBudgetRejectsEntireBatch()
+    {
+        UnityEditor.SceneManagement.EditorSceneManager.NewScene(UnityEditor.SceneManagement.NewSceneSetup.EmptyScene,
+            UnityEditor.SceneManagement.NewSceneMode.Single);
+        yield return new EnterPlayMode();
+        CreateMapCatalogHost(); yield return null;
+        Assert.That(_manager.StartHost(), Is.True); yield return null;
+        CreateMapCatalogImage();
+        VerifyMapCatalogByteBudget();
+    }
+
+    private void VerifyMapCatalogByteBudget()
+    {
+        UnityEngine.Object.Destroy(_texture);
+        _texture = new Texture2D(2048, 2048, TextureFormat.RGB24, false);
+        var raw = new byte[2048 * 2048 * 3]; new System.Random(73812).NextBytes(raw);
+        _texture.LoadRawTextureData(raw); _texture.Apply();
+        byte[] png = _texture.EncodeToPNG();
+        Assert.That(png.Length, Is.LessThanOrEqualTo(16 * 1024 * 1024));
+        Assert.That(png.LongLength * 8, Is.GreaterThan(96L * 1024 * 1024));
+        var names = new string[8]; var images = new byte[8][];
+        for (int i = 0; i < 8; i++) { names[i] = "large-" + i + ".png"; images[i] = png; }
+        var store = TypeOf("SceneFileStore");
+        var error = Assert.Throws<TargetInvocationException>(() => store.GetMethod("ImportMapAssets").Invoke(null, new object[] { names, images }));
+        Assert.That(error.InnerException, Is.TypeOf<FormatException>());
+        Assert.That(error.InnerException.Message, Does.Contain("96 МБ"));
+        Assert.That(store.GetProperty("HasCampaign").GetValue(null), Is.EqualTo(false));
+    }
+
+    [UnityTest]
+    public IEnumerator MapCatalogAddingCurrentMapRejectsWithoutLosingExistingLink()
+    {
+        UnityEditor.SceneManagement.EditorSceneManager.NewScene(UnityEditor.SceneManagement.NewSceneSetup.EmptyScene,
+            UnityEditor.SceneManagement.NewSceneMode.Single);
+        yield return new EnterPlayMode();
+        CreateMapCatalogHost(); yield return null;
+        Assert.That(_manager.StartHost(), Is.True); yield return null;
+        CreateMapCatalogImage();
+        VerifyAddingCurrentMapAtomicity();
+    }
+
+    private void VerifyAddingCurrentMapAtomicity()
+    {
+        var store = TypeOf("SceneFileStore");
+        store.GetMethod("AddCurrentMapAsset").Invoke(null, new object[] { "Original" });
+        _path = Path.Combine(Application.temporaryCachePath, "current-map-test-" + Guid.NewGuid().ToString("N") + ".json");
+        store.GetMethod("SaveCampaign").Invoke(null, new object[] { _path, null });
+        var campaignField = store.GetField("_campaign", BindingFlags.NonPublic | BindingFlags.Static);
+        var linkField = store.GetField("_currentMapAssetId", BindingFlags.NonPublic | BindingFlags.Static);
+        var dirtyField = store.GetField("_campaignDirty", BindingFlags.NonPublic | BindingFlags.Static);
+        string before = JsonUtility.ToJson(campaignField.GetValue(null));
+        string originalLink = (string)linkField.GetValue(null);
+        Assert.That(originalLink, Is.Not.Null.And.Not.Empty);
+        Assert.That(dirtyField.GetValue(null), Is.EqualTo(false));
+        var grid = _root.GetComponentInChildren(TypeOf("GridManager"));
+        var widthField = grid.GetType().GetField("gridWidth");
+        widthField.SetValue(grid, 300); // Force scene validation failure after name validation.
+        try
+        {
+            Assert.Throws<TargetInvocationException>(() => store.GetMethod("AddCurrentMapAsset").Invoke(null, new object[] { "Rejected" }));
+            Assert.That(linkField.GetValue(null), Is.EqualTo(originalLink), "Rejected Add Current must preserve the previous asset link.");
+            Assert.That(JsonUtility.ToJson(campaignField.GetValue(null)), Is.EqualTo(before));
+            Assert.That(dirtyField.GetValue(null), Is.EqualTo(false));
+        }
+        finally { widthField.SetValue(grid, 10); }
     }
 
     [UnityTest]
@@ -338,6 +581,7 @@ public class DiceboundSceneIntegrationTests
         if (_root != null) UnityEngine.Object.Destroy(_root);
         if (_texture != null) UnityEngine.Object.Destroy(_texture);
         if (!string.IsNullOrEmpty(_path) && File.Exists(_path)) File.Delete(_path);
+        foreach (string path in _fixturePaths) if (File.Exists(path)) File.Delete(path);
         yield return null;
         if (Application.isPlaying) yield return new ExitPlayMode();
     }

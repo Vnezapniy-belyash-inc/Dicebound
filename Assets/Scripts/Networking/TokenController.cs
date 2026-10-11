@@ -924,6 +924,11 @@ public class TokenController : NetworkDraggable
 
     public static bool IsMenuTextFocused => _activeMenuToken != null &&
         _activeMenuToken._showMenu && _activeMenuToken._visionEditing;
+    private float MenuScale => Mathf.Min(LocalUiScale.Value,
+        Mathf.Max(0.25f, (Screen.height - 8f) / Mathf.Max(1f, _menuRect.height)),
+        Mathf.Max(0.25f, (Screen.width - 8f) / 320f));
+    private float MenuScreenWidth => Screen.width / MenuScale;
+    private float MenuScreenHeight => Screen.height / MenuScale;
     public static bool IsPointerOverMenu
     {
         get
@@ -932,6 +937,7 @@ public class TokenController : NetworkDraggable
             if (_activeMenuToken == null || !_activeMenuToken._showMenu || Mouse.current == null) return false;
             Vector2 pointer = Mouse.current.position.ReadValue();
             pointer.y = Screen.height - pointer.y;
+            pointer /= _activeMenuToken.MenuScale;
             return _activeMenuToken._menuRect.Contains(pointer)
                 || _activeMenuToken._conditionsPopup && _activeMenuToken._conditionsRect.Contains(pointer)
                 || _activeMenuToken._statBlockPopup && _activeMenuToken._statBlockPopupRect.Contains(pointer)
@@ -989,9 +995,12 @@ public class TokenController : NetworkDraggable
             bool ownActions = IsSpawner && !(IsHost && !ShowMasterStats);
             float height = ShowMasterStats ? 706 : 156 + (ownActions ? 108 : 0) + (HasPublicStatBlock ? 62 : 0);
             _menuRect = new Rect(
-                Mathf.Clamp(mousePos.x, 4, Mathf.Max(4, Screen.width - 264)),
-                Mathf.Clamp(Screen.height - mousePos.y, 4, Mathf.Max(4, Screen.height - height - 4)),
+                mousePos.x,
+                Screen.height - mousePos.y,
                 260, height);
+            _menuRect.x /= MenuScale;
+            _menuRect.y /= MenuScale;
+            ClampMenuToScreen();
         }
     }
 
@@ -1062,6 +1071,21 @@ public class TokenController : NetworkDraggable
         if (!GameplayInputGate.AllowsImGuiOverlays) return;
         if (!IsSpawned || !IsVisibleToLocalPlayer) return;
         DrawTokenLabel();
+        Matrix4x4 previousMatrix = GUI.matrix;
+        GUI.matrix = previousMatrix * Matrix4x4.Scale(new Vector3(MenuScale, MenuScale, 1));
+        try { DrawTokenMenus(); }
+        finally { GUI.matrix = previousMatrix; }
+    }
+
+    private void ClampMenuToScreen()
+    {
+        _menuRect.x = Mathf.Clamp(_menuRect.x, 4, Mathf.Max(4, MenuScreenWidth - _menuRect.width - 4));
+        _menuRect.y = Mathf.Clamp(_menuRect.y, 4, Mathf.Max(4, MenuScreenHeight - _menuRect.height - 4));
+    }
+
+    private void DrawTokenMenus()
+    {
+        ClampMenuToScreen();
         if (MeasurementTool.Instance != null && MeasurementTool.Instance.IsLocalActive ||
             EffectPaintTool.Instance != null && EffectPaintTool.Instance.IsActive)
         {
@@ -1233,11 +1257,11 @@ public class TokenController : NetworkDraggable
         if (string.IsNullOrEmpty(info)) return;
         var style = new GUIStyle(GUI.skin.label) { fontSize = 14, wordWrap = true, richText = false };
         style.normal.textColor = VttUiSkin.Text;
-        float width = Mathf.Min(320, Screen.width - 8);
-        float height = Mathf.Min(Screen.height - 8, style.CalcHeight(new GUIContent(info), width - 20) + 20);
-        Vector2 pointer = Mouse.current.position.ReadValue();
-        var rect = new Rect(Mathf.Clamp(pointer.x + 16, 4, Mathf.Max(4, Screen.width - width - 4)),
-            Mathf.Clamp(Screen.height - pointer.y + 16, 4, Mathf.Max(4, Screen.height - height - 4)), width, height);
+        float width = Mathf.Min(320, MenuScreenWidth - 8);
+        float height = Mathf.Min(MenuScreenHeight - 8, style.CalcHeight(new GUIContent(info), width - 20) + 20);
+        Vector2 pointer = Mouse.current.position.ReadValue() / MenuScale;
+        var rect = new Rect(Mathf.Clamp(pointer.x + 16, 4, Mathf.Max(4, MenuScreenWidth - width - 4)),
+            Mathf.Clamp(MenuScreenHeight - pointer.y + 16, 4, Mathf.Max(4, MenuScreenHeight - height - 4)), width, height);
         GUI.Box(rect, "", VttUiSkin.ImGuiPanel);
         GUI.Label(new Rect(rect.x + 10, rect.y + 10, width - 20, height - 20), info, style);
     }
@@ -1247,10 +1271,10 @@ public class TokenController : NetworkDraggable
         var data = JsonUtility.FromJson<PublicStatBlockView>(PublicStatBlockJson);
         if (data == null) { _showPublicStatBlock = false; return; }
         const float width = 300;
-        float height = Mathf.Min(440, Screen.height - 16);
+        float height = Mathf.Min(440, MenuScreenHeight - 16);
         float x = _menuRect.xMax + 8;
-        if (x + width > Screen.width) x = Mathf.Max(4, _menuRect.x - width - 8);
-        float y = Mathf.Clamp(_menuRect.y, 4, Mathf.Max(4, Screen.height - height - 4));
+        if (x + width > MenuScreenWidth) x = Mathf.Max(4, _menuRect.x - width - 8);
+        float y = Mathf.Clamp(_menuRect.y, 4, Mathf.Max(4, MenuScreenHeight - height - 4));
         _publicStatBlockRect = new Rect(x, y, width, height);
         GUI.Box(_publicStatBlockRect, "Статблок", VttUiSkin.ImGuiPanel);
         var viewport = new Rect(x + 8, y + 30, width - 16, height - 38);
@@ -1347,10 +1371,10 @@ public class TokenController : NetworkDraggable
     private void DrawStatBlockPopup()
     {
         const float width = 280;
-        float height = Mathf.Min(300, Screen.height - 16);
+        float height = Mathf.Min(300, MenuScreenHeight - 16);
         float x = _menuRect.xMax + 8;
-        if (x + width > Screen.width) x = Mathf.Max(4, _menuRect.x - width - 8);
-        float y = Mathf.Clamp(_menuRect.y + 330, 4, Mathf.Max(4, Screen.height - height - 4));
+        if (x + width > MenuScreenWidth) x = Mathf.Max(4, _menuRect.x - width - 8);
+        float y = Mathf.Clamp(_menuRect.y + 330, 4, Mathf.Max(4, MenuScreenHeight - height - 4));
         _statBlockPopupRect = new Rect(x, y, width, height);
         GUI.Box(_statBlockPopupRect, "Статблоки кампании", VttUiSkin.ImGuiPanel);
         var blocks = SceneFileStore.GetStatBlocks();
@@ -1381,10 +1405,10 @@ public class TokenController : NetworkDraggable
     private void DrawConditionPopup()
     {
         int width = 260;
-        float height = Mathf.Min(350, Screen.height - 16);
+        float height = Mathf.Min(350, MenuScreenHeight - 16);
         float x = _menuRect.xMax + 8;
-        if (x + width > Screen.width) x = Mathf.Max(4, _menuRect.x - width - 8);
-        float y = Mathf.Clamp(_menuRect.y + 180, 4, Mathf.Max(4, Screen.height - height - 4));
+        if (x + width > MenuScreenWidth) x = Mathf.Max(4, _menuRect.x - width - 8);
+        float y = Mathf.Clamp(_menuRect.y + 180, 4, Mathf.Max(4, MenuScreenHeight - height - 4));
         _conditionsRect = new Rect(x, y, width, height);
         GUI.Box(_conditionsRect, "Состояния", VttUiSkin.ImGuiPanel);
         var viewport = new Rect(_conditionsRect.x + 8, _conditionsRect.y + 28,
@@ -1395,7 +1419,8 @@ public class TokenController : NetworkDraggable
         {
             string id = TokenConditionCatalog.Ids[i];
             bool selected = Array.IndexOf(_masterData.conditionIds, id) >= 0;
-            if (GUI.Button(new Rect(0, i * 28, content.width, 26),
+            TokenConditionIcons.Draw(new Rect(0, i * 28 + 3, 20, 20), id);
+            if (GUI.Button(new Rect(24, i * 28, content.width - 24, 26),
                 (selected ? "✓  " : "　 ") + TokenConditionCatalog.DisplayName(id), VttUiSkin.ImGuiButton))
                 ServerToggleCondition(id);
         }
@@ -1475,8 +1500,8 @@ public class TokenController : NetworkDraggable
         GUI.Label(new Rect(3, 1, 154, 19), IsHero ? TokenName + " · герой" : TokenName, _statsLabelStyle);
         int currentHp = DisplayedCurrentHp;
         int maxHp = DisplayedMaxHp;
-        string conditions = string.Join(" · ", Array.ConvertAll(VisibleConditionIds,
-            TokenConditionCatalog.DisplayName));
+        string[] visibleConditions = VisibleConditionIds;
+        string hoveredCondition = null;
         if (currentHp >= 0 && maxHp > 0)
         {
             Rect bar = new Rect(5, 21, 150, 12);
@@ -1491,9 +1516,34 @@ public class TokenController : NetworkDraggable
         }
         else if (DisplayedArmorClass >= 0)
             GUI.Label(new Rect(3, 20, 154, 15), $"КД {DisplayedArmorClass}", _statsLabelStyle);
-        if (!string.IsNullOrEmpty(conditions))
-            GUI.Label(new Rect(3, 34, 154, 16), conditions, _statsLabelStyle);
+        int shown = Mathf.Min(visibleConditions.Length, 7);
+        for (int i = 0; i < shown; i++)
+            if (TokenConditionIcons.Draw(new Rect(4 + i * 19, 34, 17, 17), visibleConditions[i]))
+                hoveredCondition = TokenConditionCatalog.DisplayName(visibleConditions[i]);
+        if (visibleConditions.Length > shown)
+        {
+            var overflow = new Rect(137, 34, 20, 17);
+            GUI.Label(overflow, "+" + (visibleConditions.Length - shown), _statsLabelStyle);
+            if (overflow.Contains(Event.current.mousePosition))
+                hoveredCondition = string.Join(" · ", Array.ConvertAll(visibleConditions, TokenConditionCatalog.DisplayName));
+        }
         GUI.color = previousColor;
         GUI.matrix = previousMatrix;
+        if (hoveredCondition != null && Mouse.current != null)
+        {
+            Vector2 pointer = Mouse.current.position.ReadValue();
+            var style = new GUIStyle(VttUiSkin.ImGuiPanel)
+            {
+                fontSize = Mathf.RoundToInt(14 * LocalUiScale.Value), wordWrap = true,
+                padding = new RectOffset(8, 8, 6, 6)
+            };
+            style.normal.textColor = VttUiSkin.Text;
+            float width = Mathf.Min(Screen.width - 8, 320 * LocalUiScale.Value);
+            float height = style.CalcHeight(new GUIContent(hoveredCondition), width);
+            var tooltip = new Rect(Mathf.Clamp(pointer.x + 12, 4, Mathf.Max(4, Screen.width - width - 4)),
+                Mathf.Clamp(Screen.height - pointer.y + 12, 4, Mathf.Max(4, Screen.height - height - 4)), width, height);
+            GUI.Label(tooltip, hoveredCondition, style);
+        }
     }
 }
+

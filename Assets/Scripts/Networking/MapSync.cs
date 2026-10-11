@@ -13,6 +13,7 @@ public class MapSync : NetworkBehaviour
     private const string MSG_MAP_ACK = "MapAck";
     private const string MSG_MAP_PROGRESS = "MapProgress";
     private const string MSG_MAP_CANCEL = "MapCancel";
+    private const string MSG_MAP_CACHE_REPLY = "MapCacheReplyV1";
     private const int ChunkSize = 1000;
     private const int ChunksPerFrame = 4;
     private const int BatchChunks = 32;
@@ -52,6 +53,8 @@ public class MapSync : NetworkBehaviour
     private byte[] _cachedPng;
     private int _mapVersion;
     private uint _mapChecksum;
+    private byte[] _mapHashBytes;
+    private readonly Dictionary<ulong, (int Version, bool Hit)> _cacheReplies = new();
     private readonly Dictionary<ulong, int> _acknowledgedVersions = new();
     private readonly Dictionary<ulong, (int Version, int Count)> _receivedProgress = new();
     private readonly HashSet<(ulong Client, int Version)> _cancelledSends = new();
@@ -68,6 +71,7 @@ public class MapSync : NetworkBehaviour
         _activeSends.RemoveWhere(item => item.Client == client);
         _cancelledSends.RemoveWhere(item => item.Client == client);
         _receivedProgress.Remove(client);
+        _cacheReplies.Remove(client);
         ImageTransferUI.Remove($"map-send-{client}");
     }
     private readonly Dictionary<ulong, float> _lastMapRequestTime = new();
@@ -78,6 +82,7 @@ public class MapSync : NetworkBehaviour
     private int _contiguousReceived;
     private int _incomingBytes;
     private uint _incomingChecksum;
+    private string _incomingHash;
     private int _appliedVersion = -1;
     private int _retryCount;
     private float _lastProgressTime;
@@ -92,7 +97,12 @@ public class MapSync : NetworkBehaviour
         Instance = this;
     }
 
-    public override void OnNetworkSpawn() => RegisterHandlers();
+    public override void OnNetworkSpawn()
+    {
+        RegisterHandlers();
+        if (IsServer && _cachedPng == null)
+            SendMapToAll(mapController?.GetCurrentPngData() ?? System.Array.Empty<byte>());
+    }
 
     public override void OnNetworkDespawn()
     {
@@ -103,6 +113,10 @@ public class MapSync : NetworkBehaviour
         _contiguousReceived = 0;
         _acknowledgedVersions.Clear();
         _receivedProgress.Clear();
+        _cacheReplies.Clear();
+        _incomingVersion = _appliedVersion = _cancelledIncomingVersion = -1;
+        _incomingHash = null;
+        _retryCount = 0;
         _cancelledSends.Clear();
         _activeSends.Clear();
         ImageTransferUI.Remove("map-receive");
@@ -128,6 +142,7 @@ public class MapSync : NetworkBehaviour
             cmm.RegisterNamedMessageHandler(MSG_MAP_REQUEST, OnMapRequest);
             cmm.RegisterNamedMessageHandler(MSG_MAP_ACK, OnMapAck);
             cmm.RegisterNamedMessageHandler(MSG_MAP_PROGRESS, OnMapProgress);
+            cmm.RegisterNamedMessageHandler(MSG_MAP_CACHE_REPLY, OnMapCacheReply);
         }
         else
         {
@@ -149,6 +164,7 @@ public class MapSync : NetworkBehaviour
                 cmm.UnregisterNamedMessageHandler(MSG_MAP_REQUEST);
                 cmm.UnregisterNamedMessageHandler(MSG_MAP_ACK);
                 cmm.UnregisterNamedMessageHandler(MSG_MAP_PROGRESS);
+                cmm.UnregisterNamedMessageHandler(MSG_MAP_CACHE_REPLY);
             }
             else
             {
@@ -183,7 +199,7 @@ public class MapSync : NetworkBehaviour
 
     public void SendMapToAll(byte[] pngData)
     {
-        if (!IsServer || pngData == null || pngData.Length == 0 || pngData.Length > MaxMapBytes)
+        if (!IsServer || pngData == null || pngData.Length > MaxMapBytes)
         {
             Debug.LogError("[MapSync] Map is empty or exceeds the 16 MB network limit");
             return;
@@ -191,6 +207,8 @@ public class MapSync : NetworkBehaviour
         _cachedPng = pngData;
         _mapVersion++;
         _mapChecksum = ComputeChecksum(pngData);
+        using (var sha = System.Security.Cryptography.SHA256.Create()) _mapHashBytes = sha.ComputeHash(pngData);
+        _cacheReplies.Clear();
         _acknowledgedVersions.Clear();
         _receivedProgress.Clear();
         _cancelledSends.Clear();
@@ -289,16 +307,36 @@ public class MapSync : NetworkBehaviour
         uint checksum = _mapChecksum;
         int total = (data.Length + ChunkSize - 1) / ChunkSize;
         var cmm = NetworkManager.Singleton.CustomMessagingManager;
+        byte[] digest = _mapHashBytes;
+        if (digest == null)
+        {
+            using var sha = System.Security.Cryptography.SHA256.Create();
+            digest = sha.ComputeHash(data);
+        }
 
-        using (var writer = new FastBufferWriter(4 * sizeof(int), Allocator.Temp))
+        // The optional trailing digest is ignored by older clients; their normal transfer still works.
+        _cacheReplies.Remove(clientId);
+        using (var writer = new FastBufferWriter(4 * sizeof(int) + 32, Allocator.Temp))
         {
             writer.WriteValueSafe(version);
             writer.WriteValueSafe(total);
             writer.WriteValueSafe(data.Length);
             writer.WriteValueSafe(checksum);
+            writer.WriteBytesSafe(digest, 32);
             cmm.SendNamedMessage(MSG_MAP_META, clientId, writer);
         }
-        yield return null;
+        float cacheDeadline = Time.unscaledTime + 1f;
+        while (Time.unscaledTime < cacheDeadline && version == _mapVersion && generation == SendGeneration(clientId))
+        {
+            if (!NetworkManager.Singleton.ConnectedClients.ContainsKey(clientId) || _cancelledSends.Contains((clientId, version))) yield break;
+            if (_acknowledgedVersions.TryGetValue(clientId, out int cachedAck) && cachedAck == version)
+            {
+                if (outcome != null) outcome.AllChunksSent = true;
+                yield break;
+            }
+            if (_cacheReplies.TryGetValue(clientId, out var reply) && reply.Version == version && !reply.Hit) break;
+            yield return null;
+        }
         int first = _receivedProgress.TryGetValue(clientId, out var progress) && progress.Version == version ? progress.Count : 0;
         for (int i = first; i < total && version == _mapVersion && generation == SendGeneration(clientId); i++)
         {
@@ -354,7 +392,14 @@ public class MapSync : NetworkBehaviour
         reader.ReadValueSafe(out int total);
         reader.ReadValueSafe(out int bytes);
         reader.ReadValueSafe(out uint checksum);
-        if (bytes <= 0 || bytes > MaxMapBytes || total != (bytes + ChunkSize - 1) / ChunkSize)
+        string contentHash = null;
+        if (reader.TryBeginRead(32))
+        {
+            byte[] digest = new byte[32];
+            reader.ReadBytesSafe(ref digest, 32);
+            contentHash = System.BitConverter.ToString(digest).Replace("-", "");
+        }
+        if (bytes < 0 || bytes > MaxMapBytes || total != (bytes + ChunkSize - 1) / ChunkSize)
         {
             Debug.LogWarning("[MapSync] Invalid map metadata");
             return;
@@ -364,6 +409,38 @@ public class MapSync : NetworkBehaviour
         if (version < _incomingVersion) return;
         if (version == _incomingVersion && !_receivingMap && _retryCount >= MaxRetries)
             return;
+        if (bytes == 0)
+        {
+            var empty = System.Array.Empty<byte>();
+            if (checksum != ComputeChecksum(empty) || contentHash != null && contentHash != MapImageCache.Hash(empty)
+                || mapController == null) return;
+            mapController.ClearMapLocal();
+            _incomingVersion = _appliedVersion = version;
+            _incomingHash = contentHash;
+            _incomingBytes = _incomingTotalChunks = _contiguousReceived = _retryCount = 0;
+            _incomingChunks.Clear(); _receivingMap = false;
+            SendAck(version);
+            ImageTransferUI.Finish("map-receive", "Пустая карта применена");
+            return;
+        }
+        if (contentHash != null)
+        {
+            bool hit = mapController != null && mapController.TryApplyCachedMap(contentHash);
+            byte[] cached = hit ? mapController.GetCurrentPngData() : null;
+            hit = hit && cached != null && cached.Length == bytes && ComputeChecksum(cached) == checksum;
+            SendCacheReply(version, hit);
+            if (hit)
+            {
+                _incomingVersion = _appliedVersion = version;
+                _incomingHash = contentHash;
+                _incomingBytes = bytes; _incomingChecksum = checksum; _incomingTotalChunks = total;
+                _incomingChunks.Clear(); _contiguousReceived = 0; _retryCount = 0;
+                _receivingMap = false;
+                SendAck(version);
+                ImageTransferUI.Finish("map-receive", "Карта из кеша");
+                return;
+            }
+        }
         bool isNewVersion = version != _incomingVersion;
         if (version != _incomingVersion || !_receivingMap)
         {
@@ -373,6 +450,7 @@ public class MapSync : NetworkBehaviour
             _incomingTotalChunks = total;
             _incomingBytes = bytes;
             _incomingChecksum = checksum;
+            _incomingHash = contentHash;
             if (isNewVersion) _retryCount = 0;
         }
         else SendProgress(version, _contiguousReceived);
@@ -424,6 +502,7 @@ public class MapSync : NetworkBehaviour
             offset += chunk.Length;
         }
         if (offset != _incomingBytes || ComputeChecksum(full) != _incomingChecksum
+            || _incomingHash != null && MapImageCache.Hash(full) != _incomingHash
             || mapController == null || !mapController.ApplyImageLocal(full))
         {
             Debug.LogWarning($"[MapSync] Map version {_incomingVersion} failed validation or decoding");
@@ -448,6 +527,26 @@ public class MapSync : NetworkBehaviour
         using var writer = new FastBufferWriter(sizeof(int), Allocator.Temp);
         writer.WriteValueSafe(version);
         cmm.SendNamedMessage(MSG_MAP_ACK, NetworkManager.ServerClientId, writer);
+    }
+
+    private void SendCacheReply(int version, bool hit)
+    {
+        var cmm = NetworkManager.Singleton?.CustomMessagingManager;
+        if (cmm == null) return;
+        using var writer = new FastBufferWriter(sizeof(int) + sizeof(byte), Allocator.Temp);
+        writer.WriteValueSafe(version);
+        writer.WriteValueSafe((byte)(hit ? 1 : 0));
+        cmm.SendNamedMessage(MSG_MAP_CACHE_REPLY, NetworkManager.ServerClientId, writer);
+    }
+
+    private void OnMapCacheReply(ulong senderId, FastBufferReader reader)
+    {
+        if (!IsServer || !NetworkManager.ConnectedClients.ContainsKey(senderId) || !reader.TryBeginRead(sizeof(int) + sizeof(byte))) return;
+        reader.ReadValueSafe(out int version);
+        reader.ReadValueSafe(out byte hit);
+        if (version != _mapVersion || hit > 1) return;
+        _cacheReplies[senderId] = (version, hit == 1);
+        // A cache reply never grants readiness: only the normal applied-map ACK does.
     }
 
     private void OnMapAck(ulong senderId, FastBufferReader reader)

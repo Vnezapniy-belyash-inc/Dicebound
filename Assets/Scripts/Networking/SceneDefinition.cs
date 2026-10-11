@@ -72,6 +72,8 @@ using UnityEngine;
     public string targetSceneId;
     public int x, y;
     public bool markerEnabled;
+    public bool hasArrivalPoint;
+    public int arrivalX, arrivalY;
 }
 
 /// <summary>Master-only, scene-local token data. Never put this in replicated token state.</summary>
@@ -401,6 +403,7 @@ public static class SceneValidation
             Require(entry.scene.transitions.Length <= 256, "В сцене слишком много переходов.");
             var transitionIds = new HashSet<string>();
             foreach (var transition in entry.scene.transitions)
+            {
                 Require(transition != null && !string.IsNullOrWhiteSpace(transition.id)
                     && transition.id.Length <= 64 && transitionIds.Add(transition.id)
                     && !string.IsNullOrWhiteSpace(transition.title) && transition.title.Length <= 128
@@ -408,6 +411,14 @@ public static class SceneValidation
                     && transition.x >= -10000 && transition.x <= 10000
                     && transition.y >= -10000 && transition.y <= 10000,
                     "Некорректный переход между сценами.");
+                if (transition.hasArrivalPoint)
+                {
+                    var target = Array.Find(campaign.scenes, item => item.sceneId == transition.targetSceneId);
+                    Require(transition.arrivalX >= 0 && transition.arrivalX < target.scene.gridWidth
+                        && transition.arrivalY >= 0 && transition.arrivalY < target.scene.gridHeight,
+                        "Точка прибытия находится за пределами целевой сцены.");
+                }
+            }
         }
         Require(campaign.statBlocks != null && campaign.statBlocks.Length <= 4096,
             "Некорректный каталог статблоков.");

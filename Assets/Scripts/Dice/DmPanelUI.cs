@@ -721,7 +721,7 @@ public class DmPanelUI : MonoBehaviour
         Button(parent, "Переходы…", 130, 28, 220, -4, ToggleTransitionsPanel, VttUiSkin.Button);
         _transitionPanel = Box(parent, "SceneTransitions", VttUiSkin.Panel, 10);
         Place(_transitionPanel, new Vector2(0, 1), new Vector2(0, 1),
-            new Vector2(350, 450), new Vector2(0, -24));
+            new Vector2(350, 488), new Vector2(0, -24));
         Label(_transitionPanel.transform, "Переходы и перемещение токенов", 15, VttUiSkin.Text,
             TextAnchor.MiddleLeft, new Vector2(0, 1), new Vector2(0, 1),
             new Vector2(280, 28), new Vector2(10, -6), true);
@@ -779,6 +779,8 @@ public class DmPanelUI : MonoBehaviour
         heroScroll.vertical = true;
         Button(_transitionPanel.transform, "Перенести выбранные токены", 330, 32, 10, -404,
             TransferTokensToSelectedScene, new Color(0.10f, 0.30f, 0.48f));
+        Button(_transitionPanel.transform, "Точка прибытия на целевой сцене…", 330, 28, 10, -446,
+            ChooseTransitionArrival, VttUiSkin.Button);
         _transitionPanel.SetActive(false);
     }
 
@@ -931,9 +933,30 @@ public class DmPanelUI : MonoBehaviour
         string targetId = _selectedTransitionTargetId;
         var target = Array.Find(SceneFileStore.GetCampaignScenes(), item => item != null && item.sceneId == targetId);
         if (target == null) return;
+        var transition = Array.Find(SceneFileStore.GetActiveSceneTransitions(),
+            item => item.id == _editingTransitionId && item.targetSceneId == targetId);
+        string transitionId = transition?.id;
         DiceUI.Instance?.ConfirmAction("Перенести токены?",
             $"Выбранные токены ({tokenIds.Length}) будут перемещены в «{target.title}». Их HP, состояния, изображения и записи инициативы сохранятся.",
-            () => { SceneFileStore.TransferTokensToScene(targetId, tokenIds); _selectedTokenTransferIds.Clear(); RefreshSceneTransitions(true); RefreshTokenTransferList(true); });
+            () =>
+            {
+                if (transitionId != null) SceneFileStore.TransferTokensThroughTransition(transitionId, tokenIds);
+                else SceneFileStore.TransferTokensToScene(targetId, tokenIds);
+                if (SceneFileStore.ActiveSceneId == targetId) _selectedTokenTransferIds.Clear();
+                RefreshSceneTransitions(true); RefreshTokenTransferList(true);
+            });
+    }
+
+    private void ChooseTransitionArrival()
+    {
+        var transition = Array.Find(SceneFileStore.GetActiveSceneTransitions(), item => item.id == _editingTransitionId);
+        if (transition == null)
+        {
+            DiceUI.Instance?.ShowToolNotice("Сначала нажмите ✎ у сохранённого перехода в списке.");
+            return;
+        }
+        var target = Array.Find(SceneFileStore.GetCampaignScenes(), item => item.sceneId == transition.targetSceneId);
+        SceneArrivalPicker.Open(transition, target);
     }
 
     private static TokenController[] GetActiveSceneTokens()
@@ -1001,7 +1024,8 @@ public class DmPanelUI : MonoBehaviour
             string targetName = Array.Find(SceneFileStore.GetCampaignScenes(), scene => scene != null
                 && scene.sceneId == item.targetSceneId)?.title;
             signature.Append(item.id).Append(':').Append(item.title).Append(':').Append(targetName)
-                .Append(':').Append(item.x).Append(':').Append(item.y).Append(':').Append(item.markerEnabled).Append(';');
+                .Append(':').Append(item.x).Append(':').Append(item.y).Append(':').Append(item.markerEnabled)
+                .Append(':').Append(item.hasArrivalPoint).Append(':').Append(item.arrivalX).Append(':').Append(item.arrivalY).Append(';');
         }
         string snapshot = signature.ToString();
         if (!force && snapshot == _transitionSignature) return;
@@ -1014,7 +1038,8 @@ public class DmPanelUI : MonoBehaviour
             string targetTitle = Array.Find(SceneFileStore.GetCampaignScenes(), item => item != null
                 && item.sceneId == transition.targetSceneId)?.title ?? "Сцена удалена";
             int row = Array.IndexOf(transitions, transition);
-            Button(_transitionList, $"{transition.title} → {targetTitle} ({transition.x},{transition.y})", 178, 34, 0, -row * 42,
+            string arrivalInfo = transition.hasArrivalPoint ? $" · прибытие {transition.arrivalX},{transition.arrivalY}" : "";
+            Button(_transitionList, $"{transition.title} → {targetTitle} ({transition.x},{transition.y}){arrivalInfo}", 178, 34, 0, -row * 42,
                 () => { SceneFileStore.UseSceneTransition(transition.id); RefreshSceneTransitions(true); }, VttUiSkin.Button);
             Button(_transitionList, "✎", 32, 34, 182, -row * 42,
                 () => BeginEditSceneTransition(transition), VttUiSkin.Button);
@@ -1378,6 +1403,11 @@ public class DmPanelUI : MonoBehaviour
     private void ImportMapAsset()
     {
         MapController.Instance?.ImportImageFilesToLibrary();
+    }
+
+    public void ShowMapCatalogNotice(string message)
+    {
+        if (_mapCatalogNotice != null) _mapCatalogNotice.text = message;
     }
 
     private void AddCurrentMapAsset()
