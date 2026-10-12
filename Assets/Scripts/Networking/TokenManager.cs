@@ -296,6 +296,14 @@ public class TokenManager : MonoBehaviour
     public void ReassignHeroRecord(ulong oldClientId, ulong newClientId) =>
         _sessionState.ReassignPlayer(oldClientId, newClientId);
 
+    public string AllocateTokenName(string requested)
+    {
+        var existingNames = new List<string>();
+        foreach (var token in FindObjectsByType<TokenController>(FindObjectsInactive.Exclude))
+            if (token.IsSpawned) existingNames.Add(token.TokenName);
+        return _names.Allocate(requested, existingNames);
+    }
+
     private TokenController SpawnTokenForClient(Vector3 pos, ulong ownerId,
         bool isCopy = false, bool hidden = false, string requestedName = null,
         SceneToken restored = null, MasterTokenData masterData = null)
@@ -313,7 +321,8 @@ public class TokenManager : MonoBehaviour
         ulong controller = restored != null ? restored.unassigned ? ulong.MaxValue : ResolveParticipant(restored.ownerNickname) : ownerId;
         bool hero = restored != null ? restored.hero : _sessionState.IssueHero(ownerId, NetworkPermissions.IsHostClient(ownerId), isCopy);
         if (hero && controller != ulong.MaxValue && controller != NetworkManager.ServerClientId) _sessionState.RestoreHero(controller);
-        string basis = TokenNameRegistry.Normalize(requestedName ?? (hero ? "Герой" : "Токен"));
+        string basis = TokenNameRegistry.Normalize(requestedName ?? (!NetworkPermissions.IsHostClient(ownerId)
+            ? PlayerColors.GetNickname(ownerId) : null) ?? (hero ? "Герой" : "Токен"));
         var existingNames = new List<string>();
         foreach (var existing in FindObjectsByType<TokenController>(FindObjectsInactive.Exclude))
             if (existing.IsSpawned) existingNames.Add(existing.TokenName);

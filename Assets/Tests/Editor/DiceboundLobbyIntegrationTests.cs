@@ -340,6 +340,37 @@ public class DiceboundLobbyIntegrationTests
         deadline = Time.realtimeSinceStartup + 10;
         while ((PublicStatMask(remote) & 32) == 0 && Time.realtimeSinceStartup < deadline) yield return null;
         AssertPublicStatPrivacy(remote, false, true);
+        // Naming and rename authorization must hold on an actual connected client.
+        RuntimeType("PlayerColors").GetMethod("SetPlayer").Invoke(null,
+            new object[] { _client.LocalClientId, "Алексей", Color.blue });
+        var playerToken = (Component)tokens.GetType().GetMethod("SpawnTokenForClient", BindingFlags.Instance | BindingFlags.NonPublic)
+            .Invoke(tokens, new object[] { Vector3.zero, _client.LocalClientId, false, false, null, null, null });
+        Assert.That(tokenType.GetProperty("TokenName").GetValue(playerToken), Is.EqualTo("Алексей"));
+        ulong playerObjectId = playerToken.GetComponent<NetworkObject>().NetworkObjectId;
+        deadline = Time.realtimeSinceStartup + 10;
+        while (!_client.SpawnManager.SpawnedObjects.ContainsKey(playerObjectId) && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(_client.SpawnManager.SpawnedObjects.ContainsKey(playerObjectId), Is.True);
+        var playerRemote = _client.SpawnManager.SpawnedObjects[playerObjectId].GetComponent(tokenType);
+        Assert.That(tokenType.GetMethod("ServerRename").Invoke(playerToken, new object[] { 999UL, "Чужое имя" }), Is.False);
+        tokenType.GetMethod("RequestRename").Invoke(playerRemote, new object[] { "  Мой персонаж  " });
+        deadline = Time.realtimeSinceStartup + 10;
+        while ((string)tokenType.GetProperty("TokenName").GetValue(playerRemote) != "Мой персонаж" && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(tokenType.GetProperty("TokenName").GetValue(playerToken), Is.EqualTo("Мой персонаж"));
+        Assert.That(tokenType.GetProperty("TokenName").GetValue(playerRemote), Is.EqualTo("Мой персонаж"));
+        tokenType.GetMethod("RequestRename").Invoke(playerRemote, new object[] { "Private token" });
+        deadline = Time.realtimeSinceStartup + 10;
+        while ((string)tokenType.GetProperty("TokenName").GetValue(playerRemote) != "Private token 2" && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(tokenType.GetProperty("TokenName").GetValue(playerRemote), Is.EqualTo("Private token 2"));
+        tokenType.GetMethod("RequestRename").Invoke(playerToken, new object[] { "Имя от GM" });
+        deadline = Time.realtimeSinceStartup + 10;
+        while ((string)tokenType.GetProperty("TokenName").GetValue(playerRemote) != "Имя от GM" && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(tokenType.GetProperty("TokenName").GetValue(playerRemote), Is.EqualTo("Имя от GM"));
+        RuntimeType("GameMasterUndo").GetMethod("Undo").Invoke(null, null);
+        Assert.That(tokenType.GetProperty("TokenName").GetValue(playerToken), Is.EqualTo("Private token 2"));
+        var savedPlayer = RuntimeType("SceneFileStore").GetMethod("CaptureToken").Invoke(null,
+            new object[] { playerToken, _scene.GetComponent(RuntimeType("GridManager")) });
+        Assert.That(savedPlayer.GetType().GetField("name").GetValue(savedPlayer), Is.EqualTo("Private token 2"));
+        Assert.That(savedPlayer.GetType().GetField("ownerNickname").GetValue(savedPlayer), Is.EqualTo("Алексей"));
         string stableId = (string)tokenType.GetProperty("SceneId").GetValue(token);
         deadline = Time.realtimeSinceStartup + 10;
         while (ReceivedInitiativeHp(tracker, stableId) != 137 && Time.realtimeSinceStartup < deadline) yield return null;

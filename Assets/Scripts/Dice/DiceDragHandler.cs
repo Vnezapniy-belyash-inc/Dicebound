@@ -621,7 +621,7 @@ public class DiceDragHandler : MonoBehaviour
     private Vector3 GetDisplayPosition(IDice dice) =>
         dice is NetworkDice networkDice ? networkDice.DisplayPosition : dice.transform.position;
 
-    private bool TryGetPointerHit(Ray ray, out RaycastHit hit)
+    internal static bool TryGetPointerHit(Ray ray, out RaycastHit hit)
     {
         Physics.SyncTransforms();
         hit = default;

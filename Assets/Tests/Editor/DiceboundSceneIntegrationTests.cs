@@ -572,6 +572,58 @@ public class DiceboundSceneIntegrationTests
         Assert.That(publicBlock, Does.Not.Contain("Master secret"));
     }
 
+    [UnityTest]
+    public IEnumerator StationaryPointerKeepsTokenInfoVisibleAndClearsWhenItLeaves()
+    {
+        yield return new EnterPlayMode();
+        _root = new GameObject("Hover test");
+        var networkObject = new GameObject("Hover network");
+        _manager = networkObject.AddComponent<NetworkManager>();
+        var transport = networkObject.AddComponent<UnityTransport>();
+        transport.SetConnectionData("127.0.0.1", 17882);
+        _manager.NetworkConfig = new NetworkConfig { EnableSceneManagement = false, NetworkTransport = transport };
+        var prefab = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Token.prefab");
+        _manager.AddNetworkPrefab(prefab);
+        var tokens = Add("TokenManager", "Tokens");
+        tokens.GetType().GetField("tokenPrefab").SetValue(tokens, prefab.GetComponent<NetworkObject>());
+        foreach (var existingCamera in Camera.allCameras) existingCamera.enabled = false;
+        var cameraObject = new GameObject("Hover camera", typeof(Camera));
+        cameraObject.transform.SetParent(_root.transform);
+        cameraObject.tag = "MainCamera";
+        var camera = cameraObject.GetComponent<Camera>();
+        camera.transform.position = new Vector3(0, 10, 0);
+        camera.transform.rotation = Quaternion.Euler(90, 0, 0);
+        yield return null;
+        Assert.That(_manager.StartHost(), Is.True);
+        yield return null;
+        var token = (Component)Call(tokens, "CreateTokenAsHost", "Наведение", false);
+        var previousMouse = UnityEngine.InputSystem.Mouse.current;
+        var mouse = UnityEngine.InputSystem.InputSystem.AddDevice<UnityEngine.InputSystem.Mouse>();
+        mouse.MakeCurrent();
+        try
+        {
+            Vector3 point = camera.WorldToScreenPoint(token.transform.position);
+            UnityEngine.InputSystem.LowLevel.InputState.Change(mouse.position, new Vector2(point.x, point.y));
+            var hovered = token.GetType().GetField("_isHovered", BindingFlags.NonPublic | BindingFlags.Instance);
+            for (int i = 0; i < 6; i++)
+            {
+                yield return null;
+                var currentMouse = UnityEngine.InputSystem.Mouse.current;
+                var selectedToken = token.GetType().GetField("_pointerToken", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
+                Assert.That(hovered.GetValue(token), Is.True,
+                    $"Stationary hover frame {i}: mouse={currentMouse?.deviceId}/{mouse.deviceId}, position={currentMouse?.position.ReadValue()}, expected={point}, camera={Camera.main?.name}, rect={camera.pixelRect}, selected={selectedToken}, allowed={TypeOf("GameplayInputGate").GetProperty("AllowsWorldPointerInput").GetValue(null)}, spawned={token.GetComponent<NetworkObject>().IsSpawned}");
+                Assert.That(Call(token, "GetDisplayedTokenInfo"), Does.Contain("Наведение"));
+            }
+            UnityEngine.InputSystem.LowLevel.InputState.Change(mouse.position, new Vector2(-100, -100));
+            yield return null;
+            Assert.That(hovered.GetValue(token), Is.False);
+        }
+        finally
+        {
+            UnityEngine.InputSystem.InputSystem.RemoveDevice(mouse);
+            previousMouse?.MakeCurrent();
+        }
+    }
     [UnityTearDown]
     public IEnumerator Cleanup()
     {
