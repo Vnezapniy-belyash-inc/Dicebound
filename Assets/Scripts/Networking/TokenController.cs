@@ -14,7 +14,7 @@ using UnityEditor;
 /// Перемещение проходит через сервер; создатель и хост управляют меню.
 /// </summary>
 [RequireComponent(typeof(NetworkObject))]
-public class TokenController : NetworkDraggable
+public partial class TokenController : NetworkDraggable
 {
     [Header("Portrait")]
     public GameObject portraitQuad; // Quad для картинки
@@ -49,6 +49,26 @@ public class TokenController : NetworkDraggable
     public Vector3 CommittedPosition => _netCommitted.Value;
     public ulong ControllerClientId => _netController.Value;
     public bool EveryoneCanMove => _netSharedMove.Value;
+    public bool TryGetScreenRect(Camera camera, out Rect rect)
+        => ProjectScreenBounds(camera, portraitQuad != null ? portraitQuad.GetComponent<Renderer>() : null, out rect);
+
+    private bool ProjectScreenBounds(Camera camera, Renderer renderer, out Rect rect)
+    {
+        rect = default;
+        if (camera == null || renderer == null) return false;
+        var bounds = renderer.bounds;
+        Vector2 min = new(float.PositiveInfinity, float.PositiveInfinity), max = new(float.NegativeInfinity, float.NegativeInfinity);
+        for (int i = 0; i < 8; i++)
+        {
+            var p = bounds.center + Vector3.Scale(bounds.extents, new Vector3((i & 1) == 0 ? -1 : 1, (i & 2) == 0 ? -1 : 1, (i & 4) == 0 ? -1 : 1));
+            var s = camera.WorldToScreenPoint(p + DisplayPosition - transform.position);
+            if (s.z <= 0) return false;
+            var point = new Vector2(s.x, Screen.height - s.y);
+            min = Vector2.Min(min, point); max = Vector2.Max(max, point);
+        }
+        rect = Rect.MinMaxRect(min.x, min.y, max.x, max.y);
+        return rect.width > 1 && rect.height > 1;
+    }
     private string _localSceneId = Guid.NewGuid().ToString("N");
     private readonly NetworkVariable<FixedString512Bytes> _netSceneId = new(
         default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
@@ -103,7 +123,9 @@ public class TokenController : NetworkDraggable
     protected override bool CanStartLocalDrag => IsVisibleToLocalPlayer && CanControlClient(NetworkManager.LocalClientId)
         && !(IsHost && FogManager.Instance?.Preview == true);
     protected override bool CanClientStartDrag(ulong client) =>
-        CanControlClient(client) && (FogManager.Instance == null || FogManager.Instance.CanSeeToken(client, this));
+        CanControlClient(client) && (NetworkPermissions.IsHostClient(client)
+            || !HostSceneCurtain.IsCurtainDown && HostSceneCurtain.Instance?.IsClientSynchronizing(client) != true)
+        && (FogManager.Instance == null || FogManager.Instance.CanSeeToken(client, this));
     public bool CanControlClient(ulong client) => NetworkPermissions.IsHostClient(client)
         || !IsHidden && (ControllerClientId == client || EveryoneCanMove);
 
@@ -338,6 +360,14 @@ public class TokenController : NetworkDraggable
     public void ServerRestoreAssignment(ulong client)
     {
         if (IsServer) { _netController.Value = client; _netSpawnerClientId.Value = client; }
+    }
+
+    public void ServerReassignController(ulong previous, ulong current)
+    {
+        if (!IsServer || ControllerClientId != previous) return;
+        AbortServerDrag();
+        _netController.Value = current;
+        FogManager.Instance?.MarkDirty();
     }
 
     public MasterTokenData CaptureMasterData()
@@ -630,11 +660,13 @@ public class TokenController : NetworkDraggable
         _netVisionFeet.Value = feet;
     }
 
-    protected override void OnServerDragStarted() { _dragStartCommitted = CommittedPosition; }
+    protected override bool ReplicateDragPreview(ulong client) => NetworkPermissions.IsHostClient(client);
+    protected override void OnServerDragStarted() { ClearMovementRequest("Предыдущее перемещение отменено."); _dragStartCommitted = CommittedPosition; }
 
     protected override void OnServerDragFinished(Vector3 velocity, Vector3 spin, bool cancel)
     {
         if (cancel) { RestorePosition(_dragStartCommitted); return; }
+        if (ReviewPlayerMovement(FinishingDragClient, transform.position)) return;
         SnapAuthoritative();
         if (!cancel && (_dragStartCommitted - transform.position).sqrMagnitude > 0.000001f && NetworkPermissions.IsHostClient(FinishingDragClient))
         {
@@ -660,6 +692,7 @@ public class TokenController : NetworkDraggable
     private void Update()
     {
         UpdateDragState();
+        UpdateMovementRequest();
         UpdateTokenPointer();
         if (_showMenu && Keyboard.current?.escapeKey.wasPressedThisFrame == true) CloseMenu();
         if (_showMenu && (SceneEditor.IsEditing || FogManager.IsManualEditing || !IsVisibleToLocalPlayer || !GameplayInputGate.AllowsImGuiOverlays)) CloseMenu();
@@ -876,14 +909,35 @@ public class TokenController : NetworkDraggable
     public void RequestRename(string name)
     {
         if (!IsSpawned || !IsVisibleToLocalPlayer || (!IsSpawner && !IsHost)
-            || string.IsNullOrWhiteSpace(name)) return;
+            || string.IsNullOrWhiteSpace(name))
+        {
+            _renamePending = false;
+            _renameStatus = "Имя не изменено. Проверьте имя и назначение токена у мастера.";
+            DiceUI.Instance?.ShowToolNotice(_renameStatus);
+            return;
+        }
         RequestRenameServerRpc(new FixedString128Bytes(TokenNameRegistry.Normalize(name)));
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     private void RequestRenameServerRpc(FixedString128Bytes name, RpcParams rpcParams = default)
     {
-        ServerRename(rpcParams.Receive.SenderClientId, name.ToString());
+        ulong sender = rpcParams.Receive.SenderClientId;
+        bool accepted = ServerRename(sender, name.ToString());
+        RenameResultRpc(accepted, new FixedString128Bytes(TokenName), RpcTarget.Single(sender, RpcTargetUse.Temp));
+    }
+
+    [Rpc(SendTo.SpecifiedInParams)]
+    private void RenameResultRpc(bool accepted, FixedString128Bytes actualName, RpcParams rpcParams = default)
+    {
+        _renamePending = false;
+        if (accepted)
+        {
+            _nameInput = actualName.ToString();
+            _renameStatus = "Имя сохранено: " + _nameInput;
+        }
+        else _renameStatus = "Нет прав на переименование. Попросите мастера назначить вам токен.";
+        DiceUI.Instance?.ShowToolNotice(_renameStatus);
     }
 
     public bool ServerRename(ulong sender, string name)
@@ -893,7 +947,8 @@ public class TokenController : NetworkDraggable
         string basis = TokenNameRegistry.Normalize(name);
         if (basis == TokenName) return true;
         string previousName = TokenName, previousBase = NameBase;
-        string allocated = TokenManager.Instance.AllocateTokenName(basis);
+        string allocated = TokenManager.Instance.AllocateRenamedTokenName(basis, this);
+        if (allocated == TokenName && basis == NameBase) return true;
         if (NetworkPermissions.IsHostClient(sender))
         {
             string id = SceneId;
@@ -918,6 +973,7 @@ public class TokenController : NetworkDraggable
     private string _visionInput = "0";
     private string _visionError;
     private bool _visionEditing;
+    private bool _masterEditing;
     private static int _menuClosedFrame = -1;
     private string _masterCurrentHpInput = "0", _masterMaxHpInput = "0", _masterArmorClassInput = "10";
     private string _masterStatBlockInput = "";
@@ -934,6 +990,9 @@ public class TokenController : NetworkDraggable
     private static TokenController _pointerToken;
     private string _nameInput = "";
     private bool _nameEditing;
+    private bool _renamePending;
+    private float _renameRequestedAt;
+    private string _renameStatus;
     private Vector2 _tokenInfoScroll;
     private bool HasPublicStatBlock => !ShowMasterStats && !string.IsNullOrEmpty(PublicStatBlockJson);
     public bool CanEditMasterStats => ShowMasterStats;
@@ -964,10 +1023,12 @@ public class TokenController : NetworkDraggable
     }
 
     public static bool IsMenuTextFocused => _activeMenuToken != null &&
-        _activeMenuToken._showMenu && (_activeMenuToken._visionEditing || _activeMenuToken._nameEditing);
-    private float MenuScale => Mathf.Min(LocalUiScale.Value,
-        Mathf.Max(0.25f, (Screen.height - 8f) / Mathf.Max(1f, _menuRect.height)),
-        Mathf.Max(0.25f, (Screen.width - 8f) / 320f));
+        _activeMenuToken._showMenu && (_activeMenuToken._visionEditing || _activeMenuToken._nameEditing || _activeMenuToken._masterEditing);
+    private Vector2 _menuScroll;
+    private float _menuContentHeight;
+    private float _hoverSince;
+    private bool _wasHovered;
+    private float MenuScale => Mathf.Min(LocalUiScale.Value, Mathf.Max(0.5f, (Screen.width - 8f) / 320f));
     private float MenuScreenWidth => Screen.width / MenuScale;
     private float MenuScreenHeight => Screen.height / MenuScale;
     public static bool IsPointerOverMenu
@@ -991,6 +1052,7 @@ public class TokenController : NetworkDraggable
         if (_showMenu) _menuClosedFrame = Time.frameCount;
         _showMenu = false;
         _visionEditing = false;
+        _masterEditing = false;
         _nameEditing = false;
         _conditionsPopup = false;
         _statBlockPopup = false;
@@ -1007,6 +1069,7 @@ public class TokenController : NetworkDraggable
     // Poll once per frame, including while the pointer is stationary.
     private void UpdateTokenPointer()
     {
+        _wasHovered = _isHovered;
         _isHovered = false;
         var camera = Camera.main;
         var mouse = Mouse.current;
@@ -1033,6 +1096,7 @@ public class TokenController : NetworkDraggable
 
         if (!GameplayInputGate.AllowsWorldPointerInput) return;
         _isHovered = true;
+        if (!_wasHovered) _hoverSince = Time.unscaledTime;
 
         var mouse = Mouse.current;
         if (mouse != null && mouse.rightButton.wasPressedThisFrame &&
@@ -1046,6 +1110,7 @@ public class TokenController : NetworkDraggable
             _showMenu = true;
             _nameInput = TokenName;
             _nameEditing = false;
+            _renameStatus = null;
             _visionInput = VisionFeet.ToString();
             _visionError = null;
             _visionEditing = false;
@@ -1057,11 +1122,13 @@ public class TokenController : NetworkDraggable
             _statBlockPopup = false;
             Vector2 mousePos = mouse.position.ReadValue();
             bool ownActions = IsSpawner && !(IsHost && !ShowMasterStats);
-            float height = ShowMasterStats ? 744 : 156 + (ownActions ? 146 : 0) + (HasPublicStatBlock ? 62 : 0);
+            float height = ShowMasterStats ? 782 : 156 + (ownActions ? 184 : 0) + (HasPublicStatBlock ? 62 : 0);
+            _menuScroll = Vector2.zero;
+            _menuContentHeight = height;
             _menuRect = new Rect(
                 mousePos.x,
                 Screen.height - mousePos.y,
-                260, height);
+                280, height);
             _menuRect.x /= MenuScale;
             _menuRect.y /= MenuScale;
             ClampMenuToScreen();
@@ -1126,7 +1193,7 @@ public class TokenController : NetworkDraggable
             (paths) => onPicked(paths.Length > 0 ? paths[0] : null),
             () => onPicked(null),
             SimpleFileBrowser.FileBrowser.PickMode.Files,
-            false, null, null, "Выберите изображение", "Select");
+            false, null, null, "Выберите изображение", "Выбрать");
 #endif
     }
 
@@ -1143,6 +1210,7 @@ public class TokenController : NetworkDraggable
 
     private void ClampMenuToScreen()
     {
+        if (_menuContentHeight > 0) _menuRect.height = Mathf.Min(_menuContentHeight, MenuScreenHeight - 12);
         _menuRect.x = Mathf.Clamp(_menuRect.x, 4, Mathf.Max(4, MenuScreenWidth - _menuRect.width - 4));
         _menuRect.y = Mathf.Clamp(_menuRect.y, 4, Mathf.Max(4, MenuScreenHeight - _menuRect.height - 4));
     }
@@ -1172,156 +1240,184 @@ public class TokenController : NetworkDraggable
         if (!ShowMasterStats) { _conditionsPopup = false; _statBlockPopup = false; }
 
         GUI.Box(_menuRect, "", VttUiSkin.ImGuiPanel);
-        var titleStyle = new GUIStyle(GUI.skin.label)
+        Rect screenMenu = _menuRect;
+        _menuScroll = GUI.BeginScrollView(screenMenu, _menuScroll,
+            new Rect(0, 0, 260, Mathf.Max(screenMenu.height, _menuContentHeight)));
+        _menuRect = new Rect(0, 0, 260, _menuContentHeight);
+        try
         {
-            fontSize = 13,
-            fontStyle = FontStyle.Bold,
-            alignment = TextAnchor.MiddleLeft
-        };
-        titleStyle.normal.textColor = VttUiSkin.Muted;
-        var infoStyle = new GUIStyle(GUI.skin.label) { fontSize = 13, wordWrap = true, richText = false };
-        infoStyle.normal.textColor = VttUiSkin.Text;
-        string info = GetDisplayedTokenInfo();
-        var infoViewport = new Rect(_menuRect.x + 10, _menuRect.y + 8, 240, 96);
-        float infoHeight = Mathf.Max(96, infoStyle.CalcHeight(new GUIContent(info), 222));
-        _tokenInfoScroll = GUI.BeginScrollView(infoViewport, _tokenInfoScroll, new Rect(0, 0, 222, infoHeight));
-        GUI.Label(new Rect(0, 0, 222, infoHeight), info, infoStyle);
-        GUI.EndScrollView();
+            var titleStyle = new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 13,
+                fontStyle = FontStyle.Bold,
+                alignment = TextAnchor.MiddleLeft
+            };
+            titleStyle.normal.textColor = VttUiSkin.Muted;
+            var infoStyle = new GUIStyle(GUI.skin.label) { fontSize = 13, wordWrap = true, richText = false };
+            infoStyle.normal.textColor = VttUiSkin.Text;
+            string info = GetDisplayedTokenInfo();
+            var infoViewport = new Rect(_menuRect.x + 10, _menuRect.y + 8, 240, 96);
+            float infoHeight = Mathf.Max(96, infoStyle.CalcHeight(new GUIContent(info), 222));
+            _tokenInfoScroll = GUI.BeginScrollView(infoViewport, _tokenInfoScroll, new Rect(0, 0, 222, infoHeight));
+            GUI.Label(new Rect(0, 0, 222, infoHeight), info, infoStyle);
+            GUI.EndScrollView();
 
-        float y = _menuRect.y + 112f;
-        if (ownActions || ShowMasterStats)
-        {
-            GUI.SetNextControlName("TokenNameInput");
-            _nameInput = GUI.TextField(new Rect(_menuRect.x + 10, y, 156, 28), _nameInput, 128);
-            _nameEditing = GUI.GetNameOfFocusedControl() == "TokenNameInput";
-            bool submitName = GUI.Button(new Rect(_menuRect.x + 172, y, 78, 28), "Имя ✓", VttUiSkin.ImGuiButton);
-            if (_nameEditing && Event.current.type == EventType.KeyDown && (Event.current.keyCode == KeyCode.Return || Event.current.keyCode == KeyCode.KeypadEnter))
+            float y = _menuRect.y + 112f;
+            if (ownActions || ShowMasterStats)
             {
-                submitName = true;
-                Event.current.Use();
+                GUI.SetNextControlName("TokenNameInput");
+                _nameInput = GUI.TextField(new Rect(_menuRect.x + 10, y, 156, 28), _nameInput, 128);
+                _nameEditing = GUI.GetNameOfFocusedControl() == "TokenNameInput";
+                bool submitName = GUI.Button(new Rect(_menuRect.x + 172, y, 78, 28), "Сохранить", VttUiSkin.ImGuiButton);
+                if (_nameEditing && Event.current.type == EventType.KeyDown && (Event.current.keyCode == KeyCode.Return || Event.current.keyCode == KeyCode.KeypadEnter))
+                {
+                    submitName = true;
+                    Event.current.Use();
+                }
+                if (submitName && !string.IsNullOrWhiteSpace(_nameInput))
+                {
+                    _renamePending = true;
+                    _renameRequestedAt = Time.unscaledTime;
+                    _renameStatus = "Сохраняем имя…";
+                    RequestRename(_nameInput);
+                    GUI.FocusControl(null);
+                    _nameEditing = false;
+                }
+                y += 38;
+                if (_renamePending && Time.unscaledTime - _renameRequestedAt > 8f)
+                {
+                    _renamePending = false;
+                    _renameStatus = "Нет ответа от мастера. Попробуйте ещё раз.";
+                    DiceUI.Instance?.ShowToolNotice(_renameStatus);
+                }
+                if (!string.IsNullOrEmpty(_renameStatus))
+                {
+                    GUI.Label(new Rect(_menuRect.x + 10, y, 240, 36), _renameStatus, infoStyle);
+                }
+                y += 38;
             }
-            if (submitName && !string.IsNullOrWhiteSpace(_nameInput))
+            if (canLoad)
             {
-                RequestRename(_nameInput);
-                GUI.FocusControl(null);
-                _nameEditing = false;
+                if (GUI.Button(new Rect(_menuRect.x + 10, y, 240, 30),
+                    "Загрузить изображение", VttUiSkin.ImGuiButton))
+                {
+                    LoadImageDialog();
+                    CloseMenu();
+                    return;
+                }
+
+                y += 36f;
             }
-            y += 38;
-        }
-        if (canLoad)
-        {
-            if (GUI.Button(new Rect(_menuRect.x + 10, y, 240, 30),
-                "Загрузить изображение", VttUiSkin.ImGuiButton))
+
+            if (canCopy && GUI.Button(new Rect(_menuRect.x + 10, y, 240, 30),
+                "Копировать", VttUiSkin.ImGuiButton))
             {
-                LoadImageDialog();
+                RequestCopy();
                 CloseMenu();
                 return;
             }
 
-            y += 36f;
-        }
+            if (canCopy)
+                y += 36f;
 
-        if (canCopy && GUI.Button(new Rect(_menuRect.x + 10, y, 240, 30),
-            "Копировать", VttUiSkin.ImGuiButton))
-        {
-            RequestCopy();
-            CloseMenu();
-            return;
-        }
-
-        if (canCopy)
-            y += 36f;
-
-        if (ShowMasterStats)
-        {
-            if (GUI.Button(new Rect(_menuRect.x + 10, y, 240, 30),
-                InitiativeTracker.Instance != null && InitiativeTracker.Instance.ContainsToken(SceneId)
-                    ? "Уже в инициативе" : "Добавить в инициативу", VttUiSkin.ImGuiButton))
+            if (ShowMasterStats)
             {
-                InitiativeTracker.Instance?.AddToken(this);
-                CloseMenu();
-                return;
+                if (GUI.Button(new Rect(_menuRect.x + 10, y, 240, 30),
+                    InitiativeTracker.Instance != null && InitiativeTracker.Instance.ContainsToken(SceneId)
+                        ? "Уже в инициативе" : "Добавить в инициативу", VttUiSkin.ImGuiButton))
+                {
+                    InitiativeTracker.Instance?.AddToken(this);
+                    CloseMenu();
+                    return;
+                }
+                y += 36;
+                if (GUI.Button(new Rect(_menuRect.x + 10, y, 240, 30),
+                    IsHidden ? "Показать игрокам" : "Скрыть от игроков", VttUiSkin.ImGuiButton))
+                    RequestSetHidden(!IsHidden);
+                y += 36;
+                GUI.Label(new Rect(_menuRect.x + 12, y, 230, 22), "Зрение токена · футы", titleStyle);
+                y += 24;
+                if (GUI.Button(new Rect(_menuRect.x + 10, y, 48, 30), "−5", VttUiSkin.ImGuiButton))
+                    StepVision(-5);
+                bool enter = _visionEditing && Event.current.type == EventType.KeyDown &&
+                    (Event.current.keyCode == KeyCode.Return || Event.current.keyCode == KeyCode.KeypadEnter);
+                GUI.SetNextControlName("TokenVisionFeet");
+                _visionInput = GUI.TextField(new Rect(_menuRect.x + 64, y, 72, 30), _visionInput, 4);
+                _visionEditing = GUI.GetNameOfFocusedControl() == "TokenVisionFeet";
+                if (GUI.Button(new Rect(_menuRect.x + 142, y, 48, 30), "+5", VttUiSkin.ImGuiButton))
+                    StepVision(5);
+                if (GUI.Button(new Rect(_menuRect.x + 196, y, 54, 30), "OK", VttUiSkin.ImGuiButton) || enter)
+                {
+                    ApplyVisionInput();
+                    if (enter) Event.current.Use();
+                }
+                y += 34;
+                GUI.Label(new Rect(_menuRect.x + 12, y, 238, 22),
+                    _visionError ?? $"0 — без зрения · до {MaxVisionFeet} футов", titleStyle);
+                y += 26;
+                GUI.Label(new Rect(_menuRect.x + 12, y, 238, 20), "HP · максимум · КД", titleStyle);
+                y += 20;
+                GUI.SetNextControlName("TokenCurrentHp");
+                _masterCurrentHpInput = GUI.TextField(new Rect(_menuRect.x + 10, y, 66, 28), _masterCurrentHpInput);
+                GUI.SetNextControlName("TokenMaxHp");
+                _masterMaxHpInput = GUI.TextField(new Rect(_menuRect.x + 82, y, 66, 28), _masterMaxHpInput);
+                GUI.SetNextControlName("TokenArmorClass");
+                _masterArmorClassInput = GUI.TextField(new Rect(_menuRect.x + 154, y, 42, 28), _masterArmorClassInput);
+                if (GUI.Button(new Rect(_menuRect.x + 200, y, 50, 28), "OK", VttUiSkin.ImGuiButton))
+                    ApplyMasterInputs();
+                y += 32;
+                bool hideHp = GUI.Toggle(new Rect(_menuRect.x + 10, y, 240, 22), _masterData.hideHp,
+                    "Скрыть ХП от игроков");
+                if (hideHp != _masterData.hideHp) ServerSetMasterVisibility(hideHp, _masterData.hideConditions);
+                y += 22;
+                bool hideConditions = GUI.Toggle(new Rect(_menuRect.x + 10, y, 240, 22), _masterData.hideConditions,
+                    "Скрыть состояния от игроков");
+                if (hideConditions != _masterData.hideConditions) ServerSetMasterVisibility(_masterData.hideHp, hideConditions);
+                y += 22;
+                bool hideArmorClass = GUI.Toggle(new Rect(_menuRect.x + 10, y, 240, 22), _masterData.hideArmorClass,
+                    "Скрыть КД от игроков");
+                if (hideArmorClass != _masterData.hideArmorClass) ServerSetArmorClassVisibility(hideArmorClass);
+                y += 24;
+                if (GUI.Button(new Rect(_menuRect.x + 10, y, 240, 28), "Состояния…", VttUiSkin.ImGuiButton))
+                    _conditionsPopup = !_conditionsPopup;
+                y += 32;
+                var statBlock = Array.Find(SceneFileStore.GetStatBlocks(), item => item.id == _masterData.statBlockId);
+                GUI.Label(new Rect(_menuRect.x + 12, y, 238, 20),
+                    statBlock == null ? "Статблок не назначен" : "Статблок: " + statBlock.name, titleStyle);
+                y += 20;
+                GUI.SetNextControlName("TokenStatBlockId");
+                _masterStatBlockInput = GUI.TextField(new Rect(_menuRect.x + 10, y, 180, 28), _masterStatBlockInput, 64);
+                if (GUI.Button(new Rect(_menuRect.x + 196, y, 54, 28), "Список", VttUiSkin.ImGuiButton))
+                    _statBlockPopup = !_statBlockPopup;
+                if (Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Return
+                    && GUI.GetNameOfFocusedControl() == "TokenStatBlockId")
+                    ApplyStatBlockInput();
             }
-            y += 36;
-            if (GUI.Button(new Rect(_menuRect.x + 10, y, 240, 30),
-                IsHidden ? "Показать игрокам" : "Скрыть от игроков", VttUiSkin.ImGuiButton))
-                RequestSetHidden(!IsHidden);
-            y += 36;
-            GUI.Label(new Rect(_menuRect.x + 12, y, 230, 22), "Зрение токена · футы", titleStyle);
-            y += 24;
-            if (GUI.Button(new Rect(_menuRect.x + 10, y, 48, 30), "−5", VttUiSkin.ImGuiButton))
-                StepVision(-5);
-            bool enter = _visionEditing && Event.current.type == EventType.KeyDown &&
-                (Event.current.keyCode == KeyCode.Return || Event.current.keyCode == KeyCode.KeypadEnter);
-            GUI.SetNextControlName("TokenVisionFeet");
-            _visionInput = GUI.TextField(new Rect(_menuRect.x + 64, y, 72, 30), _visionInput, 4);
-            _visionEditing = GUI.GetNameOfFocusedControl() == "TokenVisionFeet";
-            if (GUI.Button(new Rect(_menuRect.x + 142, y, 48, 30), "+5", VttUiSkin.ImGuiButton))
-                StepVision(5);
-            if (GUI.Button(new Rect(_menuRect.x + 196, y, 54, 30), "OK", VttUiSkin.ImGuiButton) || enter)
+            else if (hasPublicStatBlock)
             {
-                ApplyVisionInput();
-                if (enter) Event.current.Use();
+                if (GUI.Button(new Rect(_menuRect.x + 10, y, 240, 30),
+                    _showPublicStatBlock ? "Скрыть статблок" : "Открыть статблок", VttUiSkin.ImGuiButton))
+                    _showPublicStatBlock = !_showPublicStatBlock;
+                y += 36;
             }
-            y += 34;
-            GUI.Label(new Rect(_menuRect.x + 12, y, 238, 22),
-                _visionError ?? $"0 — без зрения · до {MaxVisionFeet} футов", titleStyle);
+            else
+                GUI.Label(new Rect(_menuRect.x + 12, y, 238, 22), $"Зрение: {VisionFeet} футов · задаёт мастер", titleStyle);
             y += 26;
-            GUI.Label(new Rect(_menuRect.x + 12, y, 238, 20), "HP · максимум · КД", titleStyle);
-            y += 20;
-            _masterCurrentHpInput = GUI.TextField(new Rect(_menuRect.x + 10, y, 66, 28), _masterCurrentHpInput);
-            _masterMaxHpInput = GUI.TextField(new Rect(_menuRect.x + 82, y, 66, 28), _masterMaxHpInput);
-            _masterArmorClassInput = GUI.TextField(new Rect(_menuRect.x + 154, y, 42, 28), _masterArmorClassInput);
-            if (GUI.Button(new Rect(_menuRect.x + 200, y, 50, 28), "OK", VttUiSkin.ImGuiButton))
-                ApplyMasterInputs();
-            y += 32;
-            bool hideHp = GUI.Toggle(new Rect(_menuRect.x + 10, y, 240, 22), _masterData.hideHp,
-                "Скрыть HP от игроков");
-            if (hideHp != _masterData.hideHp) ServerSetMasterVisibility(hideHp, _masterData.hideConditions);
-            y += 22;
-            bool hideConditions = GUI.Toggle(new Rect(_menuRect.x + 10, y, 240, 22), _masterData.hideConditions,
-                "Скрыть состояния от игроков");
-            if (hideConditions != _masterData.hideConditions) ServerSetMasterVisibility(_masterData.hideHp, hideConditions);
-            y += 22;
-            bool hideArmorClass = GUI.Toggle(new Rect(_menuRect.x + 10, y, 240, 22), _masterData.hideArmorClass,
-                "Скрыть КД от игроков");
-            if (hideArmorClass != _masterData.hideArmorClass) ServerSetArmorClassVisibility(hideArmorClass);
-            y += 24;
-            if (GUI.Button(new Rect(_menuRect.x + 10, y, 240, 28), "Состояния…", VttUiSkin.ImGuiButton))
-                _conditionsPopup = !_conditionsPopup;
-            y += 32;
-            var statBlock = Array.Find(SceneFileStore.GetStatBlocks(), item => item.id == _masterData.statBlockId);
-            GUI.Label(new Rect(_menuRect.x + 12, y, 238, 20),
-                statBlock == null ? "Статблок не назначен" : "Статблок: " + statBlock.name, titleStyle);
-            y += 20;
-            GUI.SetNextControlName("TokenStatBlockId");
-            _masterStatBlockInput = GUI.TextField(new Rect(_menuRect.x + 10, y, 180, 28), _masterStatBlockInput, 64);
-            if (GUI.Button(new Rect(_menuRect.x + 196, y, 54, 28), "Список", VttUiSkin.ImGuiButton))
-                _statBlockPopup = !_statBlockPopup;
-            if (Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Return
-                && GUI.GetNameOfFocusedControl() == "TokenStatBlockId")
-                ApplyStatBlockInput();
-        }
-        else if (hasPublicStatBlock)
-        {
-            if (GUI.Button(new Rect(_menuRect.x + 10, y, 240, 30),
-                _showPublicStatBlock ? "Скрыть статблок" : "Открыть статблок", VttUiSkin.ImGuiButton))
-                _showPublicStatBlock = !_showPublicStatBlock;
-            y += 36;
-        }
-        else
-            GUI.Label(new Rect(_menuRect.x + 12, y, 238, 22), $"Зрение: {VisionFeet} футов · задаёт GM", titleStyle);
-        y += 26;
 
-        if (canDelete && GUI.Button(new Rect(_menuRect.x + 10, y, 240, 30),
-            "Удалить токен", VttUiSkin.ImGuiDangerButton))
-        {
-            CloseMenu();
-            DiceUI.Instance?.ConfirmAction($"Удалить «{TokenName}»?",
-                "Токен исчезнет у всех участников сессии. Отменить удаление нельзя.",
-                RequestDespawn);
-        }
+            if (canDelete && GUI.Button(new Rect(_menuRect.x + 10, y, 240, 30),
+                "Удалить токен", VttUiSkin.ImGuiDangerButton))
+            {
+                CloseMenu();
+                DiceUI.Instance?.ConfirmAction($"Удалить «{TokenName}»?",
+                    ShowMasterStats ? "Токен исчезнет у всех участников сессии. Действие можно отменить."
+                        : "Токен исчезнет у всех участников сессии. Отменить удаление нельзя.",
+                    RequestDespawn);
+            }
 
+            string focused = GUI.GetNameOfFocusedControl();
+            _masterEditing = ShowMasterStats && (focused == "TokenCurrentHp" || focused == "TokenMaxHp" || focused == "TokenArmorClass" || focused == "TokenStatBlockId");
+        }
+        finally { GUI.EndScrollView(); _menuRect = screenMenu; }
         if (_conditionsPopup) DrawConditionPopup();
         if (_statBlockPopup) DrawStatBlockPopup();
         if (_showPublicStatBlock && hasPublicStatBlock) DrawPublicStatBlock();
@@ -1336,15 +1432,29 @@ public class TokenController : NetworkDraggable
 
     private void DrawTokenHover()
     {
+        if (!LocalControls.TokenHover || Time.unscaledTime - _hoverSince < 0.35f || IsLocalDragActiveAny()) return;
         string info = GetDisplayedTokenInfo();
         if (string.IsNullOrEmpty(info)) return;
+        var permitted = VisibleConditionIds;
+        if (permitted.Length > 3)
+        {
+            string full = "Состояния: " + string.Join(", ", Array.ConvertAll(permitted, TokenConditionCatalog.DisplayName));
+            string brief = "Состояния: " + string.Join(", ", Array.ConvertAll(permitted[..3], TokenConditionCatalog.DisplayName)) + " и ещё " + (permitted.Length - 3);
+            info = info.Replace(full, brief);
+        }
+        if (info.Length > 260) info = info.Substring(0, char.IsHighSurrogate(info[259]) ? 259 : 260) + "…";
+        info += "\nПКМ — действия и подробности";
         var style = new GUIStyle(GUI.skin.label) { fontSize = 14, wordWrap = true, richText = false };
         style.normal.textColor = VttUiSkin.Text;
-        float width = Mathf.Min(320, MenuScreenWidth - 8);
+        float width = Mathf.Min(Mathf.Clamp(style.CalcSize(new GUIContent(info)).x + 20, 110, 300), MenuScreenWidth - 8);
         float height = Mathf.Min(MenuScreenHeight - 8, style.CalcHeight(new GUIContent(info), width - 20) + 20);
         Vector2 pointer = Mouse.current.position.ReadValue() / MenuScale;
-        var rect = new Rect(Mathf.Clamp(pointer.x + 16, 4, Mathf.Max(4, MenuScreenWidth - width - 4)),
-            Mathf.Clamp(MenuScreenHeight - pointer.y + 16, 4, Mathf.Max(4, MenuScreenHeight - height - 4)), width, height);
+        float x = pointer.x + 18;
+        if (x + width > MenuScreenWidth - 4) x = pointer.x - width - 18;
+        float y = MenuScreenHeight - pointer.y + 18;
+        if (y + height > MenuScreenHeight - 4) y = MenuScreenHeight - pointer.y - height - 18;
+        var rect = new Rect(Mathf.Clamp(x, 4, Mathf.Max(4, MenuScreenWidth - width - 4)),
+            Mathf.Clamp(y, 4, Mathf.Max(4, MenuScreenHeight - height - 4)), width, height);
         GUI.Box(rect, "", VttUiSkin.ImGuiPanel);
         GUI.Label(new Rect(rect.x + 10, rect.y + 10, width - 20, height - 20), info, style);
     }
@@ -1353,53 +1463,42 @@ public class TokenController : NetworkDraggable
     {
         var data = JsonUtility.FromJson<PublicStatBlockView>(PublicStatBlockJson);
         if (data == null) { _showPublicStatBlock = false; return; }
-        const float width = 300;
+        float width = Mathf.Min(340, MenuScreenWidth - 8);
         float height = Mathf.Min(440, MenuScreenHeight - 16);
         float x = _menuRect.xMax + 8;
         if (x + width > MenuScreenWidth) x = Mathf.Max(4, _menuRect.x - width - 8);
         float y = Mathf.Clamp(_menuRect.y, 4, Mathf.Max(4, MenuScreenHeight - height - 4));
         _publicStatBlockRect = new Rect(x, y, width, height);
         GUI.Box(_publicStatBlockRect, "Статблок", VttUiSkin.ImGuiPanel);
-        var viewport = new Rect(x + 8, y + 30, width - 16, height - 38);
-        const float line = 24;
-        float contentHeight = 44;
-        if ((data.visibleFields & StatBlockPublicFields.Description) != 0) contentHeight += 120;
-        if ((data.visibleFields & StatBlockPublicFields.Actions) != 0)
-            foreach (var action in data.actions ?? Array.Empty<StatBlockPublicAction>())
-                contentHeight += 48 + Mathf.Min(4, (action?.description?.Length ?? 0) / 48) * 16;
-        contentHeight += line * 7;
-        var content = new Rect(0, 0, viewport.width - 16, contentHeight);
-        _publicStatBlockScroll = GUI.BeginScrollView(viewport, _publicStatBlockScroll, content);
-        float cy = 0;
-        void Row(string label) { GUI.Label(new Rect(4, cy, content.width - 8, line), label); cy += line; }
-        if ((data.visibleFields & StatBlockPublicFields.Name) != 0) Row(data.name);
-        if ((data.visibleFields & StatBlockPublicFields.Size) != 0) Row("Размер: " + data.size);
-        if ((data.visibleFields & StatBlockPublicFields.CreatureType) != 0) Row("Тип: " + data.creatureType);
-        if ((data.visibleFields & StatBlockPublicFields.Alignment) != 0) Row("Мировоззрение: " + data.alignment);
-        if ((data.visibleFields & StatBlockPublicFields.ArmorClass) != 0) Row("КД: " + data.armorClass);
-        if ((data.visibleFields & StatBlockPublicFields.HitPoints) != 0) Row("ХП: " + data.hitPoints);
-        if ((data.visibleFields & StatBlockPublicFields.Speed) != 0) Row("Скорость: " + data.speed);
+        var rows = new System.Collections.Generic.List<string>();
+        if ((data.visibleFields & StatBlockPublicFields.Name) != 0) rows.Add(data.name);
+        if ((data.visibleFields & StatBlockPublicFields.Size) != 0) rows.Add("Размер: " + data.size);
+        if ((data.visibleFields & StatBlockPublicFields.CreatureType) != 0) rows.Add("Тип: " + data.creatureType);
+        if ((data.visibleFields & StatBlockPublicFields.Alignment) != 0) rows.Add("Мировоззрение: " + data.alignment);
+        if ((data.visibleFields & StatBlockPublicFields.ArmorClass) != 0) rows.Add("КД: " + data.armorClass);
+        if ((data.visibleFields & StatBlockPublicFields.HitPoints) != 0) rows.Add("ХП: " + data.hitPoints);
+        if ((data.visibleFields & StatBlockPublicFields.Speed) != 0) rows.Add("Скорость: " + data.speed);
         if ((data.visibleFields & StatBlockPublicFields.Abilities) != 0)
-            Row($"СИЛ {data.strength}  ЛОВ {data.dexterity}  ТЕЛ {data.constitution}  ИНТ {data.intelligence}  МДР {data.wisdom}  ХАР {data.charisma}");
-        if ((data.visibleFields & StatBlockPublicFields.ChallengeRating) != 0) Row("Опасность: " + data.challengeRating);
-        if ((data.visibleFields & StatBlockPublicFields.Description) != 0 && !string.IsNullOrEmpty(data.description))
-        {
-            float descHeight = Mathf.Min(120, 28 + data.description.Length / 48f * 16);
-            GUI.Label(new Rect(4, cy, content.width - 8, descHeight), data.description, GUI.skin.textArea);
-            cy += descHeight + 4;
-        }
+            rows.Add($"СИЛ {data.strength}  ЛОВ {data.dexterity}  ТЕЛ {data.constitution}\nИНТ {data.intelligence}  МДР {data.wisdom}  ХАР {data.charisma}");
+        if ((data.visibleFields & StatBlockPublicFields.ChallengeRating) != 0) rows.Add("Опасность: " + data.challengeRating);
+        if ((data.visibleFields & StatBlockPublicFields.Description) != 0) rows.Add(data.description);
         if ((data.visibleFields & StatBlockPublicFields.Actions) != 0)
-        {
             foreach (var action in data.actions ?? Array.Empty<StatBlockPublicAction>())
-            {
-                Row(action?.name ?? "Действие");
-                string description = action?.description ?? string.Empty;
-                float textHeight = Mathf.Min(72, 20 + description.Length / 48f * 16);
-                GUI.Label(new Rect(8, cy, content.width - 12, textHeight), description, GUI.skin.label);
-                cy += textHeight;
-            }
+                rows.Add((action?.name ?? "Действие") + "\n" + (action?.description ?? ""));
+        if (data.truncated) rows.Add("… текст статблока сокращён");
+        var style = new GUIStyle(GUI.skin.label) { wordWrap = true, richText = false, fontSize = 14 };
+        style.normal.textColor = VttUiSkin.Text;
+        float textWidth = width - 42, contentHeight = 0;
+        foreach (string row in rows) if (!string.IsNullOrEmpty(row)) contentHeight += style.CalcHeight(new GUIContent(row), textWidth) + 8;
+        _publicStatBlockScroll = GUI.BeginScrollView(new Rect(x + 8, y + 30, width - 16, height - 38),
+            _publicStatBlockScroll, new Rect(0, 0, textWidth, contentHeight));
+        float cy = 0;
+        foreach (string row in rows)
+        {
+            if (string.IsNullOrEmpty(row)) continue;
+            float rowHeight = style.CalcHeight(new GUIContent(row), textWidth);
+            GUI.Label(new Rect(0, cy, textWidth, rowHeight), row, style); cy += rowHeight + 8;
         }
-        if (data.truncated) Row("… текст статблока сокращён");
         GUI.EndScrollView();
     }
 
@@ -1411,7 +1510,7 @@ public class TokenController : NetworkDraggable
             || current < 0 || maximum < 0 || current > maximum
             || current > 999999 || maximum > 999999 || armorClass < 0 || armorClass > 999)
         {
-            DiceUI.Instance?.ShowToolNotice("Проверьте HP, максимум HP и КД.");
+            DiceUI.Instance?.ShowToolNotice("Проверьте ХП, максимум ХП и КД.");
             return;
         }
         if (_masterData.currentHp != current || _masterData.maxHp != maximum || _masterData.armorClass != armorClass)
@@ -1573,9 +1672,38 @@ public class TokenController : NetworkDraggable
         if (IsHidden) GUI.color = new Color(previousColor.r, previousColor.g, previousColor.b, previousColor.a * 0.35f);
         _labelStyle.alignment = TextAnchor.MiddleCenter;
         _labelStyle.normal.textColor = VttUiSkin.Text;
-        GUI.Label(new Rect(0, 0, TokenLabelLayout.DesignWidth, TokenLabelLayout.DesignHeight), TokenName, _labelStyle);
+        string labelName = TokenName;
+        while (labelName.Length > 1 && _labelStyle.CalcSize(new GUIContent(labelName)).x > TokenLabelLayout.DesignWidth - 8)
+            labelName = labelName.Substring(0, labelName.Length - (labelName.Length >= 2 && char.IsLowSurrogate(labelName[^1]) && char.IsHighSurrogate(labelName[^2]) ? 2 : 1));
+        if (labelName.Length < TokenName.Length && labelName.Length > 1) labelName = labelName.TrimEnd() + "…";
+        GUI.Label(new Rect(0, 0, TokenLabelLayout.DesignWidth, TokenLabelLayout.DesignHeight), labelName, _labelStyle);
+        string hoveredCondition = null;
+        var conditions = VisibleConditionIds;
+        int icons = Mathf.Min(7, conditions.Length);
+        for (int i = 0; i < icons; i++)
+            if (TokenConditionIcons.Draw(new Rect(i * 20, -22, 18, 18), conditions[i]))
+                hoveredCondition = TokenConditionCatalog.DisplayName(conditions[i]);
+        if (conditions.Length > 7)
+        {
+            var overflow = new Rect(140, -22, 26, 20);
+            GUI.Label(overflow, "+" + (conditions.Length - 7), _labelStyle);
+            if (overflow.Contains(Event.current.mousePosition))
+                hoveredCondition = string.Join(", ", Array.ConvertAll(conditions, TokenConditionCatalog.DisplayName));
+        }
         GUI.color = previousColor;
         GUI.matrix = previousMatrix;
+        if (hoveredCondition != null && !DisplaySettingsUI.IsOpen && Mouse.current != null)
+        {
+            var tipStyle = new GUIStyle(GUI.skin.label) { wordWrap = true, richText = false, fontSize = 14 };
+            float width = Mathf.Min(280, tipStyle.CalcSize(new GUIContent(hoveredCondition)).x + 20);
+            float height = tipStyle.CalcHeight(new GUIContent(hoveredCondition), width - 16) + 16;
+            var pointer = Mouse.current.position.ReadValue();
+            float x = pointer.x + 18; if (x + width > Screen.width - 4) x = pointer.x - width - 18;
+            var rect = new Rect(Mathf.Clamp(x, 4, Mathf.Max(4, Screen.width - width - 4)),
+                Mathf.Clamp(Screen.height - pointer.y + 18, 4, Mathf.Max(4, Screen.height - height - 4)), width, height);
+            GUI.Box(rect, "", VttUiSkin.ImGuiPanel);
+            GUI.Label(new Rect(rect.x + 8, rect.y + 8, width - 16, height - 16), hoveredCondition, tipStyle);
+        }
     }
 }
 

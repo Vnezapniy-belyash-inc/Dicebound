@@ -48,4 +48,17 @@ public sealed class TokenNameRegistry
 
     public void Clear() { _used.Clear(); _next.Clear(); }
     public void Reserve(string name) => _used.Add(name);
+
+    // Renaming considers live tokens, not names previously allocated in this lobby.
+    // The caller excludes the token being renamed so repeated requests are stable.
+    public string AllocateRename(string requested, IEnumerable<string> otherNames)
+    {
+        var occupied = new HashSet<string>(otherNames, StringComparer.OrdinalIgnoreCase);
+        string basis = Normalize(requested);
+        string candidate = basis;
+        for (int suffix = 2; occupied.Contains(candidate); suffix++)
+            candidate = basis + " " + suffix;
+        Reserve(candidate);
+        return candidate;
+    }
 }

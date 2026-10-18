@@ -44,7 +44,7 @@ public abstract class NetworkDraggable : NetworkBehaviour
         return IsLocalDragActive(gesture);
     }
 
-    public void SetDragPreview(int gesture, Vector3 position) => _preview?.Move(gesture, position);
+    public void SetDragPreview(int gesture, Vector3 position) => _preview?.Move(gesture, ConstrainDragPreview(position));
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     private void BeginDragServerRpc(int gesture, RpcParams rpcParams = default) =>
@@ -86,7 +86,7 @@ public abstract class NetworkDraggable : NetworkBehaviour
     private void MoveOnServer(ulong client, int gesture, int sequence, Vector3 position)
     {
         if (!ValidDragVector(position) || !_lease.TryMove(client, gesture, sequence, Time.unscaledTimeAsDouble)) return;
-        transform.position = position;
+        if (ReplicateDragPreview(client)) transform.position = position;
     }
 
     public void EndDrag(int gesture, Vector3 position) => FinishDrag(gesture, position, Vector3.zero, Vector3.zero, false);
@@ -184,6 +184,9 @@ public abstract class NetworkDraggable : NetworkBehaviour
     }
 
     protected virtual void OnServerDragStarted() { }
+    // Token intentions must not move authoritative vision or reveal objects before release.
+    protected virtual bool ReplicateDragPreview(ulong client) => true;
+    protected virtual Vector3 ConstrainDragPreview(Vector3 position) => position;
     protected virtual bool CanStartServerDrag => true;
     protected virtual bool CanStartLocalDrag => true;
     protected virtual bool CanClientStartDrag(ulong client) => true;

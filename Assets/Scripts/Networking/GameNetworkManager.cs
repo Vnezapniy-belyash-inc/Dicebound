@@ -18,6 +18,18 @@ public class GameNetworkManager : MonoBehaviour
         Instance = this;
         DontDestroyOnLoad(gameObject);
         _networkManager = GetComponent<NetworkManager>();
+#if !UNITY_EDITOR
+        Application.wantsToQuit += PreserveOnQuit;
+#endif
+    }
+    private bool PreserveOnQuit() { SceneFileStore.PreserveBeforeShutdown(); return true; }
+    private void OnDestroy()
+    {
+#if !UNITY_EDITOR
+        Application.wantsToQuit -= PreserveOnQuit;
+#endif
+        UnregisterHeartbeatHandlers();
+        if (Instance == this) Instance = null;
     }
 
     private const string HeartbeatRequest = "SessionHeartbeatRequestV1";
@@ -92,18 +104,14 @@ public class GameNetworkManager : MonoBehaviour
         _heartbeatMessaging = null;
     }
 
-    private void OnDestroy()
-    {
-        UnregisterHeartbeatHandlers();
-        if (Instance == this) Instance = null;
-    }
-
     public bool ShutdownRequested { get; private set; }
     public bool LastStartedAsHost { get; private set; }
 
     public bool StartHost()
     {
         ConfigureTransport();
+        if (_networkManager == null || _networkManager.IsListening) return false;
+        SceneFileStore.BeginHostSession();
         ShutdownRequested = false;
         bool started = _networkManager != null && _networkManager.StartHost();
         if (started) LastStartedAsHost = true;
@@ -121,6 +129,7 @@ public class GameNetworkManager : MonoBehaviour
 
     public void Shutdown()
     {
+        SceneFileStore.PreserveBeforeShutdown();
         ShutdownRequested = true;
         _networkManager.Shutdown();
     }
@@ -140,6 +149,7 @@ public class GameNetworkManager : MonoBehaviour
 
         if (_networkManager.IsListening || _networkManager.ShutdownInProgress)
         {
+            SceneFileStore.PreserveBeforeShutdown();
             if (_networkManager.IsListening) _networkManager.Shutdown();
             for (int tick = 0; tick < 30
                 && (_networkManager.IsListening || _networkManager.ShutdownInProgress); tick++)

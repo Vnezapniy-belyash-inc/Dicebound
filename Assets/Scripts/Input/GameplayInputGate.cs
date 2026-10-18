@@ -17,6 +17,7 @@ public static class GameplayInputGate
     {
         get
         {
+            if (FunEffects.IsStampInputOpen) return true;
             if (TokenController.IsMenuTextFocused) return true;
             var es = EventSystem.current;
             if (es == null) return false;
@@ -35,6 +36,8 @@ public static class GameplayInputGate
 
     /// <summary>True when the pointer is over any UI element (EventSystem raycast).</summary>
     public static bool IsPointerOverUI =>
+        ActiveToolUI.IsPointerOverPanel || MovementReviewUI.IsOpen || MovementReviewUI.IsPointerOverButton || FunEffects.IsInputOpen ||
+        HostSceneCurtain.IsPointerOverSyncPanel ||
         PublicReferenceLibrary.IsOpen || PublicReferenceLibrary.IsPointerOverButton || SceneArrivalPicker.IsOpen || DisplaySettingsUI.IsOpen || DisplaySettingsUI.IsPointerOverButton ||
         TokenController.IsPointerOverMenu ||
         EventSystem.current != null && EventSystem.current.IsPointerOverGameObject();
@@ -44,14 +47,15 @@ public static class GameplayInputGate
         HostSceneCurtain.IsBlockingLocalPlayer;
 
     /// <summary>IMGUI overlays (measurement labels, token menus) — blocked for blinded clients.</summary>
-    public static bool AllowsImGuiOverlays => !PublicReferenceLibrary.IsOpen && !SceneArrivalPicker.IsOpen && !DisplaySettingsUI.IsOpen && !IsHostCurtainBlocking &&
+    public static bool AllowsImGuiOverlays => !MovementReviewUI.IsOpen && !FunEffects.IsStampInputOpen && !PublicReferenceLibrary.IsOpen && !SceneArrivalPicker.IsOpen && !DisplaySettingsUI.IsOpen && !IsHostCurtainBlocking &&
         !(DiceUI.Instance != null && DiceUI.Instance.IsConfirmationOpen);
 
     /// <summary>
     /// Keyboard shortcuts: panel toggles, map rotate, camera movement keys, debug keys, etc.
     /// </summary>
     public static bool AllowsKeyboardHotkeys =>
-        !PublicReferenceLibrary.IsOpen && !SceneArrivalPicker.IsOpen && !DisplaySettingsUI.IsOpen && !IsTextInputFocused && !IsHostCurtainBlocking &&
+        !MovementReviewUI.IsOpen && !FunEffects.IsInputOpen &&
+        !PublicReferenceLibrary.IsOpen && !SceneArrivalPicker.IsOpen && !DisplaySettingsUI.IsOpen && !IsTextInputFocused && !IsHostCurtainBlocking && !HostSceneCurtain.IsLocalSynchronizing &&
         !(DiceUI.Instance != null && DiceUI.Instance.IsConfirmationOpen);
 
     /// <summary>
@@ -59,5 +63,5 @@ public static class GameplayInputGate
     /// Blocked while typing or when the cursor is over UI.
     /// </summary>
     public static bool AllowsWorldPointerInput =>
-        !DisplaySettingsUI.IsOpen && !IsTextInputFocused && !IsPointerOverUI && !IsHostCurtainBlocking;
+        LastToolExitFrame != Time.frameCount && !DisplaySettingsUI.IsOpen && !IsTextInputFocused && !IsPointerOverUI && !IsHostCurtainBlocking && !HostSceneCurtain.IsLocalSynchronizing;
 }

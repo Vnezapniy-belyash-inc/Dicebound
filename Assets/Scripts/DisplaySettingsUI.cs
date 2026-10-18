@@ -14,7 +14,7 @@ public sealed class DisplaySettingsUI : MonoBehaviour
         {
             var mouse = UnityEngine.InputSystem.Mouse.current;
             if (mouse == null) return false;
-            float scale = Mathf.Min(LocalUiScale.Value, Mathf.Min(Screen.width / 520f, Screen.height / 380f));
+            float scale = Mathf.Min(LocalUiScale.Value, Mathf.Min(Screen.width / 600f, Screen.height / 460f));
             return new Rect(Screen.width - 144 * scale, 12 * scale, 132 * scale, 28 * scale).Contains(mouse.position.ReadValue());
         }
     }
@@ -26,11 +26,16 @@ public sealed class DisplaySettingsUI : MonoBehaviour
     private FullScreenMode _previousMode;
     private float _confirmationDeadline;
     private bool _pending;
+    private int _section;
+    private Vector2 _scroll;
+    private float _nextWindowCheck;
+    public static DisplaySettingsUI Instance { get; private set; }
+    public static void OpenCampaign() { if (Instance != null) { Instance._section = 2; Instance.SetOpen(true); } }
     private LocalUiScale _uiScale;
     private GameObject _inputBlocker;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
-    private static void ResetState() => IsOpen = false;
+    private static void ResetState() { IsOpen = false; Instance = null; }
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void Bootstrap()
@@ -42,6 +47,7 @@ public sealed class DisplaySettingsUI : MonoBehaviour
 
     private void Awake()
     {
+        Instance = this;
         _uiScale = gameObject.AddComponent<LocalUiScale>();
         _inputBlocker = new GameObject("SettingsInputBlocker", typeof(RectTransform), typeof(Canvas), typeof(GraphicRaycaster));
         _inputBlocker.transform.SetParent(transform, false);
@@ -88,12 +94,32 @@ public sealed class DisplaySettingsUI : MonoBehaviour
 
     private void Update()
     {
+#if !UNITY_EDITOR
+        // Keep controls readable in physically small resizable windows.
+        if (Time.unscaledTime >= _nextWindowCheck && Screen.fullScreenMode == FullScreenMode.Windowed
+            && (Screen.width < 960 || Screen.height < 640))
+        {
+            _nextWindowCheck = Time.unscaledTime + 1;
+            Screen.SetResolution(Mathf.Max(960, Screen.width), Mathf.Max(640, Screen.height), FullScreenMode.Windowed);
+        }
+#endif
         if (_pending && Time.realtimeSinceStartup >= _confirmationDeadline) Revert();
+        if (IsOpen && UnityEngine.InputSystem.Keyboard.current?.escapeKey.wasPressedThisFrame == true)
+        {
+            if (_pending) Revert();
+            else SetOpen(false);
+            GameplayInputGate.MarkToolExit();
+        }
     }
 
     private void SetOpen(bool open)
     {
         IsOpen = open;
+        if (open)
+        {
+            SceneEditor.Instance?.Deactivate(); FogManager.Instance?.StopManual();
+            MeasurementTool.Instance?.Deactivate(); EffectPaintTool.Instance?.Deactivate();
+        }
         _inputBlocker.SetActive(open);
     }
 
@@ -104,6 +130,8 @@ public sealed class DisplaySettingsUI : MonoBehaviour
         _previousHeight = Screen.height;
         _previousMode = Screen.fullScreenMode;
         var size = _resolutions[_resolutionIndex];
+        if (_modes[_modeIndex] == FullScreenMode.Windowed)
+            size = new Vector2Int(Mathf.Max(960, size.x), Mathf.Max(640, size.y));
         Screen.SetResolution(size.x, size.y, _modes[_modeIndex]);
         _pending = true;
         _confirmationDeadline = Time.realtimeSinceStartup + 15f;
@@ -137,61 +165,105 @@ public sealed class DisplaySettingsUI : MonoBehaviour
 
     private void OnGUI()
     {
-        var previousMatrix = GUI.matrix;
-        int previousDepth = GUI.depth;
+        if (MovementReviewUI.IsOpen) return;
+        var matrix = GUI.matrix; int depth = GUI.depth;
         GUI.depth = -1000;
-        float scale = Mathf.Min(LocalUiScale.Value, Mathf.Min(Screen.width / 520f, Screen.height / 380f));
+        float scale = Mathf.Min(LocalUiScale.Value, Mathf.Min(Screen.width / 600f, Screen.height / 460f));
         GUI.matrix = Matrix4x4.Scale(new Vector3(scale, scale, 1));
         float width = Screen.width / scale, height = Screen.height / scale;
         if (!IsOpen)
         {
             if (GUI.Button(new Rect(width - 144, height - 40, 132, 28), "Настройки", VttUiSkin.ImGuiButton))
-            {
-                SelectCurrent();
-                SetOpen(true);
-            }
+            { SelectCurrent(); SetOpen(true); }
         }
         else
         {
-            // A full-screen modal also consumes pointer events outside the settings window.
             GUI.Box(new Rect(0, 0, width, height), "", VttUiSkin.ImGuiPanel);
-            var panel = new Rect((width - 480) / 2, (height - 310) / 2, 480, 310);
-            GUI.BeginGroup(panel, VttUiSkin.ImGuiPanel);
-            GUI.Label(new Rect(20, 16, 420, 28), "Настройки экрана");
+            GUILayout.BeginArea(new Rect((width - 560) / 2, (height - 420) / 2, 560, 420), VttUiSkin.ImGuiPanel);
+            GUILayout.Space(10);
+            GUILayout.Label("Настройки", new GUIStyle(GUI.skin.label) { fontSize = 20 });
+            bool master = Unity.Netcode.NetworkManager.Singleton?.IsHost == true;
+            if (!master && _section == 2) _section = 0;
+            GUI.enabled = !_pending;
+            int section = GUILayout.Toolbar(_section, master ? new[] { "Экран", "Управление", "Кампания" } : new[] { "Экран", "Управление" }, GUILayout.Height(34));
+            if (section != _section) { _section = section; _scroll = Vector2.zero; }
+            GUI.enabled = true;
+            _scroll = GUILayout.BeginScrollView(_scroll);
+            var wrap = new GUIStyle(GUI.skin.label) { wordWrap = true, richText = false, fontSize = 14 };
             if (_pending)
             {
-                GUI.Label(new Rect(20, 64, 440, 50), "Сохранить изменения? Возврат через " + Mathf.CeilToInt(_confirmationDeadline - Time.realtimeSinceStartup) + " с.");
-                if (GUI.Button(new Rect(20, 136, 210, 36), "Сохранить", VttUiSkin.ImGuiButton)) Confirm();
-                if (GUI.Button(new Rect(250, 136, 210, 36), "Вернуть", VttUiSkin.ImGuiButton)) Revert();
+                GUILayout.Label("Сохранить изменения экрана? Возврат через " + Mathf.CeilToInt(Mathf.Max(0, _confirmationDeadline - Time.realtimeSinceStartup)) + " с.", wrap);
+                if (GUILayout.Button("Сохранить", VttUiSkin.ImGuiButton, GUILayout.Height(38))) Confirm();
+                if (GUILayout.Button("Вернуть прежние · Esc", VttUiSkin.ImGuiButton, GUILayout.Height(38))) Revert();
             }
-            else
+            else if (_section == 0)
             {
-                GUI.Label(new Rect(20, 56, 140, 28), "Разрешение");
+                GUILayout.Label("Личные настройки — применяются только на этом компьютере.", wrap);
+                GUILayout.Label("Минимальное окно: 960 × 640. Масштаб панелей подстраивается под доступное место.", wrap);
+                GUILayout.Space(12);
                 if (_resolutions.Count > 0)
                 {
                     var size = _resolutions[_resolutionIndex];
-                    GUI.Label(new Rect(195, 56, 190, 28), size.x + " × " + size.y);
-                    if (GUI.Button(new Rect(155, 54, 30, 28), "‹")) _resolutionIndex = (_resolutionIndex + _resolutions.Count - 1) % _resolutions.Count;
-                    if (GUI.Button(new Rect(420, 54, 30, 28), "›")) _resolutionIndex = (_resolutionIndex + 1) % _resolutions.Count;
+                    StepRow("Разрешение", size.x + " × " + size.y,
+                        () => _resolutionIndex = (_resolutionIndex + _resolutions.Count - 1) % _resolutions.Count,
+                        () => _resolutionIndex = (_resolutionIndex + 1) % _resolutions.Count);
                 }
-                GUI.Label(new Rect(20, 106, 130, 28), "Режим окна");
-                GUI.Label(new Rect(195, 106, 225, 28), _modeNames[_modeIndex]);
-                if (GUI.Button(new Rect(155, 104, 30, 28), "‹")) _modeIndex = (_modeIndex + _modes.Length - 1) % _modes.Length;
-                if (GUI.Button(new Rect(420, 104, 30, 28), "›")) _modeIndex = (_modeIndex + 1) % _modes.Length;
+                StepRow("Режим окна", _modeNames[_modeIndex],
+                    () => _modeIndex = (_modeIndex + _modes.Length - 1) % _modes.Length,
+                    () => _modeIndex = (_modeIndex + 1) % _modes.Length);
 #if UNITY_EDITOR
-                GUI.Label(new Rect(20, 152, 440, 28), "Экран изменяется в собранной игре.");
+                GUILayout.Label("Разрешение применяется в собранной игре.", wrap);
 #else
-                if (GUI.Button(new Rect(20, 150, 440, 32), "Применить", VttUiSkin.ImGuiButton)) Apply();
+                if (GUILayout.Button("Применить экран…", VttUiSkin.ImGuiButton, GUILayout.Height(34))) Apply();
 #endif
-                GUI.Label(new Rect(20, 192, 440, 24), "Масштаб интерфейса: " + Mathf.RoundToInt(LocalUiScale.Value * 100) + "%");
-                float nextScale = GUI.HorizontalSlider(new Rect(20, 223, 360, 20), LocalUiScale.Value, 0.75f, 1.5f);
-                if (Mathf.Abs(nextScale - LocalUiScale.Value) > 0.005f) _uiScale.SetScale(Mathf.Round(nextScale * 100f) / 100f);
-                if (GUI.Button(new Rect(395, 214, 65, 28), "100%")) _uiScale.SetScale(1f);
-                if (GUI.Button(new Rect(20, 250, 440, 36), "Закрыть", VttUiSkin.ImGuiButton)) SetOpen(false);
+                GUILayout.Space(14);
+                GUILayout.Label("Масштаб интерфейса: " + Mathf.RoundToInt(LocalUiScale.Value * 100) + "%", wrap);
+                float next = GUILayout.HorizontalSlider(LocalUiScale.Value, 0.75f, 1.5f, GUILayout.Height(24));
+                if (Mathf.Abs(next - LocalUiScale.Value) > 0.005f) _uiScale.SetScale(Mathf.Round(next * 100) / 100f);
+                if (GUILayout.Button("Вернуть масштаб 100%", GUILayout.Height(30))) _uiScale.SetScale(1);
             }
-            GUI.EndGroup();
+            else if (_section == 1)
+            {
+                GUILayout.Label("Скорость камеры: " + Mathf.RoundToInt(LocalControls.CameraSpeed * 100) + "%", wrap);
+                float speed = GUILayout.HorizontalSlider(LocalControls.CameraSpeed, 0.5f, 2f, GUILayout.Height(24));
+                if (Mathf.Abs(speed - LocalControls.CameraSpeed) > 0.01f) LocalControls.SetCameraSpeed(speed);
+                bool hover = GUILayout.Toggle(LocalControls.TokenHover, " Показывать краткие сведения при наведении", GUILayout.Height(32));
+                if (hover != LocalControls.TokenHover) LocalControls.SetTokenHover(hover);
+                GUILayout.Label("ПКМ по токену — действия и подробности.\nПеретаскивание в режиме «По клеткам» — один шаг.\nWASD / стрелки — камера · колёсико — приближение.\nF1 — свободная камера · T — колесо приколов.\nЛКМ — выбранный инструмент · Esc / ПКМ — закончить.\nEsc во время штриха — отменить текущий штрих.", wrap);
+                if (GUILayout.Button("Сбросить личные настройки управления", GUILayout.Height(32)))
+                { LocalControls.SetCameraSpeed(1); LocalControls.SetTokenHover(true); }
+            }
+            else
+            {
+                GUILayout.Label("Правила мастера сохраняются в файле кампании.", wrap);
+                GUILayout.Space(8);
+                GUILayout.Label("Перемещение игроков", wrap);
+                int policy = GUILayout.SelectionGrid((int)SceneFileStore.MovementPolicy,
+                    new[] { "Свободное", "Предупреждать", "Решает мастер", "По клеткам (по умолчанию)" }, 1, GUILayout.Height(128));
+                if (policy != (int)SceneFileStore.MovementPolicy) SceneFileStore.SetMovementPolicy((PlayerMovementPolicy)policy);
+                GUILayout.Label("По клеткам: одно перетаскивание — один шаг вверх, вниз, влево или вправо. Стены, закрытые двери и занятые клетки блокируют шаг. Мастер переносит без ограничений. В режимах подтверждения ожидание — до 30 секунд.", wrap);
+                var fog = FogManager.Instance;
+                if (fog != null)
+                {
+                    bool autosave = GUILayout.Toggle(fog.Autosave, " Автосохранение каждые 2 минуты", GUILayout.Height(30));
+                    bool history = GUILayout.Toggle(fog.SaveWithHistory, " Включать исследованные области в экспорт", GUILayout.Height(30));
+                    if (autosave != fog.Autosave || history != fog.SaveWithHistory) SceneFileStore.SetCampaignPreferences(autosave, history);
+                }
+            }
+            GUILayout.EndScrollView();
+            if (!_pending && GUILayout.Button("Готово · Esc", VttUiSkin.ImGuiButton, GUILayout.Height(36))) SetOpen(false);
+            GUILayout.EndArea();
         }
-        GUI.matrix = previousMatrix;
-        GUI.depth = previousDepth;
+        GUI.matrix = matrix; GUI.depth = depth;
+    }
+
+    private static void StepRow(string label, string value, Action previous, Action next)
+    {
+        GUILayout.Label(label);
+        GUILayout.BeginHorizontal();
+        if (GUILayout.Button(new GUIContent("‹", "Предыдущее значение"), GUILayout.Width(36), GUILayout.Height(30))) previous();
+        GUILayout.Label(value, new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter }, GUILayout.Height(30));
+        if (GUILayout.Button(new GUIContent("›", "Следующее значение"), GUILayout.Width(36), GUILayout.Height(30))) next();
+        GUILayout.EndHorizontal();
     }
 }

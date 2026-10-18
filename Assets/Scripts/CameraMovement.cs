@@ -105,7 +105,7 @@ public class CameraMovement : MonoBehaviour
     {
         // GM moves the map with the middle button; players pan their own view.
         if (m == null || NetworkManager.Singleton == null ||
-            !NetworkManager.Singleton.IsConnectedClient || NetworkManager.Singleton.IsHost)
+            !NetworkManager.Singleton.IsConnectedClient || NetworkManager.Singleton.IsHost && !SceneEditor.IsEditing && !FogManager.IsManualEditing)
             return;
         if (m.middleButton.wasPressedThisFrame)
         {
@@ -145,7 +145,7 @@ public class CameraMovement : MonoBehaviour
 
         Vector3 right = transform.right;
         Vector3 forward = Vector3.Cross(transform.right, Vector3.up);
-        transform.position += (right * input.x + forward * input.y) * (moveSpeed * Time.deltaTime);
+        transform.position += (right * input.x + forward * input.y) * (moveSpeed * LocalControls.CameraSpeed * Time.deltaTime);
     }
 
     void HandleNormalScroll(Mouse m)
@@ -155,7 +155,7 @@ public class CameraMovement : MonoBehaviour
         float scroll = m.scroll.ReadValue().y;
         if (Mathf.Approximately(scroll, 0f)) return;
 
-        transform.position += Vector3.down * (scroll * scrollSpeed);
+        transform.position += Vector3.down * (scroll * scrollSpeed * LocalControls.CameraSpeed);
     }
 
     // ══════════════════════════════════════════════
@@ -171,6 +171,7 @@ public class CameraMovement : MonoBehaviour
     void HandleFreeLook(Mouse m)
     {
         if (m == null) return;
+        if (SceneEditor.IsEditing || FogManager.IsManualEditing) return;
 
         bool rmb = m.rightButton.isPressed;
         if (GameplayInputGate.LastToolExitFrame == Time.frameCount)
@@ -206,7 +207,7 @@ public class CameraMovement : MonoBehaviour
         if (move.sqrMagnitude < 0.0001f) return;
 
         move.Normalize();
-        float speed = freeMoveSpeed;
+        float speed = freeMoveSpeed * LocalControls.CameraSpeed;
 
         // Shift — ускорение
         if (k.shiftKey.isPressed)

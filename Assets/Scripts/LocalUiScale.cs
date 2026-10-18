@@ -9,6 +9,7 @@ public sealed class LocalUiScale : MonoBehaviour
     public static float Value { get; private set; } = 1f;
     private readonly Dictionary<CanvasScaler, Baseline> _canvases = new();
     private float _nextRefresh;
+    private int _lastWidth, _lastHeight;
     private struct Baseline
     {
         public Vector2 reference;
@@ -33,7 +34,8 @@ public sealed class LocalUiScale : MonoBehaviour
 
     private void Update()
     {
-        if (Time.unscaledTime < _nextRefresh) return;
+        if (Time.unscaledTime < _nextRefresh && _lastWidth == Screen.width && _lastHeight == Screen.height) return;
+        _lastWidth = Screen.width; _lastHeight = Screen.height;
         _nextRefresh = Time.unscaledTime + 0.5f;
         Refresh();
     }
@@ -43,7 +45,7 @@ public sealed class LocalUiScale : MonoBehaviour
         var removed = new List<CanvasScaler>();
         foreach (var entry in _canvases) if (entry.Key == null) removed.Add(entry.Key);
         foreach (var scaler in removed) _canvases.Remove(scaler);
-        foreach (var scaler in Object.FindObjectsByType<CanvasScaler>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+        foreach (var scaler in Object.FindObjectsByType<CanvasScaler>(FindObjectsInactive.Include))
         {
             var canvas = scaler.GetComponent<Canvas>();
             if (canvas == null || canvas.renderMode == RenderMode.WorldSpace || !canvas.isRootCanvas) continue;
@@ -58,6 +60,7 @@ public sealed class LocalUiScale : MonoBehaviour
                 scaler.scaleFactor = baseline.factor * Value;
             ApplyScalerNow(scaler, canvas);
         }
+        foreach (var header in Object.FindObjectsByType<ResponsiveSessionHeader>(FindObjectsInactive.Exclude)) header.RefreshLayout();
         Canvas.ForceUpdateCanvases();
         foreach (var entry in _canvases)
         {
@@ -68,8 +71,9 @@ public sealed class LocalUiScale : MonoBehaviour
             {
                 if (child is not RectTransform panel || !panel.gameObject.activeInHierarchy || panel.anchorMin != panel.anchorMax) continue;
                 Rect bounds = ScreenBounds(panel, canvas);
+                float reserve = panel.anchorMin.y > 0.99f ? (DiceUI.Instance?.SessionHeaderPixelHeight ?? 0) + 12 : 0;
                 fit = Mathf.Min(fit, (Screen.width - 12f) / Mathf.Max(1f, bounds.width),
-                    (Screen.height - 12f) / Mathf.Max(1f, bounds.height));
+                    (Screen.height - reserve - 12f) / Mathf.Max(1f, bounds.height));
             }
             if (fit < 1f)
             {
@@ -89,6 +93,11 @@ public sealed class LocalUiScale : MonoBehaviour
                 else if (bounds.xMax > Screen.width - 6) shift.x = Screen.width - 6 - bounds.xMax;
                 if (bounds.yMin < 6) shift.y = 6 - bounds.yMin;
                 else if (bounds.yMax > Screen.height - 6) shift.y = Screen.height - 6 - bounds.yMax;
+                if (panel.anchorMin.y > 0.99f)
+                {
+                    float top = Screen.height - (DiceUI.Instance?.SessionHeaderPixelHeight ?? 0) - 12;
+                    if (bounds.yMax + shift.y > top) shift.y = top - bounds.yMax;
+                }
                 if (shift == Vector2.zero) continue;
                 var parent = panel.parent as RectTransform;
                 Camera camera = canvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : canvas.worldCamera;

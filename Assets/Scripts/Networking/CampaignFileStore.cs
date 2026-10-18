@@ -57,7 +57,9 @@ public static class CampaignFileStore
         if (info.Length > MaxCampaignFileBytes)
             throw new FormatException("Файл кампании превышает 384 МБ.");
 
-        var campaign = JsonUtility.FromJson<CampaignDefinition>(File.ReadAllText(path, Encoding.UTF8));
+        // Overwrite an initialized object so absent legacy preferences keep explicit defaults.
+        var campaign = new CampaignDefinition();
+        JsonUtility.FromJsonOverwrite(File.ReadAllText(path, Encoding.UTF8), campaign);
         SceneValidation.Validate(campaign);
         ValidateEmbeddedImageBudget(campaign);
         return campaign;
@@ -71,7 +73,8 @@ public static class CampaignFileStore
         if (info.Length > MaxCampaignFileBytes)
             throw new FormatException("Файл превышает 384 МБ.");
         string json = File.ReadAllText(path, Encoding.UTF8);
-        var campaign = JsonUtility.FromJson<CampaignDefinition>(json);
+        var campaign = new CampaignDefinition();
+        JsonUtility.FromJsonOverwrite(json, campaign);
         bool isCampaign = json.IndexOf("\"scenes\"", StringComparison.Ordinal) >= 0
             && json.IndexOf("\"campaignId\"", StringComparison.Ordinal) >= 0;
         if (isCampaign)

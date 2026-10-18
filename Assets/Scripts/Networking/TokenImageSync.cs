@@ -65,6 +65,19 @@ public class TokenImageSync : MonoBehaviour
         }
         return true;
     }
+
+    public static void GetClientPortraitProgress(ulong client, out int received, out int total)
+    {
+        received = total = 0;
+        foreach (var entry in PortraitVersions)
+        {
+            var token = FindToken(entry.Key);
+            if (token == null || !token.IsSpawned || !token.NetworkObject.IsNetworkVisibleTo(client)) continue;
+            total++;
+            if (Instance != null && Instance._downloadAcks.TryGetValue((client, entry.Key), out int ack)
+                && ack == entry.Value) received++;
+        }
+    }
     public static bool AllClientsHaveCurrentPortraits
     {
         get

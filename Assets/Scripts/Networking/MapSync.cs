@@ -27,6 +27,22 @@ public class MapSync : NetworkBehaviour
 
     public static MapSync Instance { get; private set; }
     public bool IsReceivingMap => _receivingMap;
+    public int LocalSceneVersion => IsServer ? _mapVersion : Mathf.Max(0, _appliedVersion);
+    public int LocalReceivedBytes => _receivingMap ? Mathf.Min(_incomingBytes, _incomingChunks.Count * ChunkSize) :
+        _appliedVersion == _incomingVersion ? _incomingBytes : 0;
+    public int LocalTotalBytes => _incomingBytes;
+    public int LocalRetryCount => _retryCount;
+    public bool LocalReceiveFailed => !_receivingMap && _incomingVersion > _appliedVersion && _retryCount >= MaxRetries;
+    public bool LocalReceiveCancelled => _incomingVersion >= 0 && _cancelledIncomingVersion == _incomingVersion;
+    public float LocalReceiveProgress => _incomingBytes > 0 ? (float)LocalReceivedBytes / _incomingBytes : 0f;
+    public void AllowLocalReceiveRetry()
+    {
+        if (IsServer || !LocalReceiveFailed && !LocalReceiveCancelled) return;
+        _cancelledIncomingVersion = -1;
+        _retryCount = 0;
+        _incomingChunks.Clear();
+        _contiguousReceived = 0;
+    }
     public bool HasClientCurrentMap(ulong client) => IsServer && _cachedPng != null
         && NetworkManager.ConnectedClients.ContainsKey(client)
         && _acknowledgedVersions.TryGetValue(client, out int version) && version == _mapVersion;

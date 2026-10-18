@@ -11,6 +11,30 @@ public class DiceboundSnapshotRecoveryTests
     private const BindingFlags Private = BindingFlags.NonPublic | BindingFlags.Instance;
     private static Type Runtime(string name) => Type.GetType(name + ", Assembly-CSharp", true);
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void ManualRetryAllowsTheSameMapVersionAfterFailureOrCancellation(bool cancelled)
+    {
+        var root = new GameObject("Manual map retry test");
+        try
+        {
+            root.AddComponent<NetworkObject>();
+            var type = Runtime("MapSync");
+            var sync = root.AddComponent(type);
+            type.GetField("_incomingVersion", Private).SetValue(sync, 7);
+            type.GetField("_appliedVersion", Private).SetValue(sync, 6);
+            type.GetField("_retryCount", Private).SetValue(sync, cancelled ? 0 : 3);
+            type.GetField("_cancelledIncomingVersion", Private).SetValue(sync, cancelled ? 7 : -1);
+            Assert.That(type.GetProperty(cancelled ? "LocalReceiveCancelled" : "LocalReceiveFailed").GetValue(sync), Is.True);
+            type.GetMethod("AllowLocalReceiveRetry").Invoke(sync, null);
+            Assert.That(type.GetProperty("LocalReceiveCancelled").GetValue(sync), Is.False);
+            Assert.That(type.GetProperty("LocalReceiveFailed").GetValue(sync), Is.False);
+            Assert.That(type.GetField("_incomingVersion", Private).GetValue(sync), Is.EqualTo(7));
+            Assert.That(type.GetField("_appliedVersion", Private).GetValue(sync), Is.EqualTo(6), "Retry must not mark an unapplied map as ready.");
+        }
+        finally { UnityEngine.Object.DestroyImmediate(root); }
+    }
+
     [TestCase(64, 96, 0)]
     [TestCase(64, 64, 3)]
     [TestCase(64, 0, 3)]

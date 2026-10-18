@@ -2,7 +2,7 @@ using Unity.Netcode;
 using Unity.Collections;
 using UnityEngine;
 
-/// <summary>Scene-local visual portal marker. Only the host activates a transition.</summary>
+/// <summary>Scene-local portal marker. Enabled visible markers can be activated by connected players.</summary>
 public sealed class SceneTransitionMarker : NetworkBehaviour
 {
     private const uint PrefabHash = 1759032741u;
@@ -12,6 +12,7 @@ public sealed class SceneTransitionMarker : NetworkBehaviour
     private static readonly System.Collections.Generic.HashSet<NetworkManager> RegisteredManagers = new();
     private string _transitionId;
     private GameObject _visual;
+    private Material _markerMaterial;
     private readonly System.Collections.Generic.Dictionary<ulong, float> _activationCooldown = new();
     public string TransitionId => _transitionId;
     public override void OnNetworkSpawn()
@@ -28,6 +29,7 @@ public sealed class SceneTransitionMarker : NetworkBehaviour
         _netTitle.OnValueChanged += OnTitleChanged;
         _netPosition.OnValueChanged += OnPositionChanged;
         _netIsEnabled.OnValueChanged += OnEnabledChanged;
+        UpdateDisplayedVisibility();
     }
 
     public override void OnNetworkDespawn()
@@ -43,13 +45,13 @@ public sealed class SceneTransitionMarker : NetworkBehaviour
         _transitionId = current.ToString();
     }
 
-    private void OnTitleChanged(FixedString128Bytes previous, FixedString128Bytes current)
+    private void OnTitleChanged(FixedString512Bytes previous, FixedString512Bytes current)
     {
         Refresh(current.ToString());
     }
     private readonly NetworkVariable<FixedString128Bytes> _netTransitionId = new(default,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-    private readonly NetworkVariable<FixedString128Bytes> _netTitle = new(default,
+    private readonly NetworkVariable<FixedString512Bytes> _netTitle = new(default,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     private readonly NetworkVariable<Vector3> _netPosition = new(Vector3.zero,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
@@ -57,8 +59,13 @@ public sealed class SceneTransitionMarker : NetworkBehaviour
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
     private void OnPositionChanged(Vector3 previous, Vector3 current) => transform.position = current;
-    private void OnEnabledChanged(bool previous, bool current)
+    private void OnEnabledChanged(bool previous, bool current) => UpdateDisplayedVisibility();
+    private void LateUpdate() => UpdateDisplayedVisibility();
+    private void UpdateDisplayedVisibility()
     {
+        bool playerView = !IsServer || FogManager.Instance?.Preview == true;
+        bool current = _netIsEnabled.Value && (!playerView || !HostSceneCurtain.IsBlockingLocalPlayer
+            && FogManager.Instance != null && FogManager.Instance.IsVisibleInDisplayedView(transform.position));
         var visual = transform.Find("Visual");
         if (visual != null && visual.gameObject.activeSelf != current) visual.gameObject.SetActive(current);
         var label = transform.Find("Label");
@@ -111,6 +118,8 @@ public sealed class SceneTransitionMarker : NetworkBehaviour
         if (!networkObject.IsNetworkVisibleTo(senderId)) return;
         var marker = networkObject.GetComponent<SceneTransitionMarker>();
         if (marker == null || string.IsNullOrEmpty(marker.TransitionId) || !marker._netIsEnabled.Value) return;
+        if (HostSceneCurtain.Instance?.IsClientSynchronizing(senderId) == true || FogManager.Instance == null
+            || !FogManager.Instance.IsVisible(marker.transform.position)) return;
         if (marker._activationCooldown.TryGetValue(senderId, out float lastRequest)
             && Time.unscaledTime - lastRequest < 0.5f) return;
         marker._activationCooldown[senderId] = Time.unscaledTime;
@@ -119,7 +128,7 @@ public sealed class SceneTransitionMarker : NetworkBehaviour
 
     public void Refresh(string title)
     {
-        if (!IsSpawned || IsServer) _netTitle.Value = new FixedString128Bytes(title ?? string.Empty);
+        if (!IsSpawned || IsServer) _netTitle.Value = new FixedString512Bytes(title ?? string.Empty);
         if (_visual == null || !_visual) return;
         var label = _visual.transform.parent.Find("Label");
         var text = label != null ? label.GetComponent<TextMesh>() : null;
@@ -147,7 +156,7 @@ public sealed class SceneTransitionMarker : NetworkBehaviour
         root.SetActive(true);
         var marker = root.GetComponent<SceneTransitionMarker>();
         marker._netTransitionId.Value = new FixedString128Bytes(transitionId);
-        marker._netTitle.Value = new FixedString128Bytes(title ?? string.Empty);
+        marker._netTitle.Value = new FixedString512Bytes(title ?? string.Empty);
         marker._netPosition.Value = position;
         marker._netIsEnabled.Value = true;
         marker.BuildVisual(position, transitionId, title);
@@ -188,9 +197,9 @@ public sealed class SceneTransitionMarker : NetworkBehaviour
             var shader = Shader.Find("Sprites/Default");
             if (shader != null)
             {
-                var material = new Material(shader);
-                material.color = new Color(0.15f, 0.85f, 0.95f, 0.82f);
-                renderer.material = material;
+                _markerMaterial = new Material(shader);
+                _markerMaterial.color = new Color(0.15f, 0.85f, 0.95f, 0.82f);
+                renderer.sharedMaterial = _markerMaterial;
             }
         }
         var label = new GameObject("Label", typeof(TextMesh));
@@ -203,7 +212,14 @@ public sealed class SceneTransitionMarker : NetworkBehaviour
         text.alignment = TextAlignment.Center;
         text.color = Color.white;
         text.fontSize = 48;
+        text.richText = false;
         _visual = visual;
+    }
+
+    public override void OnDestroy()
+    {
+        if (_markerMaterial != null) Destroy(_markerMaterial);
+        base.OnDestroy();
     }
 
     public void ActivateFromClick()

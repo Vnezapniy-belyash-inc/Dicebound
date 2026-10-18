@@ -183,8 +183,14 @@ public class MapController : NetworkBehaviour
         PickImageFile(path =>
         {
             if (string.IsNullOrEmpty(path)) return;
-            byte[] data = File.ReadAllBytes(path);
-            ApplyImage(data);
+            try
+            {
+                var info = new FileInfo(path);
+                if (!info.Exists || info.Length <= 0 || info.Length > 96L * 1024 * 1024)
+                    throw new FormatException("Выберите непустое изображение до 96 МБ.");
+                ApplyImage(File.ReadAllBytes(path));
+            }
+            catch (Exception ex) { DiceUI.Instance?.ShowToolNotice("Карта не загружена: " + ex.Message); }
         });
     }
 
@@ -335,7 +341,7 @@ public class MapController : NetworkBehaviour
             (paths) => onPicked(paths.Length > 0 ? paths[0] : null),
             () => onPicked(null),
             SimpleFileBrowser.FileBrowser.PickMode.Files,
-            false, null, null, "Выберите изображение", "Select");
+            false, null, null, "Выберите изображение", "Выбрать");
 #endif
     }
 
@@ -349,7 +355,8 @@ public class MapController : NetworkBehaviour
             DiceUI.Instance?.ShowToolNotice("Исходная карта превышает 96 МБ.");
             return;
         }
-        if (!ApplyImageInternal(pngData)) return;
+        if (!ApplyImageInternal(pngData))
+        { DiceUI.Instance?.ShowToolNotice("Не удалось прочитать карту. Прежняя карта сохранена."); return; }
         MapSync.Instance?.SendMapToAll(_currentImageBytes);
         SceneFileStore.ResetCurrentMapAssetLink();
     }
@@ -421,6 +428,7 @@ public class MapController : NetworkBehaviour
     public void SetScale(float scale)
     {
         if (!IsHost) return;
+        if (!SceneValidation.Finite(scale)) { DiceUI.Instance?.ShowToolNotice("Введите конечное число масштаба от 0,1 до 5."); return; }
         scale = Mathf.Clamp(scale, minScale, maxScale);
         if (IsServer) _netScale.Value = scale;
         else RequestScaleServerRpc(scale);
@@ -435,7 +443,7 @@ public class MapController : NetworkBehaviour
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     private void RequestScaleServerRpc(float scale, RpcParams rpcParams = default)
     {
-        if (!NetworkPermissions.IsHostClient(rpcParams.Receive.SenderClientId))
+        if (!NetworkPermissions.IsHostClient(rpcParams.Receive.SenderClientId) || !SceneValidation.Finite(scale))
             return;
 
         _netScale.Value = Mathf.Clamp(scale, minScale, maxScale);

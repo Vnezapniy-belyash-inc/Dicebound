@@ -38,9 +38,38 @@ public class LateJoinSync : MonoBehaviour
     private readonly Dictionary<ulong, int> _sceneWorldAcks = new();
     private readonly Dictionary<ulong, List<ulong>> _worldManifests = new();
     private readonly Dictionary<ulong, float> _nextStateRetry = new();
+    private readonly Dictionary<ulong, float> _nextManualRetry = new();
 
     public bool HasClientCurrentWorld(ulong client) => _sceneWorldExpectedVersions.TryGetValue(client, out int expected)
         && _sceneWorldAcks.TryGetValue(client, out int ack) && ack == expected;
+
+    // Each bit describes a confirmed applied stage, rather than bytes merely sent by the host.
+    public byte GetClientSyncStages(ulong client)
+    {
+        byte stages = 0;
+        if (MapSync.Instance?.HasClientCurrentMap(client) == true) stages |= 1;
+        if (HasClientCurrentWorld(client)) stages |= 2;
+        if (SceneEditor.Instance?.HasClientCurrentRevision(client) == true) stages |= 4;
+        if (FogManager.Instance?.HasClientCurrentRevision(client) == true) stages |= 8;
+        if (TokenImageSync.HasClientCurrentPortraits(client) && HasClientCurrentWorld(client)) stages |= 16;
+        if (InitiativeTracker.Instance == null || InitiativeTracker.Instance.HasClientCurrentState(client)) stages |= 32;
+        return stages;
+    }
+
+    public int LocalWorldObjectCount
+    {
+        get
+        {
+            int received = 0;
+            var nm = NetworkManager.Singleton;
+            if (nm?.SpawnManager == null) return 0;
+            foreach (var chunk in _manifestChunks.Values)
+                foreach (ulong id in chunk)
+                    if (_goneWorldObjects.Contains(id) || nm.SpawnManager.SpawnedObjects.ContainsKey(id)) received++;
+            return received;
+        }
+    }
+    public int LocalWorldObjectTotal => _incomingManifestVersion < 0 ? -1 : _incomingManifestCount;
 
     public bool IsClientSceneReady(ulong client) => NetworkManager.Singleton != null
         && NetworkManager.Singleton.IsServer && NetworkManager.Singleton.ConnectedClients.ContainsKey(client)
@@ -145,6 +174,7 @@ public class LateJoinSync : MonoBehaviour
         _sceneWorldAcks.Clear();
         _worldManifests.Clear();
         _nextStateRetry.Clear();
+        _nextManualRetry.Clear();
     }
 
     private void OnClientStopped(bool wasHost)
@@ -356,6 +386,7 @@ public class LateJoinSync : MonoBehaviour
         _sceneWorldAcks.Remove(clientId);
         _worldManifests.Remove(clientId);
         _nextStateRetry.Remove(clientId);
+        _nextManualRetry.Remove(clientId);
     }
 
     private void OnClientReady(ulong clientId, FastBufferReader reader)
@@ -365,6 +396,16 @@ public class LateJoinSync : MonoBehaviour
 
         HostSceneCurtain.Instance?.SendCurtainStateToClient(clientId);
 
+        bool retry = false;
+        if (reader.TryBeginRead(sizeof(bool))) reader.ReadValueSafe(out retry);
+        if (retry)
+        {
+            if (_nextManualRetry.TryGetValue(clientId, out float next) && Time.unscaledTime < next) return;
+            _nextManualRetry[clientId] = Time.unscaledTime + 5f;
+            _initialSyncStarted.Add(clientId);
+            BeginForClient(clientId);
+            return;
+        }
         if (_syncRoutines.ContainsKey(clientId)) return;
         BeginClientSynchronization(clientId);
         if (_initialSyncStarted.Contains(clientId) && MapSync.Instance?.HasClientCurrentMap(clientId) == true)
@@ -386,6 +427,16 @@ public class LateJoinSync : MonoBehaviour
         using var writer = new FastBufferWriter(0, Allocator.Temp);
         cmm.SendNamedMessage(MSG_CLIENT_READY, NetworkManager.ServerClientId, writer);
         Debug.Log("[LateJoin] Client ready signal sent");
+    }
+
+    public static void RequestSynchronizationRetry()
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm == null || !nm.IsConnectedClient || nm.IsServer || nm.CustomMessagingManager == null) return;
+        MapSync.Instance?.AllowLocalReceiveRetry();
+        using var writer = new FastBufferWriter(sizeof(bool), Allocator.Temp);
+        writer.WriteValueSafe(true);
+        nm.CustomMessagingManager.SendNamedMessage(MSG_CLIENT_READY, NetworkManager.ServerClientId, writer);
     }
 
     public static void RequestObjectRecovery(ulong netId)
@@ -672,7 +723,24 @@ public class LateJoinSync : MonoBehaviour
         for (int attempt = 0; attempt < 3; attempt++)
         {
             float delay = attempt == 0 ? Mathf.Min(30f, 5f + ids.Count / 400f) : 5f;
-            yield return new WaitForSecondsRealtime(delay);
+            // ACK immediately once every object exists. Only missing objects need a grace period.
+            float deadline = Time.unscaledTime + delay;
+            while (Time.unscaledTime < deadline)
+            {
+                var current = NetworkManager.Singleton;
+                if (current == null || !current.IsConnectedClient || current.IsServer
+                    || version != _incomingManifestVersion) yield break;
+                bool complete = true;
+                foreach (ulong id in ids)
+                    if (!_goneWorldObjects.Contains(id) && !current.SpawnManager.SpawnedObjects.ContainsKey(id))
+                    { complete = false; break; }
+                if (complete)
+                {
+                    SendWorldAck(version);
+                    yield break;
+                }
+                yield return null;
+            }
             var nm = NetworkManager.Singleton;
             if (nm == null || !nm.IsConnectedClient || nm.IsServer
                 || version != _incomingManifestVersion) yield break;

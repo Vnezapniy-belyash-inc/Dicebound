@@ -24,7 +24,8 @@ public static class PlayerOwnershipReassigner
             bool createdByPlayer = dice != null && dice.SpawnerClientId == oldClientId
                 || token != null && token.SpawnerClientId == oldClientId;
             bool stillOwnedByPlayer = netObj.OwnerClientId == oldClientId;
-            if (!createdByPlayer && !stillOwnedByPlayer) continue;
+            bool controlledByPlayer = token != null && token.ControllerClientId == oldClientId;
+            if (!createdByPlayer && !stillOwnedByPlayer && !controlledByPlayer) continue;
 
             try
             {
@@ -45,6 +46,8 @@ public static class PlayerOwnershipReassigner
                     token.ServerUpdateSpawnerClientId(newClientId);
                     token.ServerRefreshPlayerColor();
                 }
+                // A GM-created token can be assigned to a player without changing its creator/NGO owner.
+                if (controlledByPlayer) token.ServerReassignController(oldClientId, newClientId);
 
                 count++;
             }

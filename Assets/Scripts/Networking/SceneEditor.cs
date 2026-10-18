@@ -7,7 +7,7 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 
 /// <summary>GM geometry editor. Full revisioned snapshots use NGO's fragmented reliable delivery.</summary>
-public sealed class SceneEditor : MonoBehaviour
+public sealed partial class SceneEditor : MonoBehaviour
 {
     public enum Tool { None, Wall, EraseEdge, Door, ToggleDoor, Square, Column, EraseObstacle }
     public static SceneEditor Instance { get; private set; }
@@ -76,9 +76,11 @@ public sealed class SceneEditor : MonoBehaviour
         if (ActiveTool == Tool.None || !IsMaster || _grid == null) return;
         var mouse = Mouse.current;
         if (mouse == null) return;
-        if (GameplayInputGate.AllowsKeyboardHotkeys && Keyboard.current?.escapeKey.wasPressedThisFrame == true
-            || GameplayInputGate.AllowsWorldPointerInput && mouse.rightButton.wasPressedThisFrame)
+        if (GameplayInputGate.AllowsKeyboardHotkeys && Keyboard.current?.escapeKey.wasPressedThisFrame == true)
+        { CancelStroke(); Deactivate(); return; }
+        if (GameplayInputGate.AllowsWorldPointerInput && mouse.rightButton.wasPressedThisFrame)
         { Deactivate(); return; }
+        if (mouse.middleButton.isPressed) { FinishStroke(); return; }
         if (mouse.leftButton.wasReleasedThisFrame) FinishStroke();
         if (!GameplayInputGate.AllowsWorldPointerInput) { FinishStroke(); return; }
         if (mouse.leftButton.wasPressedThisFrame)
@@ -91,6 +93,7 @@ public sealed class SceneEditor : MonoBehaviour
     }
     private void LateUpdate()
     {
+        UpdateToolPreview();
         if (_grid == null) return;
         if (_dirty || _lastOrigin != _grid.GridOrigin || _lastRotation != _grid.GridRotation || _lastCellSize != _grid.CellSize)
             RebuildVisuals();
@@ -108,7 +111,8 @@ public sealed class SceneEditor : MonoBehaviour
     }
     private void Register(NetworkManager manager)
     {
-        _network = manager; _revision = 0; _receivedRevision = -1; _hasState = manager.IsServer;
+        // Even an untouched, empty scene is a valid snapshot and needs an acknowledgeable revision.
+        _network = manager; _revision = manager.IsServer ? 1 : 0; _receivedRevision = -1; _hasState = manager.IsServer;
         manager.CustomMessagingManager.RegisterNamedMessageHandler(StateMessage, ReceiveState);
         manager.CustomMessagingManager.RegisterNamedMessageHandler(RequestMessage, ReceiveRequest);
         manager.CustomMessagingManager.RegisterNamedMessageHandler(AckMessage, ReceiveAck);
@@ -200,12 +204,11 @@ public sealed class SceneEditor : MonoBehaviour
     {
         if (NetworkManager.Singleton?.IsHost != true) return;
         FogManager.Instance?.StopManual();
-        if (FogManager.Instance?.Preview == true) FogManager.Instance.TogglePreview();
         FinishStroke(); MeasurementTool.Instance?.Deactivate(); EffectPaintTool.Instance?.Deactivate();
         ActiveTool = tool; ShowMarkup = true;
-        string[] names = { "выбор", "кисть стен", "ластик рёбер", "дверь", "открытие / закрытие дверей",
+        string[] names = { "выбор", "кисть стен", "удаление стен и дверей", "дверь", "открытие / закрытие дверей",
             "квадратное препятствие", "круглая колонна", "ластик препятствий" };
-        Notice = "Разметка: " + names[(int)tool] + ". ПКМ / Esc — закончить.";
+        Notice = "Разметка: " + names[(int)tool] + ". ЛКМ — рисовать; ПКМ — закончить; Esc — отменить штрих.";
     }
     public void Deactivate() { FinishStroke(); if (ActiveTool != Tool.None) GameplayInputGate.MarkToolExit(); ActiveTool = Tool.None; }
     public void ToggleMarkup() { ShowMarkup = !ShowMarkup; if (!ShowMarkup) Deactivate(); }
@@ -253,7 +256,21 @@ public sealed class SceneEditor : MonoBehaviour
         Publish();
         string previous = _beforeStroke;
         var memory = _beforeFog;
-        GameMasterUndo.Record("разметка карты", () => { Model.Replace(JsonUtility.FromJson<SceneGeometry>(previous)); if (memory != null) FogManager.Instance?.Restore(memory, false); Publish(); });
+        string after = JsonUtility.ToJson(Model.Snapshot()); var afterFog = FogManager.Instance?.Capture(true);
+        GameMasterUndo.Record("разметка карты",
+            () => RestoreStroke(previous, memory), () => RestoreStroke(after, afterFog));
+    }
+    private void RestoreStroke(string geometry, SavedFog fog)
+    {
+        Model.Replace(JsonUtility.FromJson<SceneGeometry>(geometry));
+        if (fog != null) FogManager.Instance?.Restore(fog, false);
+        Publish();
+    }
+    public void CancelStroke()
+    {
+        if (!_stroke) return;
+        _stroke = false;
+        RestoreStroke(_beforeStroke, _beforeFog); _changed = false;
     }
 
     public void RequestDoorToggle(string id)
@@ -282,8 +299,10 @@ public sealed class SceneEditor : MonoBehaviour
         {
             if (edge.id != id || !edge.door) continue;
             string before = JsonUtility.ToJson(Model.Snapshot()); var memory = FogManager.Instance?.Capture(true);
-            GameMasterUndo.Record("открытие двери", () => { Model.Replace(JsonUtility.FromJson<SceneGeometry>(before)); if (memory != null) FogManager.Instance?.Restore(memory, false); Publish(); });
-            Model.SetEdge(edge.x, edge.y, edge.vertical, true, false, true); Publish(); return;
+            Model.SetEdge(edge.x, edge.y, edge.vertical, true, false, true); Publish();
+            string after = JsonUtility.ToJson(Model.Snapshot()); var afterFog = FogManager.Instance?.Capture(true);
+            GameMasterUndo.Record("открытие двери", () => RestoreStroke(before, memory), () => RestoreStroke(after, afterFog));
+            return;
         }
     }
     private void Paint(Vector2 screen)
@@ -403,6 +422,8 @@ public sealed class SceneEditor : MonoBehaviour
     }
     private void OnDestroy()
     {
+        if (_toolPreview != null) Destroy(_toolPreview.gameObject);
+        if (_toolPreviewMaterial != null) Destroy(_toolPreviewMaterial);
         if (_network != null) Unregister();
         if (_visualRoot != null) Destroy(_visualRoot);
         foreach (var material in new[] { _wallMaterial, _doorMaterial, _openMaterial, _obstacleMaterial })

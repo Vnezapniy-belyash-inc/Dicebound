@@ -50,6 +50,26 @@ public class DiceboundTokenNameTests
     }
 
     [Test]
+    public void RenameReusesNamesReleasedByTheSameToken()
+    {
+        Name("Test");
+        Name("Test");
+        var rename = _type.GetMethod("AllocateRename");
+        for (int i = 0; i < 10; i++)
+            Assert.That(rename.Invoke(_registry, new object[] { "Test", Array.Empty<string>() }), Is.EqualTo("Test"));
+        Assert.That(Name("Test"), Is.EqualTo("Test 3"), "Renames must not advance the creation counter.");
+    }
+
+    [Test]
+    public void RenameConflictIsStableAndOnlyUsesLiveOtherTokens()
+    {
+        var rename = _type.GetMethod("AllocateRename");
+        for (int i = 0; i < 10; i++)
+            Assert.That(rename.Invoke(_registry, new object[] { "test", new[] { "Test" } }), Is.EqualTo("test 2"));
+        Assert.That(rename.Invoke(_registry, new object[] { "Test", Array.Empty<string>() }), Is.EqualTo("Test"));
+    }
+
+    [Test]
     public void LongUnicodeNamesFitNetworkStringWithoutSplittingSurrogates()
     {
         string name = string.Concat(System.Linq.Enumerable.Repeat("Колонна😀", 30));

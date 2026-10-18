@@ -304,6 +304,15 @@ public class TokenManager : MonoBehaviour
         return _names.Allocate(requested, existingNames);
     }
 
+    public string AllocateRenamedTokenName(string requested, TokenController renamed)
+    {
+        var existingNames = new List<string>();
+        foreach (var token in FindObjectsByType<TokenController>(FindObjectsInactive.Exclude))
+            if (token.IsSpawned && token != renamed && token.NetworkManager == renamed.NetworkManager)
+                existingNames.Add(token.TokenName);
+        return _names.AllocateRename(requested, existingNames);
+    }
+
     private TokenController SpawnTokenForClient(Vector3 pos, ulong ownerId,
         bool isCopy = false, bool hidden = false, string requestedName = null,
         SceneToken restored = null, MasterTokenData masterData = null)

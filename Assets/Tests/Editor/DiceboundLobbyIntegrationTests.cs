@@ -14,6 +14,19 @@ using System.IO.Compression;
 public class DiceboundLobbyIntegrationTests
 {
     private NetworkManager _host, _client;
+    private int _funReceived, _funType;
+    private ulong _funTarget;
+    private Vector3 _funPoint, _funRgb;
+    private string _funText;
+    private void SendFunRequest(int type, Vector3 point, int epoch = -1, ulong target = ulong.MaxValue, string text = "")
+    {
+        using var writer = new FastBufferWriter(512, Allocator.Temp);
+        writer.WriteValueSafe((byte)type); writer.WriteValueSafe(epoch);
+        writer.WriteValueSafe(target); writer.WriteValueSafe(point);
+        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(text);
+        writer.WriteValueSafe((ushort)bytes.Length); writer.WriteBytesSafe(bytes);
+        _client.CustomMessagingManager.SendNamedMessage("FunRequestV2", NetworkManager.ServerClientId, writer);
+    }
     private Component _registry;
     private string _reply;
     private int _heartbeatReceived;
@@ -105,6 +118,142 @@ public class DiceboundLobbyIntegrationTests
     }
 
     [UnityTest]
+    public IEnumerator UntouchedGeometryHasPositiveRevisionAndRecoversRepeatedSnapshot()
+    {
+        UnityEditor.SceneManagement.EditorSceneManager.NewScene(UnityEditor.SceneManagement.NewSceneSetup.EmptyScene,
+            UnityEditor.SceneManagement.NewSceneMode.Single);
+        yield return new EnterPlayMode();
+        _host = Manager("Fresh geometry host");
+        _scene = new GameObject("Fresh geometry scene");
+        var grid = _scene.AddComponent(RuntimeType("GridManager"));
+        var editorType = RuntimeType("SceneEditor");
+        var serverGo = new GameObject("Server geometry"); serverGo.transform.SetParent(_scene.transform);
+        var server = serverGo.AddComponent(editorType); ((Behaviour)server).enabled = false;
+        var flags = BindingFlags.NonPublic | BindingFlags.Instance;
+        editorType.GetField("_grid", flags).SetValue(server, grid);
+        Assert.That(_host.StartHost(), Is.True);
+        editorType.GetMethod("Register", flags).Invoke(server, new object[] { _host });
+        _client = Manager("Fresh geometry client");
+        Assert.That(_client.StartClient(), Is.True);
+        var clientGo = new GameObject("Client geometry"); clientGo.transform.SetParent(_scene.transform);
+        var client = clientGo.AddComponent(editorType); ((Behaviour)client).enabled = false;
+        editorType.GetField("_grid", flags).SetValue(client, grid);
+        editorType.GetMethod("Register", flags).Invoke(client, new object[] { _client });
+        float deadline = Time.realtimeSinceStartup + 10;
+        while (!_client.IsConnectedClient && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(_client.IsConnectedClient, Is.True);
+        deadline = Time.realtimeSinceStartup + 5;
+        while ((int)editorType.GetField("_receivedRevision", flags).GetValue(client) < 1 && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(editorType.GetField("_receivedRevision", flags).GetValue(client), Is.EqualTo(1),
+            "Untouched geometry must already have a positive revision without Publish or drawing walls.");
+        editorType.GetMethod("LateUpdate", flags).Invoke(client, null);
+        deadline = Time.realtimeSinceStartup + 5;
+        while (!(bool)editorType.GetMethod("HasClientCurrentRevision").Invoke(server, new object[] { _client.LocalClientId }) && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(editorType.GetMethod("HasClientCurrentRevision").Invoke(server, new object[] { _client.LocalClientId }), Is.True);
+        ((System.Collections.IDictionary)editorType.GetField("_clientAcks", flags).GetValue(server)).Clear();
+        editorType.GetMethod("ResendStateToClient").Invoke(server, new object[] { _client.LocalClientId });
+        deadline = Time.realtimeSinceStartup + 5;
+        while ((int)editorType.GetField("_pendingRevisionAck", flags).GetValue(client) < 1 && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(editorType.GetField("_pendingRevisionAck", flags).GetValue(client), Is.EqualTo(1), "Retrying the same snapshot must produce another acknowledgement.");
+        editorType.GetMethod("LateUpdate", flags).Invoke(client, null);
+        deadline = Time.realtimeSinceStartup + 5;
+        while (!(bool)editorType.GetMethod("HasClientCurrentRevision").Invoke(server, new object[] { _client.LocalClientId }) && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(editorType.GetMethod("HasClientCurrentRevision").Invoke(server, new object[] { _client.LocalClientId }), Is.True);
+    }
+
+    [UnityTest]
+    public IEnumerator FunEventsUseServerColorAndRejectInvalidTargetsAndSpam()
+    {
+        UnityEditor.SceneManagement.EditorSceneManager.NewScene(UnityEditor.SceneManagement.NewSceneSetup.EmptyScene,
+            UnityEditor.SceneManagement.NewSceneMode.Single);
+        yield return new EnterPlayMode();
+        _host = Manager("Fun host");
+        _registry = _host.gameObject.AddComponent(RuntimeType("PlayerRegistry"));
+        var effects = _host.gameObject.AddComponent(RuntimeType("FunEffects"));
+        _scene = new GameObject("Fun map");
+        _scene.AddComponent(RuntimeType("GridManager"));
+        var prefab = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Token.prefab");
+        _host.AddNetworkPrefab(prefab);
+        var tokens = _scene.AddComponent(RuntimeType("TokenManager"));
+        tokens.GetType().GetField("tokenPrefab").SetValue(tokens, prefab.GetComponent<NetworkObject>());
+        yield return null;
+        Assert.That(_host.StartHost(), Is.True);
+        _client = Manager("Fun client");
+        _client.AddNetworkPrefab(prefab);
+        Assert.That(_client.StartClient(), Is.True);
+        float connectionDeadline = Time.realtimeSinceStartup + 10;
+        while (!_client.IsConnectedClient && Time.realtimeSinceStartup < connectionDeadline) yield return null;
+        Assert.That(_client.IsConnectedClient, Is.True);
+        _registry.GetType().GetMethod("RegisterPlayerOnServer", BindingFlags.NonPublic | BindingFlags.Instance)
+            .Invoke(_registry, new object[] { _client.LocalClientId, "Fun player" });
+        yield return null;
+        _funReceived = 0; _funType = -1;
+        _funPoint = _funRgb = default;
+        Assert.That(_client, Is.Not.Null, "Fun client must still exist after registration.");
+        Assert.That(_client.CustomMessagingManager, Is.Not.Null, "Fun client message channel must remain active.");
+        _client.CustomMessagingManager.RegisterNamedMessageHandler("FunShowV2", (sender, reader) =>
+        {
+            Assert.That(sender, Is.EqualTo(NetworkManager.ServerClientId));
+            reader.ReadValueSafe(out byte type); reader.ReadValueSafe(out int epoch);
+            reader.ReadValueSafe(out _funTarget); reader.ReadValueSafe(out _funPoint); reader.ReadValueSafe(out _funRgb);
+            reader.ReadValueSafe(out ushort textLength);
+            byte[] textBytes = new byte[textLength]; reader.ReadBytesSafe(ref textBytes, textLength);
+            _funText = System.Text.Encoding.UTF8.GetString(textBytes);
+            Assert.That(epoch, Is.EqualTo(-1));
+            _funReceived++; _funType = type;
+        });
+        Assert.That(_registry, Is.Not.Null, "Fun registry must remain active.");
+        var colorMethod = RuntimeType("PlayerRegistry").GetMethod("GetServerPlayerColor", BindingFlags.Public | BindingFlags.Static);
+        Assert.That(colorMethod, Is.Not.Null);
+        var expected = (Color)colorMethod.Invoke(null, new object[] { _client.LocalClientId });
+        for (int type = 0; type < 3; type++)
+        {
+            var point = new Vector3(1, 0, 1);
+            SendFunRequest(type, point, text: type == 2 ? "  свой текст\nштампа  " : "");
+            float deadline = Time.realtimeSinceStartup + 5;
+            while (_funReceived < type + 1 && Time.realtimeSinceStartup < deadline) yield return null;
+            Assert.That(_funReceived, Is.EqualTo(type + 1));
+            Assert.That(_funType, Is.EqualTo(type));
+            Assert.That(_funTarget, Is.EqualTo(ulong.MaxValue));
+            Assert.That(_funPoint, Is.EqualTo(point));
+            Assert.That(_funRgb, Is.EqualTo(new Vector3(expected.r, expected.g, expected.b)));
+            Assert.That(_funText, Is.EqualTo(type == 2 ? "свой текст штампа" : ""));
+            SendFunRequest(type, point, text: type == 2 ? "повтор" : "");
+            yield return new WaitForSecondsRealtime(.75f);
+            Assert.That(_funReceived, Is.EqualTo(type + 1), "A repeated immediate request must be rate-limited.");
+        }
+        SendFunRequest(99, new Vector3(1, 0, 1));
+        SendFunRequest(0, new Vector3(float.NaN, 0, 1));
+        SendFunRequest(0, new Vector3(10000, 0, 10000));
+        SendFunRequest(0, new Vector3(1, 0, 1), 999);
+        SendFunRequest(2, new Vector3(1, 0, 1), text: "   ");
+        SendFunRequest(2, new Vector3(1, 0, 1), text: new string('Я', 81));
+        SendFunRequest(3, new Vector3(1, 0, 1), text: "removed preset");
+        yield return new WaitForSecondsRealtime(.3f);
+        Assert.That(_funReceived, Is.EqualTo(3));
+        var reactions = (IList)effects.GetType().GetField("_reactions", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(effects);
+        Assert.That(reactions.Count, Is.EqualTo(3));
+        var token = (Component)tokens.GetType().GetMethod("CreateTokenAsHost").Invoke(tokens, new object[] { "Fun target", false });
+        ulong tokenId = token.GetComponent<NetworkObject>().NetworkObjectId;
+        SendFunRequest(0, token.transform.position + Vector3.up * .2f, target: tokenId);
+        float tokenDeadline = Time.realtimeSinceStartup + 5;
+        while (_funReceived < 4 && Time.realtimeSinceStartup < tokenDeadline) yield return null;
+        Assert.That(_funReceived, Is.EqualTo(4));
+        Assert.That(_funTarget, Is.EqualTo(tokenId));
+        Assert.That(_funPoint, Is.EqualTo(token.transform.InverseTransformPoint(token.transform.position + Vector3.up * .2f)),
+            "Token hits must transmit a local anchor so traces follow token movement.");
+        yield return new WaitForSecondsRealtime(.75f);
+        SendFunRequest(0, token.transform.position + Vector3.right * 100, target: tokenId);
+        var hidden = (Component)tokens.GetType().GetMethod("CreateTokenAsHost").Invoke(tokens, new object[] { "Hidden target", true });
+        SendFunRequest(0, hidden.transform.position, target: hidden.GetComponent<NetworkObject>().NetworkObjectId);
+        SendFunRequest(0, token.transform.position, target: 100000UL);
+        yield return new WaitForSecondsRealtime(.3f);
+        Assert.That(_funReceived, Is.EqualTo(4), "Hidden, nonexistent and distant token targets must be rejected.");
+        yield return new WaitForSecondsRealtime(6.8f);
+        Assert.That(reactions.Count, Is.Zero, "Transient effects must remove themselves without persistent scene objects.");
+    }
+
+    [UnityTest]
     public IEnumerator RemoteRegistrationWorksAfterHostSessionRestart()
     {
         yield return new EnterPlayMode();
@@ -150,7 +299,7 @@ public class DiceboundLobbyIntegrationTests
     { return MapAndFog(false); }
 
     [UnityTest]
-    public IEnumerator LoadingClientCurtainSurvivesMasterTogglesAndPreservesMasterCurtainOnCompletion()
+    public IEnumerator LoadingStatusIsSeparateFromMasterCurtainAndCompletionPreservesManualCurtain()
     {
         yield return new EnterPlayMode();
         _host = Manager("Client curtain host");
@@ -173,13 +322,13 @@ public class DiceboundLobbyIntegrationTests
             _curtainReceived = down; _syncPendingReceived = pending;
         });
         type.GetMethod("SendCurtainStateToClient").Invoke(curtain, new object[] { _client.LocalClientId });
-        for (int i = 0; i < 100 && _curtainReceived != true; i++) yield return new WaitForSecondsRealtime(0.02f);
-        Assert.That(_curtainReceived, Is.True);
+        for (int i = 0; i < 100 && _syncPendingReceived != true; i++) yield return new WaitForSecondsRealtime(0.02f);
+        Assert.That(_curtainReceived, Is.False, "Automatic loading must not close the master's curtain.");
         Assert.That(_syncPendingReceived, Is.True);
         type.GetMethod("ToggleCurtainOnHost").Invoke(curtain, null);
         type.GetMethod("ToggleCurtainOnHost").Invoke(curtain, null);
         yield return new WaitForSecondsRealtime(0.2f);
-        Assert.That(_curtainReceived, Is.True, "Opening the master's curtain must not expose an incomplete client.");
+        Assert.That(_curtainReceived, Is.False, "The loading panel survives independently of the master's curtain.");
         Assert.That(_syncPendingReceived, Is.True);
         type.GetMethod("ToggleCurtainOnHost").Invoke(curtain, null);
         type.GetMethod("CompleteClientSync").Invoke(curtain, new object[] { _client.LocalClientId });
@@ -189,6 +338,78 @@ public class DiceboundLobbyIntegrationTests
         type.GetMethod("ToggleCurtainOnHost").Invoke(curtain, null);
         for (int i = 0; i < 100 && _curtainReceived != false; i++) yield return new WaitForSecondsRealtime(0.02f);
         Assert.That(_curtainReceived, Is.False);
+    }
+
+    [UnityTest]
+    public IEnumerator ReconnectedPlayerCanRenameOwnAndGmAssignedTokensWithoutGrowingSuffixes()
+    {
+        UnityEditor.SceneManagement.EditorSceneManager.NewScene(UnityEditor.SceneManagement.NewSceneSetup.EmptyScene,
+            UnityEditor.SceneManagement.NewSceneMode.Single);
+        yield return new EnterPlayMode();
+        _host = Manager("Rename reconnect host");
+        _registry = _host.gameObject.AddComponent(RuntimeType("PlayerRegistry"));
+        _host.OnClientDisconnectCallback += id => _registry.GetType().GetMethod("OnClientDisconnected").Invoke(_registry, new object[] { id });
+        var prefab = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Token.prefab");
+        _host.AddNetworkPrefab(prefab);
+        _scene = new GameObject("Rename reconnect tokens");
+        var tokens = _scene.AddComponent(RuntimeType("TokenManager"));
+        tokens.GetType().GetField("tokenPrefab").SetValue(tokens, prefab.GetComponent<NetworkObject>());
+        yield return null;
+        Assert.That(_host.StartHost(), Is.True);
+        _client = Manager("Rename first connection");
+        _client.AddNetworkPrefab(prefab);
+        Assert.That(_client.StartClient(), Is.True);
+        float deadline = Time.realtimeSinceStartup + 10;
+        while (!_client.IsConnectedClient && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(_client.IsConnectedClient, Is.True);
+        ulong oldId = _client.LocalClientId;
+        var register = _registry.GetType().GetMethod("RegisterPlayerOnServer", BindingFlags.NonPublic | BindingFlags.Instance);
+        register.Invoke(_registry, new object[] { oldId, "Test" });
+        var type = RuntimeType("TokenController");
+        var own = (Component)tokens.GetType().GetMethod("SpawnTokenForClient", BindingFlags.Instance | BindingFlags.NonPublic)
+            .Invoke(tokens, new object[] { Vector3.zero, oldId, false, false, null, null, null });
+        var assigned = (Component)tokens.GetType().GetMethod("CreateTokenAsHost").Invoke(tokens, new object[] { "Assigned", false });
+        type.GetMethod("AssignController").Invoke(assigned, new object[] { oldId });
+        // Exercise reassignment itself, without TokenManager's periodic nickname fallback.
+        ((Behaviour)tokens).enabled = false;
+        _client.Shutdown();
+        deadline = Time.realtimeSinceStartup + 10;
+        while ((_client.ShutdownInProgress || _host.ConnectedClients.ContainsKey(oldId)) && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(_host.ConnectedClients.ContainsKey(oldId), Is.False);
+        UnityEngine.Object.Destroy(_client.gameObject);
+        yield return null;
+        _client = Manager("Rename second connection");
+        _client.AddNetworkPrefab(prefab);
+        Assert.That(_client.StartClient(), Is.True);
+        deadline = Time.realtimeSinceStartup + 10;
+        while (!_client.IsConnectedClient && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(_client.IsConnectedClient, Is.True);
+        ulong newId = _client.LocalClientId;
+        Assert.That(newId, Is.Not.EqualTo(oldId));
+        register.Invoke(_registry, new object[] { newId, "Test" });
+        Assert.That(type.GetProperty("ControllerClientId").GetValue(own), Is.EqualTo(newId));
+        Assert.That(type.GetProperty("ControllerClientId").GetValue(assigned), Is.EqualTo(newId));
+        Assert.That(type.GetProperty("SpawnerClientId").GetValue(assigned), Is.EqualTo(NetworkManager.ServerClientId),
+            "Restoring an assigned controller must preserve the GM as creator.");
+        foreach (var token in new[] { own, assigned })
+        {
+            var obj = token.GetComponent<NetworkObject>();
+            if (!obj.IsNetworkVisibleTo(newId)) obj.NetworkShow(newId);
+            deadline = Time.realtimeSinceStartup + 10;
+            while (!_client.SpawnManager.SpawnedObjects.ContainsKey(obj.NetworkObjectId) && Time.realtimeSinceStartup < deadline) yield return null;
+            Assert.That(_client.SpawnManager.SpawnedObjects.ContainsKey(obj.NetworkObjectId), Is.True);
+            var remote = _client.SpawnManager.SpawnedObjects[obj.NetworkObjectId].GetComponent(type);
+            string desired = token == own ? "Character" : "Assigned character";
+            for (int attempt = 0; attempt < 4; attempt++)
+            {
+                type.GetMethod("RequestRename").Invoke(remote, new object[] { desired });
+                deadline = Time.realtimeSinceStartup + 5;
+                while ((string)type.GetProperty("TokenName").GetValue(remote) != desired && Time.realtimeSinceStartup < deadline) yield return null;
+                Assert.That(type.GetProperty("TokenName").GetValue(remote), Is.EqualTo(desired));
+                yield return new WaitForSecondsRealtime(0.1f);
+                Assert.That(type.GetProperty("TokenName").GetValue(token), Is.EqualTo(desired));
+            }
+        }
     }
 
     [UnityTest]

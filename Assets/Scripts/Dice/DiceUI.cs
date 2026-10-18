@@ -41,9 +41,13 @@ public class DiceUI : MonoBehaviour
     private GameObject _mapScaleLabel;
     private GameObject _logPanelGO;    // панель лога событий
     private GameObject _topBarGO;
+    public float SessionHeaderPixelHeight => _topBarGO != null && _topBarGO.activeInHierarchy && _canvas != null
+        ? _topBarGO.GetComponent<RectTransform>().rect.height * _canvas.scaleFactor : 0;
     private Text _headerPlayers;
     private Text _headerRole;
     private Button _gmPanelButton;
+    private Button _movementRequestsButton;
+    private Text _movementRequestsText;
     private float _nextHeaderRefresh;
     private Text _logText;
     private ScrollRect _logScroll;
@@ -420,11 +424,17 @@ public class DiceUI : MonoBehaviour
         var characterButton = MakeHeaderButton("Персонаж", font, 130, -190,
             () => { }, "circle-user-round");
         characterButton.interactable = false;
-        _gmPanelButton = MakeHeaderButton("ПАНЕЛЬ DM", font, 120, -56,
+        _gmPanelButton = MakeHeaderButton("МАСТЕР", font, 120, -56,
             () => DmPanelUI.Instance?.Toggle());
         _headerRole = _gmPanelButton.GetComponentInChildren<Text>();
         _headerRole.alignment = TextAnchor.MiddleCenter;
         _headerRole.color = VttUiSkin.Blue;
+        _movementRequestsButton = MakeHeaderButton("Перемещения: 0", font, 210, 0, MovementReviewUI.OpenRequests);
+        var requestRect = _movementRequestsButton.GetComponent<RectTransform>();
+        requestRect.anchorMin = requestRect.anchorMax = requestRect.pivot = new Vector2(0, .5f);
+        requestRect.anchoredPosition = new Vector2(180, 0);
+        _movementRequestsText = _movementRequestsButton.GetComponentInChildren<Text>();
+        _topBarGO.AddComponent<ResponsiveSessionHeader>();
     }
 
     Text MakeHeaderText(string value, Font font, int size, Color color,
@@ -481,9 +491,12 @@ public class DiceUI : MonoBehaviour
             _headerPlayers.text = $"●  {count} {noun}";
         }
         if (_headerRole != null)
-            _headerRole.text = nm != null && nm.IsHost ? "ПАНЕЛЬ DM" : "ИГРОК";
+            _headerRole.text = nm != null && nm.IsHost ? "МАСТЕР" : "ИГРОК";
         if (_gmPanelButton != null)
             _gmPanelButton.interactable = IsLocalHost();
+        if (_movementRequestsText != null) _movementRequestsText.text = nm?.IsHost == true
+            ? "Перемещения: " + MovementReviewUI.PendingCount : "Правила задаёт мастер";
+        if (_movementRequestsButton != null) _movementRequestsButton.interactable = nm?.IsHost == true && MovementReviewUI.PendingCount > 0;
     }
 
     void BuildLeaveButton(Transform canvasTr, Font font)

@@ -217,6 +217,10 @@ public static class StatBlockPublicFields
     public int version = 1;
     public string campaignId;
     public string title = "Кампания";
+    // Missing in legacy JSON => single-cell exploration. Host-only campaign preference.
+    public int movementPolicy = 3;
+    public bool autosave = true;
+    public bool exportFogHistory = true;
     public string activeSceneId;
     public CampaignScene[] scenes = Array.Empty<CampaignScene>();
     public CampaignMapAsset[] mapAssets = Array.Empty<CampaignMapAsset>();
@@ -331,7 +335,8 @@ public static class SceneValidation
                 "Некорректный переход сцены.");
         Require(!string.IsNullOrWhiteSpace(scene.sceneId) && scene.sceneId.Length <= 64,
             "Некорректный ID сцены.");
-        Require(!string.IsNullOrEmpty(scene.mapImage), "Сначала загрузите изображение карты.");
+        // A grid-only preparation scene is valid. Nonempty image data is decoded by the file store
+        // before live application; the existing empty-map network revision clears old client maps.
         Require(scene.gridWidth > 0 && scene.gridWidth <= 256 && scene.gridHeight > 0 && scene.gridHeight <= 256,
             "Размер сетки должен быть 1–256 клеток.");
         Require(Finite(scene.cellSize) && scene.cellSize >= 0.1f && scene.cellSize <= 10, "Некорректный размер клетки.");
@@ -368,6 +373,7 @@ public static class SceneValidation
     public static void Validate(CampaignDefinition campaign)
     {
         Require(campaign != null && campaign.version == 1, "Неподдерживаемая версия кампании.");
+        Require(campaign.movementPolicy >= 0 && campaign.movementPolicy <= 3, "Неизвестное правило перемещения.");
         Require(!string.IsNullOrWhiteSpace(campaign.campaignId) && campaign.campaignId.Length <= 64,
             "Некорректный ID кампании.");
         Require(!string.IsNullOrWhiteSpace(campaign.title) && campaign.title.Length <= 256,

@@ -116,8 +116,12 @@ public sealed class FogManager : MonoBehaviour
         {
             _nextAutosave = Time.unscaledTime + 120;
             bool dragging = false;
-            foreach (var token in FindObjectsByType<TokenController>(FindObjectsInactive.Exclude)) dragging |= token.IsLocalDragActiveAny();
-            if (!dragging && !SceneEditor.IsEditing && !IsManualEditing && MapController.Instance?.HasImage == true)
+            bool tokensExist = false;
+            foreach (var token in FindObjectsByType<TokenController>(FindObjectsInactive.Exclude))
+            { dragging |= token.IsLocalDragActiveAny(); tokensExist |= token.IsSpawned; }
+            bool authored = SceneFileStore.HasCampaign || MapController.Instance?.HasImage == true || tokensExist
+                || SceneEditor.Instance?.Model.Snapshot().edges.Length > 0 || SceneEditor.Instance?.Model.Snapshot().obstacles.Length > 0;
+            if (!dragging && !SceneEditor.IsEditing && !IsManualEditing && authored)
             {
                 try
                 {
@@ -129,6 +133,7 @@ public sealed class FogManager : MonoBehaviour
         }
         HandleManual();
         if (GameplayInputGate.AllowsWorldPointerInput && GameplayInputGate.AllowsKeyboardHotkeys && !SceneEditor.IsEditing && !IsManualEditing
+            && Camera.main?.GetComponent<CameraMovement>()?.IsFreeMode != true
             && Keyboard.current?.eKey.wasPressedThisFrame == true)
         {
             string door = NearestDoor(_network.LocalClientId);
@@ -161,6 +166,8 @@ public sealed class FogManager : MonoBehaviour
             if (Enabled && !Paused && _visible[i]) _explored[i] = true;
         }
         _textureDirty = true; Publish();
+        InitiativeTracker.Instance?.RefreshVisibility();
+        if (Preview) InitiativeTracker.Instance?.RefreshDisplayedView();
         Status = !Enabled ? "Туман отключён; история сохранена" : Paused ? "Раскрытие приостановлено" : "Общий обзор группы";
     }
     private int Index(Vector3 world)
@@ -181,6 +188,13 @@ public sealed class FogManager : MonoBehaviour
     {
         int index = Index(world);
         return index >= 0 && index < (_previewVisible?.Length ?? 0) && _previewVisible[index];
+    }
+    public bool IsKnownForMovement(Vector3 world)
+    {
+        if (!Enabled) return true;
+        int index = Index(world);
+        return index >= 0 && index < _visible.Length && !_manualHidden[index]
+            && (_visible[index] || _explored[index] || _manualVisible[index]);
     }
     private static void ApplyManualOverrides(bool[] visible, bool[] revealed, bool[] hidden, bool paused)
     {
@@ -236,6 +250,7 @@ public sealed class FogManager : MonoBehaviour
         else { PreviewSourceId = null; PreviewTestSource = true; _testPosition = new Vector2(_width * 0.5f, _height * 0.5f); }
         if (!Preview) TogglePreview();
         _textureDirty = _previewDirty = true;
+        InitiativeTracker.Instance?.RefreshDisplayedView();
     }
     public void SetManual(int mode)
     {
@@ -249,8 +264,13 @@ public sealed class FogManager : MonoBehaviour
     {
         if (!IsMaster || ManualMode == 0 || Mouse.current == null) return;
         var mouse = Mouse.current;
-        if (GameplayInputGate.AllowsKeyboardHotkeys && Keyboard.current?.escapeKey.wasPressedThisFrame == true
-            || mouse.rightButton.wasPressedThisFrame && GameplayInputGate.AllowsWorldPointerInput) { StopManual(); return; }
+        if (GameplayInputGate.AllowsKeyboardHotkeys && Keyboard.current?.escapeKey.wasPressedThisFrame == true)
+        {
+            if (_manualStroke) { _manualStroke = false; Restore(JsonUtility.FromJson<SavedFog>(_manualBefore), false); }
+            StopManual(); return;
+        }
+        if (mouse.rightButton.wasPressedThisFrame && GameplayInputGate.AllowsWorldPointerInput) { StopManual(); return; }
+        if (mouse.middleButton.isPressed) { FinishManual(); return; }
         if (mouse.leftButton.wasReleasedThisFrame || !GameplayInputGate.AllowsWorldPointerInput) FinishManual();
         if (!GameplayInputGate.AllowsWorldPointerInput) return;
         if (mouse.leftButton.wasPressedThisFrame) { _manualBefore = JsonUtility.ToJson(Capture(true)); _manualStroke = true; _lastManual = new Vector2Int(-1, -1); }
@@ -279,7 +299,10 @@ public sealed class FogManager : MonoBehaviour
         if (!_manualStroke) return;
         _manualStroke = false;
         string before = _manualBefore;
-        GameMasterUndo.Record("ручное раскрытие карты", () => Restore(JsonUtility.FromJson<SavedFog>(before), false));
+        string after = JsonUtility.ToJson(Capture(true));
+        if (before == after) return;
+        GameMasterUndo.Record("ручное раскрытие карты", () => Restore(JsonUtility.FromJson<SavedFog>(before), false),
+            () => Restore(JsonUtility.FromJson<SavedFog>(after), false));
     }
     public void ResetHistory()
     {
@@ -390,6 +413,7 @@ public sealed class FogManager : MonoBehaviour
                 _previewVisible = new FogVisibility(SceneEditor.Instance?.Model.Snapshot() ?? new SceneGeometry()).Calculate(_width, _height, sources);
                 ApplyManualOverrides(_previewVisible, _manualVisible, _manualHidden, Paused);
                 _previewDirty = false; _textureDirty = true;
+                InitiativeTracker.Instance?.RefreshDisplayedView();
             }
         }
         if (_textureDirty && _width > 0)

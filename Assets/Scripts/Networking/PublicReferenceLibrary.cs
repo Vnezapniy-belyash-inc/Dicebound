@@ -11,6 +11,9 @@ using UnityEngine.UI;
 public sealed class PublicReferenceLibrary : MonoBehaviour
 {
     private const string RequestMessage = "ReferenceRequestV1", HeaderMessage = "ReferenceHeaderV1", ChunkMessage = "ReferenceChunkV1";
+    private const string InvalidateMessage = "ReferenceInvalidateV1";
+    private const string ErrorMessage = "ReferenceErrorV1";
+    private static PublicReferenceLibrary _instance;
     private const int ChunkSize = 1000, MaxBytes = 16 * 1024 * 1024;
     public static bool IsOpen { get; private set; }
     private static bool _available;
@@ -20,7 +23,7 @@ public sealed class PublicReferenceLibrary : MonoBehaviour
         {
             var mouse = UnityEngine.InputSystem.Mouse.current;
             if (!_available || mouse == null || DisplaySettingsUI.IsOpen || SceneArrivalPicker.IsOpen) return false;
-            float scale = Mathf.Min(LocalUiScale.Value, Mathf.Min(Screen.width / 940f, Screen.height / 640f));
+            float scale = Mathf.Min(LocalUiScale.Value, Mathf.Min(Screen.width / 600f, Screen.height / 460f));
             return new Rect(Screen.width - 286 * scale, 12 * scale, 132 * scale, 28 * scale).Contains(mouse.position.ReadValue());
         }
     }
@@ -39,7 +42,7 @@ public sealed class PublicReferenceLibrary : MonoBehaviour
     private GameObject _blocker;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
-    private static void ResetState() { IsOpen = false; _available = false; }
+    private static void ResetState() { IsOpen = false; _available = false; _instance = null; }
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void Bootstrap()
@@ -50,6 +53,7 @@ public sealed class PublicReferenceLibrary : MonoBehaviour
 
     private void Awake()
     {
+        _instance = this;
         _blocker = new GameObject("LibraryInputBlocker", typeof(RectTransform), typeof(Canvas), typeof(GraphicRaycaster));
         _blocker.transform.SetParent(transform, false);
         var canvas = _blocker.GetComponent<Canvas>(); canvas.renderMode = RenderMode.ScreenSpaceOverlay; canvas.sortingOrder = 32750;
@@ -72,6 +76,8 @@ public sealed class PublicReferenceLibrary : MonoBehaviour
                 _messaging.RegisterNamedMessageHandler(RequestMessage, OnRequest);
                 _messaging.RegisterNamedMessageHandler(HeaderMessage, OnHeader);
                 _messaging.RegisterNamedMessageHandler(ChunkMessage, OnChunk);
+                _messaging.RegisterNamedMessageHandler(InvalidateMessage, OnInvalidated);
+                _messaging.RegisterNamedMessageHandler(ErrorMessage, OnLibraryError);
             }
         }
         if (_network == null || !_network.IsConnectedClient) { if (IsOpen) SetOpen(false); return; }
@@ -86,11 +92,14 @@ public sealed class PublicReferenceLibrary : MonoBehaviour
 
     private void Detach()
     {
+        IsOpen = false; if (_blocker != null) _blocker.SetActive(false);
         if (_messaging != null)
         {
             _messaging.UnregisterNamedMessageHandler(RequestMessage);
             _messaging.UnregisterNamedMessageHandler(HeaderMessage);
             _messaging.UnregisterNamedMessageHandler(ChunkMessage);
+            _messaging.UnregisterNamedMessageHandler(InvalidateMessage);
+            _messaging.UnregisterNamedMessageHandler(ErrorMessage);
         }
         StopAllCoroutines(); _sending.Clear(); _requests.Clear();
         _entries = Array.Empty<ReferenceEntry>(); _incoming = _published = null; _chunks = null;
@@ -107,10 +116,49 @@ public sealed class PublicReferenceLibrary : MonoBehaviour
         // Filtering happens on the host before serialization; no campaign or master data is sent.
         var file = new ReferenceLibraryFile { entries = SceneFileStore.GetPublicReferenceEntries() };
         var bytes = Encoding.UTF8.GetBytes(JsonUtility.ToJson(file));
-        if (bytes.Length > MaxBytes) { Debug.LogWarning("[Reference] Public library exceeds 16 MB."); return; }
+        if (bytes.Length > MaxBytes)
+        {
+            using var error = new FastBufferWriter(1, Allocator.Temp);
+            error.WriteValueSafe((byte)1); _messaging.SendNamedMessage(ErrorMessage, sender, error);
+            return;
+        }
         string hash = MapImageCache.Hash(bytes);
         if (hash != _publishedHash) { _published = bytes; _publishedHash = hash; _revision++; }
         if (known != _revision) StartCoroutine(Send(sender, _published, _publishedHash, _revision));
+    }
+
+    /// <summary>Revoke old UI and cancel queued serialization before publishing a changed library.</summary>
+    public static void InvalidatePublishedLibrary()
+    {
+        var instance = _instance;
+        if (instance == null || instance._network?.IsServer != true || instance._messaging == null) return;
+        if (instance._publishedHash == null) return; // No client can hold a published snapshot yet.
+        var file = new ReferenceLibraryFile { entries = SceneFileStore.GetPublicReferenceEntries() };
+        string currentHash = MapImageCache.Hash(Encoding.UTF8.GetBytes(JsonUtility.ToJson(file)));
+        if (currentHash == instance._publishedHash) return; // Private notes must not interrupt player reading.
+        instance.StopAllCoroutines(); instance._sending.Clear(); instance._requests.Clear();
+        instance._published = null; instance._publishedHash = null; instance._revision++;
+        using var writer = new FastBufferWriter(sizeof(int), Allocator.Temp);
+        writer.WriteValueSafe(instance._revision);
+        foreach (ulong client in instance._network.ConnectedClientsIds)
+            if (client != NetworkManager.ServerClientId) instance._messaging.SendNamedMessage(InvalidateMessage, client, writer);
+    }
+    private void OnInvalidated(ulong sender, FastBufferReader reader)
+    {
+        if (_network == null || _network.IsServer || sender != NetworkManager.ServerClientId || !reader.TryBeginRead(sizeof(int))) return;
+        reader.ReadValueSafe(out int revision);
+        if (revision <= _appliedRevision || revision < _incomingRevision) return;
+        _entries = Array.Empty<ReferenceEntry>(); _incoming = null; _chunks = null;
+        _selectedId = null; _incomingRevision = revision; _appliedRevision = -1; _nextRequest = 0;
+        _status = "Справочник обновлён мастером. Получаем доступные записи…";
+    }
+    private void OnLibraryError(ulong sender, FastBufferReader reader)
+    {
+        if (_network == null || _network.IsServer || sender != NetworkManager.ServerClientId || !reader.TryBeginRead(1)) return;
+        reader.ReadValueSafe(out byte code); if (code != 1) return;
+        _entries = Array.Empty<ReferenceEntry>(); _incoming = null; _chunks = null; _selectedId = null;
+        _status = "Открытый справочник превышает 16 МБ. Мастеру нужно сократить открытую часть библиотеки.";
+        _nextRequest = Time.unscaledTime + 30;
     }
 
     private IEnumerator Send(ulong client, byte[] bytes, string hash, int revision)
@@ -126,10 +174,12 @@ public sealed class PublicReferenceLibrary : MonoBehaviour
             }
             for (int offset = 0; offset < bytes.Length; offset += ChunkSize)
             {
+                if (revision != _revision) yield break;
                 int size = Math.Min(ChunkSize, bytes.Length - offset);
                 while (!NetworkTransferBudget.TryConsume(client, size + 12))
                 {
                     if (_network == null || !_network.IsServer || !_network.ConnectedClients.ContainsKey(client)) yield break;
+                    if (revision != _revision) yield break;
                     yield return null;
                 }
                 if (_network == null || !_network.IsServer || !_network.ConnectedClients.ContainsKey(client)) yield break;
@@ -170,7 +220,7 @@ public sealed class PublicReferenceLibrary : MonoBehaviour
         {
             if (MapImageCache.Hash(_incoming) != _incomingHash) throw new FormatException();
             var file = JsonUtility.FromJson<ReferenceLibraryFile>(Encoding.UTF8.GetString(_incoming));
-            if (file == null || file.version != 1 || file.entries == null || file.entries.Length > 10000) throw new FormatException();
+            SceneFileStore.ValidateReferenceLibrary(file);
             foreach (var entry in file.entries) if (entry == null || entry.masterOnly) throw new FormatException();
             _entries = file.entries; _appliedRevision = revision; _status = _entries.Length == 0 ? "Мастер пока не открыл записи." : "";
         }
@@ -179,13 +229,14 @@ public sealed class PublicReferenceLibrary : MonoBehaviour
     }
 
     private void SetOpen(bool open) { IsOpen = open; _blocker.SetActive(open); if (open) _nextRequest = 0; }
-    private void OnDestroy() { Detach(); IsOpen = false; _available = false; }
+    private void OnDestroy() { Detach(); IsOpen = false; _available = false; if (_instance == this) _instance = null; }
 
     private void OnGUI()
     {
-        if (_network == null || !_network.IsConnectedClient || _network.IsServer || DisplaySettingsUI.IsOpen || SceneArrivalPicker.IsOpen) return;
+        if (_network == null || !_network.IsConnectedClient || _network.IsServer || MovementReviewUI.IsOpen || DisplaySettingsUI.IsOpen || SceneArrivalPicker.IsOpen) return;
         Matrix4x4 matrix = GUI.matrix; int depth = GUI.depth;
-        float scale = Mathf.Min(LocalUiScale.Value, Mathf.Min(Screen.width / 940f, Screen.height / 640f));
+        float scale = IsOpen ? Mathf.Min(LocalUiScale.Value, Mathf.Min(Screen.width / 940f, Screen.height / 640f))
+            : Mathf.Min(LocalUiScale.Value, Mathf.Min(Screen.width / 600f, Screen.height / 460f));
         GUI.matrix = Matrix4x4.Scale(new Vector3(scale, scale, 1)); GUI.depth = -900;
         try
         {
@@ -213,13 +264,17 @@ public sealed class PublicReferenceLibrary : MonoBehaviour
             _listScroll = GUILayout.BeginScrollView(_listScroll, GUILayout.Width(300));
             var sorted = new List<ReferenceEntry>(_entries);
             sorted.Sort((a, b) => a.pinned != b.pinned ? b.pinned.CompareTo(a.pinned) : string.Compare(a.title, b.title, StringComparison.CurrentCultureIgnoreCase));
+            bool found = false;
+            var entryStyle = new GUIStyle(GUI.skin.button) { wordWrap = true, richText = false, alignment = TextAnchor.MiddleLeft };
             foreach (var entry in sorted)
             {
                 if (_category != "Все категории" && entry.category != _category) continue;
                 string search = (entry.title ?? "") + " " + entry.category + " " + entry.body + " " + string.Join(" ", entry.tags ?? Array.Empty<string>());
                 if (search.IndexOf(_query, StringComparison.CurrentCultureIgnoreCase) < 0) continue;
-                if (GUILayout.Button((entry.pinned ? "★ " : "") + entry.title)) { _selectedId = entry.id; _bodyScroll = Vector2.zero; }
+                found = true;
+                if (GUILayout.Button(new GUIContent((entry.pinned ? "★ " : "") + entry.title, entry.title), entryStyle, GUILayout.Width(272), GUILayout.MinHeight(32))) { _selectedId = entry.id; _bodyScroll = Vector2.zero; }
             }
+            if (!found) GUILayout.Label(string.IsNullOrWhiteSpace(_query) ? "В этой категории пока нет открытых записей." : "Ничего не найдено. Измените запрос или категорию.", new GUIStyle(GUI.skin.label) { wordWrap = true });
             GUILayout.EndScrollView();
             _bodyScroll = GUILayout.BeginScrollView(_bodyScroll);
             var selected = Array.Find(_entries, entry => entry.id == _selectedId);

@@ -10,7 +10,7 @@ using UnityEngine.UI;
 
 /// <summary>Shared initiative order. Only the host changes entries and turns.</summary>
 [RequireComponent(typeof(NetworkObject))]
-public class InitiativeTracker : NetworkBehaviour
+public partial class InitiativeTracker : NetworkBehaviour
 {
     [Serializable]
     private sealed class InitiativeNetworkState
@@ -18,6 +18,7 @@ public class InitiativeTracker : NetworkBehaviour
         public int currentIndex;
         public int round = 1;
         public string activeParticipantId;
+        public bool waitingForTurn;
         public InitiativeNetworkEntry[] entries = Array.Empty<InitiativeNetworkEntry>();
     }
 
@@ -53,13 +54,15 @@ public class InitiativeTracker : NetworkBehaviour
     private const int MaxStateBytes = 512 * 1024;
     private int _stateRevision, _receivedRevision = -1;
     private float _nextStateRequest;
+    private string _visibilitySignature;
+    private bool _waitingForTurn;
     private readonly Dictionary<ulong, int> _stateAcks = new();
     public bool HasClientCurrentState(ulong client) => IsSpawned && IsServer
         && NetworkManager.ConnectedClients.ContainsKey(client)
         && _stateAcks.TryGetValue(client, out int revision) && revision == _stateRevision;
     public void ResendStateToClient(ulong client)
     {
-        if (IsSpawned && IsServer && NetworkManager.ConnectedClients.ContainsKey(client)) SendState(client, SerializeData());
+        if (IsSpawned && IsServer && NetworkManager.ConnectedClients.ContainsKey(client)) SendState(client, SerializeDataForClient(client));
     }
     public bool AllClientsHaveCurrentState
     {
@@ -85,7 +88,7 @@ public class InitiativeTracker : NetworkBehaviour
     private float _initiativeRollExpiresAt;
     private Canvas _canvas;
     private Font _font;
-    private GameObject _panel, _addPanel, _hostButtons, _emptyMessage;
+    private GameObject _panel, _addPanel, _hostButtons, _emptyMessage, _cancelRollButton;
     private GameObject _viewport;
     private RectTransform _content;
     private InputField _nameInput, _initInput, _hpInput;
@@ -219,6 +222,7 @@ public class InitiativeTracker : NetworkBehaviour
 
     public override void OnNetworkSpawn()
     {
+        _visibilitySignature = null; _waitingForTurn = false;
         _stateRevision = 0; _receivedRevision = -1;
         _stateAcks.Clear();
         NetworkManager.CustomMessagingManager.RegisterNamedMessageHandler(StateMessage, ReceiveState);
@@ -304,8 +308,10 @@ public class InitiativeTracker : NetworkBehaviour
 
     private void UpdateHostControls()
     {
-        bool host = IsHost;
+        bool host = IsHost && FogManager.Instance?.Preview != true;
         if (_hostButtons != null) _hostButtons.SetActive(host);
+        if (_cancelRollButton != null) _cancelRollButton.SetActive(host && Time.unscaledTime <= _initiativeRollExpiresAt
+            && (_awaitingInitiativeTokenIds.Count > 0 || !string.IsNullOrEmpty(_awaitingInitiativeTokenId)));
         if (!host && _addPanel != null) _addPanel.SetActive(false);
         if (host == _hostControlsVisible) return;
         _hostControlsVisible = host;
@@ -319,6 +325,7 @@ public class InitiativeTracker : NetworkBehaviour
         _round = 1;
         _activeParticipantId = null;
         _nextEntryId = 0;
+        _waitingForTurn = false;
         if (string.IsNullOrEmpty(data)) return;
         if (data.StartsWith("{", StringComparison.Ordinal))
         {
@@ -327,6 +334,7 @@ public class InitiativeTracker : NetworkBehaviour
             _currentIndex = Mathf.Max(0, state.currentIndex);
             _round = state.round;
             _activeParticipantId = state.activeParticipantId;
+            _waitingForTurn = state.waitingForTurn;
             int entryLimit = Mathf.Min(state.entries.Length, SceneValidation.MaxTokens + 64);
             for (int index = 0; index < entryLimit; index++)
             {
@@ -350,7 +358,7 @@ public class InitiativeTracker : NetworkBehaviour
                 if (active >= 0) _currentIndex = active;
             }
             if (_currentIndex >= _entries.Count) _currentIndex = 0;
-            _activeParticipantId = ActiveId < 0 ? null : ActiveId.ToString();
+            _activeParticipantId = _waitingForTurn || ActiveId < 0 ? null : ActiveId.ToString();
             if (_round < 1 || _round > 100000) _round = 1;
             return;
         }
@@ -418,8 +426,9 @@ public class InitiativeTracker : NetworkBehaviour
             return;
         }
         _stateRevision++;
+        _visibilitySignature = CaptureVisibilitySignature();
         foreach (ulong client in NetworkManager.ConnectedClientsIds)
-            if (client != Unity.Netcode.NetworkManager.ServerClientId) SendState(client, data);
+            if (client != Unity.Netcode.NetworkManager.ServerClientId) SendState(client, SerializeDataForClient(client));
         RebuildRows();
     }
 
@@ -435,7 +444,7 @@ public class InitiativeTracker : NetworkBehaviour
         if (IsServer && NetworkManager.ConnectedClients.ContainsKey(client))
         {
             _stateAcks.Remove(client);
-            SendState(client, SerializeData());
+            SendState(client, SerializeDataForClient(client));
         }
     }
 
@@ -768,7 +777,7 @@ public class InitiativeTracker : NetworkBehaviour
             new Color(0.10f, 0.28f, 0.47f));
         Button(_hostButtons.transform, "Очистить", 78, 32, 270, 0, RequestClearAll,
             new Color(0.28f, 0.11f, 0.14f));
-        Button(_hostButtons.transform, "Отмена броска", 104, 30, -2, -38,
+        _cancelRollButton = Button(_hostButtons.transform, "Отмена броска", 104, 30, -2, -38,
             CancelInitiativeFromJournal, new Color(0.28f, 0.20f, 0.12f));
 
         var viewport = Box(_panel.transform, "Viewport", new Color(0, 0, 0, 0.01f), 0, false);
@@ -803,7 +812,7 @@ public class InitiativeTracker : NetworkBehaviour
         _emptyMessage.transform.SetParent(viewport.transform, false);
         Place(_emptyMessage, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
             new Vector2(980, 60), Vector2.zero);
-        Label(_emptyMessage.transform, "Пока нет участников. DM может добавить игрока или персонажа.",
+        Label(_emptyMessage.transform, "Нет доступных участников. Мастер может добавить игрока или персонажа.",
             15, VttUiSkin.Muted, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f),
             new Vector2(0.5f, 0.5f), new Vector2(980, 54), Vector2.zero);
 
@@ -815,22 +824,33 @@ public class InitiativeTracker : NetworkBehaviour
     private void RebuildRows()
     {
         if (_content == null) return;
+        bool masterView = IsHost && FogManager.Instance?.Preview != true;
+        var shown = _entries.ToArray();
+        int activeIndex = _waitingForTurn ? -1 : _currentIndex;
+        bool waiting = _waitingForTurn;
+        if (IsHost && !masterView)
+        {
+            var view = InitiativeProjection.Project(_entries, _currentIndex,
+                entry => CanClientSeeEntry(NetworkManager.LocalClientId, entry, true));
+            shown = view.Entries; activeIndex = view.ActiveIndex;
+            waiting = _entries.Count > 0 && activeIndex < 0;
+        }
         foreach (Transform child in _content) Destroy(child.gameObject);
-        if (_emptyMessage != null) _emptyMessage.SetActive(_entries.Count == 0);
-        if (_viewport != null) _viewport.SetActive(_entries.Count > 0);
-        int rows = Mathf.CeilToInt(_entries.Count / (float)CardsPerRow);
+        if (_emptyMessage != null) _emptyMessage.SetActive(shown.Length == 0);
+        if (_viewport != null) _viewport.SetActive(shown.Length > 0);
+        int rows = Mathf.CeilToInt(shown.Length / (float)CardsPerRow);
         _content.sizeDelta = new Vector2(850, rows * CardStepY);
         if (_panel != null)
             _panel.GetComponent<RectTransform>().sizeDelta =
-                new Vector2(880, _entries.Count == 0 ? 52 : Mathf.Min(82 + rows * CardStepY + 12, 82 + 4 * CardStepY + 12));
+                new Vector2(880, shown.Length == 0 ? 52 : Mathf.Min(82 + rows * CardStepY + 12, 82 + 4 * CardStepY + 12));
         if (_roundText != null)
-            _roundText.text = _entries.Count == 0 ? $"Раунд {_round} · нет участников" :
-                $"Раунд {_round} · {_entries.Count} участников · ход {_currentIndex + 1}";
+            _roundText.text = waiting ? $"Раунд {_round} · ожидание хода" : shown.Length == 0 ? $"Раунд {_round} · нет участников" :
+                $"Раунд {_round} · {shown.Length} участников · ход {activeIndex + 1}";
 
-        for (int i = 0; i < _entries.Count; i++)
+        for (int i = 0; i < shown.Length; i++)
         {
-            var entry = _entries[i];
-            bool active = i == _currentIndex;
+            var entry = shown[i];
+            bool active = i == activeIndex;
             var row = Box(_content, "Entry " + entry.id,
                 active ? new Color(0.13f, 0.30f, 0.49f, 0.99f) : VttUiSkin.Raised, 8, active);
             Place(row, new Vector2(0, 1), new Vector2(0, 1), new Vector2(CardWidth, CardHeight),
@@ -839,34 +859,34 @@ public class InitiativeTracker : NetworkBehaviour
                 active ? VttUiSkin.Blue : VttUiSkin.Muted, TextAnchor.MiddleCenter,
                 new Vector2(0, 1), new Vector2(0, 1), new Vector2(28, 24),
                 new Vector2(4, -4), active);
-            int maxNameLength = IsHost ? 11 : 14;
+            int maxNameLength = masterView ? 11 : 14;
             string liveName = string.IsNullOrEmpty(entry.tokenId)
                 ? entry.name : TokenController.FindSceneToken(entry.tokenId)?.TokenName ?? entry.name;
             string displayName = liveName.Length > maxNameLength
                 ? liveName.Substring(0, maxNameLength - 1) + "…" : liveName;
             Label(row.transform, displayName, 13, VttUiSkin.Text, TextAnchor.MiddleLeft,
-                new Vector2(0, 1), new Vector2(0, 1), new Vector2(IsHost ? 100 : 122, 25),
+                new Vector2(0, 1), new Vector2(0, 1), new Vector2(masterView ? 100 : 122, 25),
                 new Vector2(32, -3), active);
-            if (IsHost)
+            if (masterView)
             {
                 var linkedToken = string.IsNullOrEmpty(entry.tokenId)
                     ? null : TokenController.FindSceneToken(entry.tokenId);
-                var input = Input(row.transform, entry.initiative.ToString(), 44, 22, 24, -25);
+                var input = Input(row.transform, entry.initiative.ToString(), 36, 22, 8, -25);
                 input.contentType = InputField.ContentType.IntegerNumber;
                 int id = entry.id;
                 input.onEndEdit.AddListener(value => SetInitiativeById(id, value));
                 if (!string.IsNullOrEmpty(entry.tokenId))
                 {
                     string tokenId = entry.tokenId;
-                    Button(row.transform, "d20", 28, 20, 75, -25,
+                    Button(row.transform, "d20", 30, 20, 48, -25,
                         () => ArmInitiativeFromJournal(tokenId), new Color(0.12f, 0.26f, 0.38f));
                 }
-                Label(row.transform, "HP", 10, new Color(1f, 0.36f, 0.38f),
+                Label(row.transform, "ХП", 10, new Color(1f, 0.36f, 0.38f),
                     TextAnchor.MiddleLeft, new Vector2(0, 1), new Vector2(0, 1),
                     new Vector2(18, 22), new Vector2(82, -25), true);
                 int hp = linkedToken != null ? linkedToken.VisibleCurrentHp : _hpById.GetValueOrDefault(id);
                 var hpInput = Input(row.transform, hp.ToString(),
-                    58, 22, 100, -25);
+                    54, 22, 104, -25);
                 hpInput.contentType = InputField.ContentType.IntegerNumber;
                 hpInput.textComponent.color = new Color(1f, 0.36f, 0.38f);
                 hpInput.onEndEdit.AddListener(value => SetHpById(id, value));
@@ -878,8 +898,9 @@ public class InitiativeTracker : NetworkBehaviour
                 Label(row.transform, entry.initiative.ToString(), 14, VttUiSkin.Text,
                     TextAnchor.MiddleLeft, new Vector2(0, 1), new Vector2(0, 1),
                     new Vector2(90, 22), new Vector2(32, -25), true);
-                if (entry.publicHp >= 0)
-                    Label(row.transform, "HP " + entry.publicHp, 11, VttUiSkin.Muted,
+                int publicHp = IsServer ? GetPublicHp(entry) : entry.publicHp;
+                if (publicHp >= 0)
+                    Label(row.transform, "ХП " + publicHp, 11, VttUiSkin.Muted,
                         TextAnchor.MiddleRight, new Vector2(1, 1), new Vector2(1, 1),
                         new Vector2(52, 22), new Vector2(-5, -25));
             }
@@ -919,7 +940,7 @@ public class InitiativeTracker : NetworkBehaviour
 
     public void ShowAddPanel()
     {
-        if (!IsHost || _addPanel == null) return;
+        if (!IsHost || _addPanel == null || FogManager.Instance?.Preview == true) return;
         _addErrorText.text = "";
         SetVisible(true);
         _addPanel.SetActive(true);

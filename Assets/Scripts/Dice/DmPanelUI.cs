@@ -8,7 +8,7 @@ using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 /// <summary>Host-only controls built on the existing map and initiative APIs.</summary>
-public class DmPanelUI : MonoBehaviour
+public partial class DmPanelUI : MonoBehaviour
 {
     private static readonly string[] StatBlockPublicFieldNames =
         { "Название", "Размер", "Тип существа", "Мировоззрение", "КД", "ХП", "Скорость", "Характеристики", "Опасность", "Описание", "Действия" };
@@ -97,6 +97,7 @@ public class DmPanelUI : MonoBehaviour
 
     private void Update()
     {
+        RefreshDraftContext();
         if (_panel == null || !_panel.activeSelf) return;
         if (!IsLocalHost) { _panel.SetActive(false); return; }
         if (_transitionPanel != null && _transitionPanel.activeSelf && _transitionPickingCell)
@@ -137,9 +138,9 @@ public class DmPanelUI : MonoBehaviour
 
         _panel = Box(root.transform, "Dungeon Master", VttUiSkin.Panel, 12);
         Place(_panel, new Vector2(1, 1), new Vector2(1, 1),
-            new Vector2(410, 620), new Vector2(-14, -68));
+            new Vector2(410, 660), new Vector2(-14, -68));
         _panel.SetActive(false);
-        Label(_panel.transform, "ПАНЕЛЬ DM", 17, VttUiSkin.Text, TextAnchor.MiddleLeft,
+        Label(_panel.transform, "ПАНЕЛЬ МАСТЕРА", 17, VttUiSkin.Text, TextAnchor.MiddleLeft,
             new Vector2(0, 1), new Vector2(0, 1), new Vector2(310, 34),
             new Vector2(18, -12), true);
         Button(_panel.transform, "×", 32, 30, 362, -14,
@@ -147,18 +148,18 @@ public class DmPanelUI : MonoBehaviour
 
         _pages = new GameObject[8];
         _tabs = new Image[8];
-        string[] titles = { "Карта", "Игроки", "Бой", "Токены", "Сцена", "Туман", "Статы", "Справ." };
+        string[] titles = { "Карта", "Игроки", "Бой", "Токены", "Сцена", "Туман", "Статблоки", "Справочник" };
         for (int i = 0; i < _pages.Length; i++)
         {
             int pageIndex = i;
-            var tab = Button(_panel.transform, titles[i], 45, 34, 8 + i * 46, -58,
+            var tab = Button(_panel.transform, titles[i], 92, 32, 8 + (i % 4) * 98, -54 - (i / 4) * 38,
                 () => ShowPage(pageIndex), VttUiSkin.Button);
-            tab.GetComponentInChildren<Text>().fontSize = 11;
+            tab.GetComponentInChildren<Text>().fontSize = 13;
             _tabs[i] = tab.GetComponent<Image>();
             _pages[i] = new GameObject(titles[i] + "Page", typeof(RectTransform));
             _pages[i].transform.SetParent(_panel.transform, false);
             Place(_pages[i], new Vector2(0, 1), new Vector2(0, 1),
-                new Vector2(374, 506), new Vector2(18, -104));
+                new Vector2(374, 506), new Vector2(18, -144));
         }
         BuildMapPage(_pages[0].transform);
         BuildPlayersPage(_pages[1].transform);
@@ -168,6 +169,8 @@ public class DmPanelUI : MonoBehaviour
         BuildFogPage(_pages[5].transform);
         BuildStatBlockPage(_pages[6].transform);
         BuildReferencePage(_pages[7].transform);
+        ClearStatBlockInputs(); ClearReferenceInputs();
+        WatchLibraryDrafts();
         ShowPage(0);
     }
 
@@ -185,8 +188,8 @@ public class DmPanelUI : MonoBehaviour
         Button(parent, "Закрыть кистью", 170, 30, 180, -210, () => FogManager.Instance?.SetManual(2), VttUiSkin.Button);
         Control("Завершить ручную кисть", -246, () => FogManager.Instance?.StopManual());
         Control("Отменить последнее действие", -286, GameMasterUndo.Undo);
-        _fogHistoryText = Control("Экспорт с историей", -326, () => { if (FogManager.Instance != null) FogManager.Instance.SaveWithHistory = !FogManager.Instance.SaveWithHistory; });
-        _fogAutosaveText = Control("Автосохранение включено", -366, () => { if (FogManager.Instance != null) FogManager.Instance.Autosave = !FogManager.Instance.Autosave; });
+        _fogHistoryText = Control("Восстановить предыдущую сессию…", -326, SceneFileStore.RestorePreviousSession);
+        _fogAutosaveText = Control("Автосохранение включено", -366, DisplaySettingsUI.OpenCampaign);
         Control("Восстановить автосохранение…", -406, () => SceneFileStore.LoadAutosave());
         _fogStatus = Label(parent, "", 12, VttUiSkin.Muted, TextAnchor.UpperLeft,
             new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 56), new Vector2(0, -449));
@@ -197,10 +200,11 @@ public class DmPanelUI : MonoBehaviour
         Label(parent, "Статблоки кампании", 16, VttUiSkin.Text, TextAnchor.MiddleLeft,
             new Vector2(0, 1), new Vector2(0, 1), new Vector2(180, 26), new Vector2(0, -2), true);
         Button(parent, "Поля игрокам…", 94, 26, 176, -2, OpenStatBlockVisibilityPanel, VttUiSkin.Button);
-        Button(parent, "Новый", 64, 26, 276, -2, ClearStatBlockInputs, VttUiSkin.Button);
-        Button(parent, "Импорт листа", 100, 26, 248, -30, ImportCharacterDataToStatBlock, VttUiSkin.Button);
+        Button(parent, "Новый", 64, 26, 276, -2, RequestNewStatBlock, VttUiSkin.Button);
+        Button(parent, "Импорт листа", 100, 26, 248, -30, RequestCharacterImport, VttUiSkin.Button);
         var viewport = Box(parent, "StatBlockViewport", new Color(0, 0, 0, 0.01f), 0, false);
-        Place(viewport, new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 66), new Vector2(0, -30));
+        Place(viewport, new Vector2(0, 1), new Vector2(0, 1), new Vector2(236, 66), new Vector2(0, -30));
+        Button(parent, "Сбросить правки", 100, 26, 248, -64, ReloadSelectedStatBlock, VttUiSkin.Button);
         viewport.AddComponent<RectMask2D>();
         var rows = new GameObject("StatBlocks", typeof(RectTransform));
         rows.transform.SetParent(viewport.transform, false);
@@ -226,7 +230,10 @@ public class DmPanelUI : MonoBehaviour
         _statBlockInputs[7] = CreateInput(parent, "СИЛ,ЛОВ,ТЕЛ,ИНТ,МДР,ХАР", 0, -206, 260, 30);
         _statBlockInputs[8] = CreateInput(parent, "Опасность", 268, -206, 82, 30);
         _statBlockInputs[9] = CreateInput(parent, "Описание", 0, -240, 350, 86, true);
-        _statBlockInputs[10] = CreateInput(parent, "Действия: название: описание", 0, -332, 350, 64, true);
+        _statBlockInputs[10] = CreateInput(parent, "Действия: название: описание; перенос — \\n", 0, -332, 350, 64, true);
+        _statBlockInputs[0].characterLimit = 128;
+        _statBlockInputs[9].characterLimit = 65536;
+        _statBlockInputs[10].characterLimit = 0;
         Button(parent, "Сохранить статблок", 220, 30, 0, -402, SaveStatBlock, VttUiSkin.Button);
         Button(parent, "Удалить выбранный", 122, 30, 228, -402, DeleteSelectedStatBlock,
             new Color(0.28f, 0.11f, 0.14f));
@@ -278,7 +285,7 @@ public class DmPanelUI : MonoBehaviour
     {
         Label(parent, "Справочник кампании", 16, VttUiSkin.Text, TextAnchor.MiddleLeft,
             new Vector2(0, 1), new Vector2(0, 1), new Vector2(250, 26), new Vector2(0, -2), true);
-        Button(parent, "Новая", 76, 26, 274, -2, ClearReferenceInputs, VttUiSkin.Button);
+        Button(parent, "Новая", 76, 26, 274, -2, RequestNewReference, VttUiSkin.Button);
         _referenceSearch = CreateInput(parent, "Поиск по названию, тексту, тегам", 0, -32, 350, 28);
         _referenceSearch.onValueChanged.AddListener(_ => RefreshReferences(true));
         var viewport = Box(parent, "ReferenceViewport", new Color(0, 0, 0, 0.01f), 0, false);
@@ -301,7 +308,10 @@ public class DmPanelUI : MonoBehaviour
         _referenceCategory = CreateInput(parent, "Категория", 0, -210, 170, 28);
         _referenceTags = CreateInput(parent, "Теги через запятую", 180, -210, 170, 28);
         _referenceBody = CreateInput(parent, "Содержание записи", 0, -242, 350, 132, true);
-        _referenceBody.characterLimit = 65000;
+        _referenceTitle.characterLimit = 256;
+        _referenceCategory.characterLimit = 128;
+        _referenceTags.characterLimit = 8704;
+        _referenceBody.characterLimit = 65536;
         _referencePrivacyText = Button(parent, "Игрокам доступно", 170, 28, 0, -380,
             ToggleReferencePrivacy, VttUiSkin.Button).GetComponentInChildren<Text>();
         _referencePinText = Button(parent, "Не закреплено", 170, 28, 180, -380,
@@ -310,7 +320,7 @@ public class DmPanelUI : MonoBehaviour
         Button(parent, "Удалить", 130, 30, 220, -414, DeleteReference,
             new Color(0.28f, 0.11f, 0.14f));
         Button(parent, "Экспорт…", 170, 28, 0, -450, SceneFileStore.ExportReferenceLibraryDialog, VttUiSkin.Button);
-        Button(parent, "Импорт (замена)…", 170, 28, 180, -450, SceneFileStore.ImportReferenceLibraryDialog, VttUiSkin.Button);
+        Button(parent, "Импорт (замена)…", 170, 28, 180, -450, RequestReferenceImport, VttUiSkin.Button);
         _referenceHint = Label(parent, "Записи сохраняются в файл сессии.", 11, VttUiSkin.Muted,
             TextAnchor.UpperLeft, new Vector2(0, 1), new Vector2(0, 1),
             new Vector2(350, 24), new Vector2(0, -481));
@@ -354,17 +364,18 @@ public class DmPanelUI : MonoBehaviour
         }
     }
 
-    private void SelectReference(ReferenceEntry entry)
+    private void SelectReferenceCore(ReferenceEntry entry)
     {
         if (entry == null) return;
         _selectedReferenceId = entry.id;
         _referenceTitle.text = entry.title;
         _referenceCategory.text = entry.category;
-        _referenceTags.text = string.Join(", ", entry.tags ?? Array.Empty<string>());
+        _referenceTags.text = ReferenceTagText.Format(entry.tags);
         _referenceBody.text = entry.body;
         _referenceMasterOnly = entry.masterOnly;
         _referencePinned = entry.pinned;
         UpdateReferenceToggles();
+        RememberReferenceDraft();
         _referenceHint.text = "Выбрано: " + entry.title;
     }
 
@@ -376,9 +387,10 @@ public class DmPanelUI : MonoBehaviour
         _referenceCategory.SetTextWithoutNotify(string.Empty);
         _referenceTags.SetTextWithoutNotify(string.Empty);
         _referenceBody.SetTextWithoutNotify(string.Empty);
-        _referenceMasterOnly = false;
+        _referenceMasterOnly = true;
         _referencePinned = false;
         UpdateReferenceToggles();
+        RememberReferenceDraft();
     }
 
     private void ToggleReferencePrivacy() { _referenceMasterOnly = !_referenceMasterOnly; UpdateReferenceToggles(); }
@@ -394,16 +406,15 @@ public class DmPanelUI : MonoBehaviour
     {
         try
         {
-            var tags = new List<string>();
-            foreach (string tag in (_referenceTags.text ?? string.Empty).Split(','))
-                if (!string.IsNullOrWhiteSpace(tag)) tags.Add(tag.Trim());
+            var tags = ReferenceTagText.Parse(_referenceTags.text);
             var entry = new ReferenceEntry
             {
                 id = _selectedReferenceId, title = _referenceTitle.text, category = _referenceCategory.text,
-                body = _referenceBody.text, tags = tags.ToArray(), masterOnly = _referenceMasterOnly, pinned = _referencePinned
+                body = _referenceBody.text, tags = tags, masterOnly = _referenceMasterOnly, pinned = _referencePinned
             };
             SceneFileStore.UpsertReferenceEntry(entry);
             _selectedReferenceId = entry.id;
+            RememberReferenceDraft();
             _referenceHint.text = "Запись сохранена в кампании. Не забудьте сохранить файл сессии.";
             RefreshReferences(true);
         }
@@ -414,21 +425,26 @@ public class DmPanelUI : MonoBehaviour
     {
         if (string.IsNullOrEmpty(_selectedReferenceId)) { _referenceHint.text = "Сначала выберите запись."; return; }
         string id = _selectedReferenceId;
-        try
+        string title = _referenceTitle.text;
+        DiceUI.Instance?.ConfirmAction("Удалить запись справочника?",
+            "«" + title + "» исчезнет из кампании и открытого справочника игроков. Несохранённые правки этой записи будут потеряны.", () =>
         {
-            SceneFileStore.DeleteReferenceEntry(id);
-            ClearReferenceInputs();
-            _referenceHint.text = "Запись удалена из кампании.";
-            RefreshReferences(true);
-        }
-        catch (Exception ex) { _referenceHint.text = ex.Message; }
+            try
+            {
+                SceneFileStore.DeleteReferenceEntry(id);
+                ClearReferenceInputs();
+                _referenceHint.text = "Запись удалена из кампании.";
+                RefreshReferences(true);
+            }
+            catch (Exception ex) { _referenceHint.text = ex.Message; }
+        });
     }
 
     public void OnReferenceLibraryChanged()
     {
         _referenceSignature = null;
         if (_page == 7) RefreshReferences(true);
-        if (_referenceHint != null) _referenceHint.text = "Справочник обновлён.";
+        if (_referenceHint != null) _referenceHint.text = ReferenceDraftDirty ? "Справочник обновлён. Ваши несохранённые правки остаются в редакторе." : "Справочник обновлён.";
     }
 
     private InputField CreateInput(Transform parent, string placeholderText, float x, float y,
@@ -463,13 +479,13 @@ public class DmPanelUI : MonoBehaviour
         for (int i = 0; i < blocks.Length; i++)
         {
             var block = blocks[i];
-            Button(_statBlockList, block.name, 340, 28, 0, -i * 32,
+            Button(_statBlockList, block.name, 226, 28, 0, -i * 32,
                 () => SelectStatBlock(block), VttUiSkin.Button);
         }
-        if (string.IsNullOrEmpty(_selectedStatBlockId)) ClearStatBlockInputs();
+        // A new unsaved draft must survive periodic list refreshes.
     }
 
-    private void SelectStatBlock(StatBlockDefinition block)
+    private void SelectStatBlockCore(StatBlockDefinition block)
     {
         if (block == null) return;
         _selectedStatBlockId = block.id;
@@ -486,23 +502,13 @@ public class DmPanelUI : MonoBehaviour
             block.strength, block.dexterity, block.constitution, block.intelligence, block.wisdom, block.charisma);
         _statBlockInputs[8].text = block.challengeRating;
         _statBlockInputs[9].text = block.description;
-        var actions = new System.Text.StringBuilder();
-        foreach (var action in block.actions)
-        {
-            if (actions.Length > 0) actions.Append('\n');
-            actions.Append(action.name).Append(": ").Append(action.description);
-        }
-        _statBlockInputs[10].text = actions.ToString();
+        _statBlockInputs[10].text = StatBlockActionText.Format(block.actions);
+        RememberStatBlockDraft();
         _statBlockHint.text = "Выбран: " + block.name;
     }
 
     private void OpenStatBlockVisibilityPanel()
     {
-        if (string.IsNullOrEmpty(_selectedStatBlockId))
-        {
-            _statBlockHint.text = "Сначала выберите статблок или создайте и сохраните новый.";
-            return;
-        }
         UpdateStatBlockVisibilityLabels();
         _statBlockVisibilityPanel.SetActive(true);
     }
@@ -582,7 +588,10 @@ public class DmPanelUI : MonoBehaviour
             if (line.Length == 0) continue;
             // The statblock editor uses "name: description" rows.
             int separator = line.IndexOf(':');
-            output.Add(separator > 0 ? line : title + ": " + line);
+            output.Add(StatBlockActionText.Format(new[] { new StatBlockAction {
+                name = separator > 0 ? line.Substring(0, separator) : title,
+                description = separator > 0 ? line.Substring(separator + 1).TrimStart() : line
+            } }));
         }
     }
 
@@ -603,6 +612,9 @@ public class DmPanelUI : MonoBehaviour
         _statBlockVisibleFieldsDraft = 0;
         UpdateStatBlockVisibilityLabels();
         foreach (var input in _statBlockInputs) input.SetTextWithoutNotify(string.Empty);
+        _statBlockInputs[4].SetTextWithoutNotify("10");
+        _statBlockInputs[5].SetTextWithoutNotify("0");
+        RememberStatBlockDraft();
         if (_statBlockHint != null) _statBlockHint.text = "Новая запись: заполните поля и сохраните.";
     }
 
@@ -617,14 +629,7 @@ public class DmPanelUI : MonoBehaviour
             var stats = new int[6];
             for (int i = 0; i < stats.Length; i++)
                 if (!int.TryParse(abilities[i].Trim(), out stats[i])) throw new FormatException("Проверьте шесть характеристик.");
-            var actions = new List<StatBlockAction>();
-            foreach (string line in _statBlockInputs[10].text.Split('\n'))
-            {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-                int separator = line.IndexOf(':');
-                if (separator <= 0) throw new FormatException("Действия записываются по одному на строку: Название: описание.");
-                actions.Add(new StatBlockAction { name = line.Substring(0, separator).Trim(), description = line.Substring(separator + 1).Trim() });
-            }
+            var actions = StatBlockActionText.Parse(_statBlockInputs[10].text);
             var block = new StatBlockDefinition
             {
                 id = _selectedStatBlockId, name = _statBlockInputs[0].text,
@@ -636,10 +641,11 @@ public class DmPanelUI : MonoBehaviour
                 strength = stats[0], dexterity = stats[1], constitution = stats[2],
                 intelligence = stats[3], wisdom = stats[4], charisma = stats[5],
                 challengeRating = _statBlockInputs[8].text, description = _statBlockInputs[9].text,
-                actions = actions.ToArray(), publicFieldsMask = _statBlockVisibleFieldsDraft
+                actions = actions, publicFieldsMask = _statBlockVisibleFieldsDraft
             };
             SceneFileStore.UpsertStatBlock(block);
             _selectedStatBlockId = block.id;
+            RememberStatBlockDraft();
             _statBlockHint.text = "Сохранено. Не забудьте сохранить кампанию, чтобы записать каталог в файл.";
             RefreshStatBlocks(true);
         }
@@ -675,13 +681,13 @@ public class DmPanelUI : MonoBehaviour
             new Vector2(0, 1), new Vector2(0, 1), new Vector2(210, 30), new Vector2(0, -4), true);
         Button(parent, "Кисть стен", 170, 34, 0, -44,
             () => SceneEditor.Instance?.Activate(SceneEditor.Tool.Wall), VttUiSkin.Button);
-        Button(parent, "Стереть ребро", 170, 34, 180, -44,
+        Button(parent, "Стереть стену / дверь", 170, 34, 180, -44,
             () => SceneEditor.Instance?.Activate(SceneEditor.Tool.EraseEdge), VttUiSkin.Button);
         Button(parent, "Поставить дверь", 170, 34, 0, -87,
             () => SceneEditor.Instance?.Activate(SceneEditor.Tool.Door), VttUiSkin.Button);
         Button(parent, "Открыть / закрыть", 170, 34, 180, -87,
             () => SceneEditor.Instance?.Activate(SceneEditor.Tool.ToggleDoor), VttUiSkin.Button);
-        Button(parent, "Квадрат", 170, 34, 0, -130,
+        Button(parent, "Препятствие", 170, 34, 0, -130,
             () => SceneEditor.Instance?.Activate(SceneEditor.Tool.Square), VttUiSkin.Button);
         Button(parent, "Колонна", 170, 34, 180, -130,
             () => SceneEditor.Instance?.Activate(SceneEditor.Tool.Column), VttUiSkin.Button);
@@ -712,7 +718,7 @@ public class DmPanelUI : MonoBehaviour
         _sceneNameInput.textComponent = sceneNameText;
         _sceneNameInput.lineType = InputField.LineType.SingleLine;
         _sceneNameInput.characterLimit = 64;
-        Button(parent, "Имя ✓", 92, 30, 156, -452, RenameActiveScene, VttUiSkin.Button);
+        Button(parent, "Переименовать", 92, 30, 156, -452, RenameActiveScene, VttUiSkin.Button);
         Button(parent, "Удалить", 92, 30, 256, -452, () => DiceUI.Instance?.ConfirmAction(
             "Удалить активную сцену?", "Будет загружена следующая сцена. Последнюю сцену удалить нельзя.",
             SceneFileStore.DeleteActiveScene), VttUiSkin.Button);
@@ -1394,6 +1400,7 @@ public class DmPanelUI : MonoBehaviour
                 {
                     _selectedMapAssetId = map.id;
                     _mapCatalogNotice.text = "Выбрана: " + map.name;
+                    _mapAssetsSignature = null;
                 }, map.id == _selectedMapAssetId ? new Color(0.11f, 0.29f, 0.48f) : VttUiSkin.Button);
         }
         if (maps.Length == 0 && _mapCatalogNotice != null)
@@ -1614,7 +1621,8 @@ public class DmPanelUI : MonoBehaviour
             _fogPauseText.text = fog.Paused ? "Продолжить раскрытие" : "Приостановить раскрытие";
             _fogPreviewText.text = fog.Preview ? "Вернуться к обзору мастера" : "Посмотреть глазами игроков";
             _fogSourceText.text = fog.PreviewSourceName;
-            _fogHistoryText.text = fog.SaveWithHistory ? "Экспорт: с историей исследования" : "Экспорт: неисследованная карта";
+            _fogHistoryText.text = SceneFileStore.HasPreviousSession ? "Восстановить предыдущую сессию…" : "Предыдущей сессии в памяти нет";
+            _fogHistoryText.transform.parent.GetComponent<Button>().interactable = SceneFileStore.HasPreviousSession;
             _fogAutosaveText.text = fog.Autosave ? "Автосохранение: включено (2 минуты)" : "Автосохранение: выключено";
             _fogStatus.text = fog.Status + "\nОтмена: " + GameMasterUndo.NextLabel + "\nИгрок открывает ближайшую видимую дверь клавишей E.";
         }

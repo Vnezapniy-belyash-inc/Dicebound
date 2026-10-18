@@ -1,12 +1,59 @@
 using System;
+using System.Collections;
 using System.Linq;
 using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
 
 public class DiceboundStabilityTests
 {
     private static Type RuntimeType(string name) => Type.GetType(name + ", Assembly-CSharp", true);
+    [UnityTest]
+    public IEnumerator AutomaticSyncKeepsInterfaceVisibleAndOnlyShowsTableAfterMapAndFogAreReady()
+    {
+        UnityEditor.SceneManagement.EditorSceneManager.NewScene(UnityEditor.SceneManagement.NewSceneSetup.EmptyScene,
+            UnityEditor.SceneManagement.NewSceneMode.Single);
+        yield return new EnterPlayMode();
+        var root = new GameObject("Sync UI test");
+        var manager = new GameObject("Sync UI network");
+        try
+        {
+            manager.AddComponent<Unity.Netcode.NetworkManager>();
+            var cameraObject = new GameObject("Sync UI camera", typeof(Camera));
+            cameraObject.transform.SetParent(root.transform);
+            var camera = cameraObject.GetComponent<Camera>();
+            var type = RuntimeType("HostSceneCurtain");
+            var curtain = root.AddComponent(type);
+            const BindingFlags flags = BindingFlags.NonPublic | BindingFlags.Instance;
+            type.GetField("_syncPending", flags).SetValue(curtain, true);
+            type.GetMethod("ApplyCurtainState", flags).Invoke(curtain, null);
+            var overlay = (GameObject)type.GetField("_overlayRoot", flags).GetValue(curtain);
+            Assert.That(overlay.activeSelf, Is.False, "Sync status must not cover the interface.");
+            Assert.That(camera.enabled, Is.False, "Unapplied fog must not expose the table.");
+            Assert.That(RuntimeType("GameplayInputGate").GetProperty("AllowsWorldPointerInput").GetValue(null), Is.False);
+            type.GetField("_syncStages", flags).SetValue(curtain, (byte)13);
+            type.GetMethod("ApplyCurtainState", flags).Invoke(curtain, null);
+            Assert.That(camera.enabled, Is.True, "Map, geometry and fog are sufficient for viewing while portraits finish.");
+            Assert.That(overlay.activeSelf, Is.False);
+            type.GetField("_curtainDown", flags).SetValue(curtain, true);
+            type.GetMethod("ApplyCurtainState", flags).Invoke(curtain, null);
+            Assert.That(camera.enabled, Is.False);
+            Assert.That(overlay.activeSelf, Is.True, "Only the manual master curtain covers the full screen.");
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(root);
+            UnityEngine.Object.DestroyImmediate(manager);
+        }
+    }
+
+    [UnityTearDown]
+    public IEnumerator ExitRuntimeCheck()
+    {
+        if (Application.isPlaying) yield return new ExitPlayMode();
+    }
+
     [Test]
     public void GeneralConfirmationDoesNotLabelRestoreAsDeleteAndReplacesPreviousAction()
     {
