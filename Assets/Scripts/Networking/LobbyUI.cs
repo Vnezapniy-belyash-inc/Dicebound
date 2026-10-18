@@ -5,7 +5,7 @@ using UnityEngine.UI;
 /// <summary>
 /// UI лобби: кнопки Host / Join, поле join-кода, поле ника.
 /// </summary>
-public class LobbyUI : MonoBehaviour
+public partial class LobbyUI : MonoBehaviour
 {
     [Header("UI References")]
     public GameObject lobbyPanel;
@@ -31,6 +31,7 @@ public class LobbyUI : MonoBehaviour
         hostButton.onClick.AddListener(OnHostClicked);
         joinButton.onClick.AddListener(OnJoinClicked);
         BuildPreparationButton();
+        BuildLobbyLayout();
         if (exitButton != null)
             exitButton.onClick.AddListener(() => Application.Quit());
 
@@ -86,7 +87,7 @@ public class LobbyUI : MonoBehaviour
             await GameNetworkManager.Instance.ShutdownAndReset();
             RelayManager.ClearJoinCode();
             NetworkManager.Singleton.GetComponent<Unity.Netcode.Transports.UTP.UnityTransport>()
-                .SetConnectionData("127.0.0.1", 7777, "127.0.0.1");
+                .SetConnectionData("127.0.0.1", 0, "127.0.0.1"); // Local preparation needs no fixed public port.
             CellMarker.EnsureRegistered();
             SceneTransitionMarker.EnsureRegistered();
             if (!GameNetworkManager.Instance.StartHost()) throw new System.InvalidOperationException("Не удалось открыть редактор.");

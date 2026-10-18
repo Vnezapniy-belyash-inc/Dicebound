@@ -1002,6 +1002,10 @@ public partial class TokenController : NetworkDraggable
     {
         if (!IsSpawned || !IsVisibleToLocalPlayer) return string.Empty;
         var info = new StringBuilder(TokenName);
+        if (!ShowMasterStats)
+            info.Append(IsHost ? "\nПредпросмотр · перемещение отключено" : CanControlClient(NetworkManager.LocalClientId)
+                ? ControllerClientId == NetworkManager.LocalClientId ? "\nВаш токен · можно перетаскивать" : "\nОбщий токен · можно перетаскивать"
+                : "\nПеремещает владелец или мастер");
         if (DisplayedCurrentHp >= 0 && DisplayedMaxHp > 0)
             info.Append($"\nХП: {DisplayedCurrentHp}/{DisplayedMaxHp}");
         if (DisplayedArmorClass >= 0) info.Append($"\nКД: {DisplayedArmorClass}");
@@ -1022,6 +1026,7 @@ public partial class TokenController : NetworkDraggable
         return info.ToString();
     }
 
+    public static bool IsMenuOpen => _activeMenuToken != null && _activeMenuToken._showMenu;
     public static bool IsMenuTextFocused => _activeMenuToken != null &&
         _activeMenuToken._showMenu && (_activeMenuToken._visionEditing || _activeMenuToken._nameEditing || _activeMenuToken._masterEditing);
     private Vector2 _menuScroll;
@@ -1049,7 +1054,7 @@ public partial class TokenController : NetworkDraggable
 
     private void CloseMenu()
     {
-        if (_showMenu) _menuClosedFrame = Time.frameCount;
+        if (_showMenu) { _menuClosedFrame = Time.frameCount; GameplayInputGate.MarkToolExit(); }
         _showMenu = false;
         _visionEditing = false;
         _masterEditing = false;
@@ -1355,7 +1360,7 @@ public partial class TokenController : NetworkDraggable
                 GUI.Label(new Rect(_menuRect.x + 12, y, 238, 22),
                     _visionError ?? $"0 — без зрения · до {MaxVisionFeet} футов", titleStyle);
                 y += 26;
-                GUI.Label(new Rect(_menuRect.x + 12, y, 238, 20), "HP · максимум · КД", titleStyle);
+                GUI.Label(new Rect(_menuRect.x + 12, y, 238, 20), "ХП · максимум · КД", titleStyle);
                 y += 20;
                 GUI.SetNextControlName("TokenCurrentHp");
                 _masterCurrentHpInput = GUI.TextField(new Rect(_menuRect.x + 10, y, 66, 28), _masterCurrentHpInput);

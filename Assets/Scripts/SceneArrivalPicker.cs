@@ -62,6 +62,7 @@ public sealed class SceneArrivalPicker : MonoBehaviour, IPointerClickHandler
         });
         Button(panel, "Отмена · Esc", new Vector2(183, -312), picker.Close);
         IsOpen = true;
+        root.AddComponent<UiModalScope>().dismiss = picker.Close;
         picker.DrawPreview();
     }
 
@@ -143,7 +144,7 @@ public sealed class SceneArrivalPicker : MonoBehaviour, IPointerClickHandler
     }
 
     private bool Inside(int x, int y) => x >= 0 && y >= 0 && x < _scene.gridWidth && y < _scene.gridHeight;
-    private void Close() { IsOpen = false; Destroy(_root); }
+    private void Close() { if (!IsOpen) return; IsOpen = false; GameplayInputGate.MarkToolExit(); Destroy(_root); }
     private void OnDestroy() { IsOpen = false; if (_texture != null) Destroy(_texture); }
 
     private static RectTransform Rect(Transform parent, string name, Vector2 size, Vector2 position)

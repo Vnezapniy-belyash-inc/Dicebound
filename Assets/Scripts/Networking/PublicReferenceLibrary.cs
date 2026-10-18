@@ -228,11 +228,13 @@ public sealed class PublicReferenceLibrary : MonoBehaviour
         finally { _incoming = null; _chunks = null; }
     }
 
-    private void SetOpen(bool open) { IsOpen = open; _blocker.SetActive(open); if (open) _nextRequest = 0; }
+    private void SetOpen(bool open) { IsOpen = open; GameplayInputGate.MarkToolExit(); _blocker.SetActive(open); if (open) _nextRequest = 0; }
     private void OnDestroy() { Detach(); IsOpen = false; _available = false; if (_instance == this) _instance = null; }
 
     private void OnGUI()
     {
+        if (IsOpen && Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Escape)
+        { SetOpen(false); Event.current.Use(); }
         if (_network == null || !_network.IsConnectedClient || _network.IsServer || MovementReviewUI.IsOpen || DisplaySettingsUI.IsOpen || SceneArrivalPicker.IsOpen) return;
         Matrix4x4 matrix = GUI.matrix; int depth = GUI.depth;
         float scale = IsOpen ? Mathf.Min(LocalUiScale.Value, Mathf.Min(Screen.width / 940f, Screen.height / 640f))

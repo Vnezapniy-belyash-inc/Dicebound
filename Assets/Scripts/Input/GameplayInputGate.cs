@@ -5,13 +5,16 @@ using UnityEngine.UI;
 
 /// <summary>
 /// Single source of truth for when gameplay input should be suppressed because the user
-/// is editing UI text. All keyboard hotkeys and world-space pointer handlers must consult
+/// is editing UI text or using a modal dialog. Keyboard hotkeys and world-space pointer handlers must consult
 /// this gate before acting.
 /// </summary>
 public static class GameplayInputGate
 {
     public static int LastToolExitFrame { get; private set; } = -1;
     public static void MarkToolExit() => LastToolExitFrame = Time.frameCount;
+    public static bool IsModalOpen => UiModalScope.IsOpen || SimpleFileBrowser.FileBrowser.IsOpen ||
+        MovementReviewUI.IsOpen || PublicReferenceLibrary.IsOpen || SceneArrivalPicker.IsOpen || DisplaySettingsUI.IsOpen ||
+        (DiceUI.Instance != null && DiceUI.Instance.IsConfirmationOpen);
     /// <summary>True while a legacy or TMP text/numeric field has keyboard focus.</summary>
     public static bool IsTextInputFocused
     {
@@ -47,21 +50,19 @@ public static class GameplayInputGate
         HostSceneCurtain.IsBlockingLocalPlayer;
 
     /// <summary>IMGUI overlays (measurement labels, token menus) — blocked for blinded clients.</summary>
-    public static bool AllowsImGuiOverlays => !MovementReviewUI.IsOpen && !FunEffects.IsStampInputOpen && !PublicReferenceLibrary.IsOpen && !SceneArrivalPicker.IsOpen && !DisplaySettingsUI.IsOpen && !IsHostCurtainBlocking &&
-        !(DiceUI.Instance != null && DiceUI.Instance.IsConfirmationOpen);
+    public static bool AllowsImGuiOverlays => !IsModalOpen && !FunEffects.IsStampInputOpen && !IsHostCurtainBlocking;
 
     /// <summary>
     /// Keyboard shortcuts: panel toggles, map rotate, camera movement keys, debug keys, etc.
     /// </summary>
     public static bool AllowsKeyboardHotkeys =>
-        !MovementReviewUI.IsOpen && !FunEffects.IsInputOpen &&
-        !PublicReferenceLibrary.IsOpen && !SceneArrivalPicker.IsOpen && !DisplaySettingsUI.IsOpen && !IsTextInputFocused && !IsHostCurtainBlocking && !HostSceneCurtain.IsLocalSynchronizing &&
-        !(DiceUI.Instance != null && DiceUI.Instance.IsConfirmationOpen);
+        LastToolExitFrame != Time.frameCount && !IsModalOpen && !TokenController.IsMenuOpen && !FunEffects.IsInputOpen &&
+        !IsTextInputFocused && !IsHostCurtainBlocking && !HostSceneCurtain.IsLocalSynchronizing;
 
     /// <summary>
     /// Mouse actions on the game world: dice drag, map pan, measurement, pings, token menus.
     /// Blocked while typing or when the cursor is over UI.
     /// </summary>
     public static bool AllowsWorldPointerInput =>
-        LastToolExitFrame != Time.frameCount && !DisplaySettingsUI.IsOpen && !IsTextInputFocused && !IsPointerOverUI && !IsHostCurtainBlocking && !HostSceneCurtain.IsLocalSynchronizing;
+        LastToolExitFrame != Time.frameCount && !IsModalOpen && !TokenController.IsMenuOpen && !IsTextInputFocused && !IsPointerOverUI && !IsHostCurtainBlocking && !HostSceneCurtain.IsLocalSynchronizing;
 }

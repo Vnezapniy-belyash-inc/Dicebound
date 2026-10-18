@@ -1,6 +1,7 @@
 # Dicebound — текущий порядок доработки
 
 Обновлено: 18 октября 2026. Критерии: [BACKLOG.md](BACKLOG.md). Поручение: [docs/AUTONOMOUS_IMPROVEMENT_PROMPT.md](docs/AUTONOMOUS_IMPROVEMENT_PROMPT.md).
+Текущий проход интерфейса и его отдельные ограничения: [UI_UX_VERIFICATION.md](docs/UI_UX_VERIFICATION.md). Unity Editor вновь доступен; историческая ошибка лицензии не является текущим блокером этого прохода.
 
 ## Действующие правила
 

@@ -14,10 +14,22 @@ public static class VttUiSkin
     public static readonly Color Blue = new(0.25f, 0.51f, 0.96f, 1f);
     public static readonly Color Green = new(0.41f, 0.80f, 0.46f, 1f);
     public static readonly Color Red = new(0.94f, 0.30f, 0.31f, 1f);
+    public static readonly Color Primary = new(0.10f, 0.30f, 0.48f, 1f);
+    public static readonly Color Danger = new(0.28f, 0.11f, 0.14f, 1f);
 
     static readonly Dictionary<int, Sprite> Sprites = new();
     static readonly Dictionary<string, Sprite> Icons = new();
-    static GUIStyle _imGuiPanel, _imGuiButton, _imGuiDangerButton;
+    static GUIStyle _imGuiPanel, _imGuiButton, _imGuiDangerButton, _imGuiChoice;
+    public static GUIStyle ImGuiChoice
+    {
+        get
+        {
+            var style = LiveGuiStyle(ref _imGuiChoice, Button, new Color(0.16f, 0.25f, 0.36f), Primary, true);
+            style.onNormal.background = style.onHover.background = style.onActive.background = style.active.background;
+            style.onNormal.textColor = style.onHover.textColor = style.onActive.textColor = Text;
+            return style;
+        }
+    }
 
     public static GUIStyle ImGuiPanel => LiveGuiStyle(ref _imGuiPanel, Panel, Panel, Panel, false);
     public static GUIStyle ImGuiButton => LiveGuiStyle(ref _imGuiButton, Button,
@@ -89,11 +101,45 @@ public static class VttUiSkin
         if (button == null) return;
         var palette = button.colors;
         palette.normalColor = Color.white;
-        palette.highlightedColor = new Color(1.16f, 1.16f, 1.16f, 1f);
+        button.targetGraphic = image;
+        palette.colorMultiplier = 1f;
+        palette.highlightedColor = new Color(1.22f, 1.30f, 1.40f, 1f);
         palette.pressedColor = new Color(0.76f, 0.79f, 0.85f, 1f);
-        palette.selectedColor = Color.white;
+        palette.selectedColor = new Color(1.35f, 1.60f, 1.90f, 1f);
         palette.disabledColor = new Color(0.55f, 0.58f, 0.63f, 0.7f);
         button.colors = palette;
+    }
+
+    /// <summary>Keep full user text as plain text; fit button captions without overflowing a neighbour.</summary>
+    public static void ButtonCaption(UnityEngine.UI.Text label, int size = 14)
+    {
+        if (label == null) return;
+        label.fontSize = size;
+        label.fontStyle = FontStyle.Normal;
+        label.supportRichText = false;
+        label.raycastTarget = false;
+        label.horizontalOverflow = HorizontalWrapMode.Wrap;
+        label.verticalOverflow = VerticalWrapMode.Truncate;
+        label.resizeTextForBestFit = true;
+        label.resizeTextMinSize = Mathf.Min(12, size);
+        label.resizeTextMaxSize = size;
+        var button = label.GetComponentInParent<UnityEngine.UI.Button>();
+        if (button != null) UiOverflowTooltip.Attach(label, button.gameObject);
+    }
+
+    public static void InputPrefix(InputField field, string caption)
+    {
+        var go = new GameObject("FieldCaption", typeof(RectTransform), typeof(UnityEngine.UI.Text));
+        go.transform.SetParent(field.transform, false);
+        var label = go.GetComponent<UnityEngine.UI.Text>();
+        label.font = field.textComponent.font; label.fontSize = 12; label.text = caption;
+        label.color = Muted; label.alignment = TextAnchor.MiddleLeft; label.raycastTarget = false;
+        var rect = label.rectTransform;
+        rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0, 0.5f);
+        rect.sizeDelta = new Vector2(24, 26); rect.anchoredPosition = new Vector2(7, 0);
+        field.textComponent.rectTransform.anchoredPosition += new Vector2(25, 0);
+        field.textComponent.rectTransform.sizeDelta -= new Vector2(25, 0);
+        if (field.placeholder is UnityEngine.UI.Text placeholder) placeholder.text = "";
     }
 
     public static Sprite Icon(string key)

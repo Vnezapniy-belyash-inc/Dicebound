@@ -60,10 +60,12 @@ public class CameraMovement : MonoBehaviour
         if (!GameplayInputGate.AllowsWorldPointerInput)
         {
             _panning = false;
+            if (Mouse.current?.rightButton.isPressed == true) _suppressRightLook = true;
             return;
         }
 
         Keyboard k = Keyboard.current;
+        if (!GameplayInputGate.AllowsKeyboardHotkeys) k = null;
         Mouse m = Mouse.current;
 
         // ── Toggle режима (F1) ──

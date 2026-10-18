@@ -114,7 +114,9 @@ public sealed class DisplaySettingsUI : MonoBehaviour
 
     private void SetOpen(bool open)
     {
+        if (IsOpen == open) return;
         IsOpen = open;
+        GameplayInputGate.MarkToolExit();
         if (open)
         {
             SceneEditor.Instance?.Deactivate(); FogManager.Instance?.StopManual();
@@ -185,7 +187,7 @@ public sealed class DisplaySettingsUI : MonoBehaviour
             bool master = Unity.Netcode.NetworkManager.Singleton?.IsHost == true;
             if (!master && _section == 2) _section = 0;
             GUI.enabled = !_pending;
-            int section = GUILayout.Toolbar(_section, master ? new[] { "Экран", "Управление", "Кампания" } : new[] { "Экран", "Управление" }, GUILayout.Height(34));
+            int section = GUILayout.Toolbar(_section, master ? new[] { "Экран", "Управление", "Кампания" } : new[] { "Экран", "Управление" }, VttUiSkin.ImGuiChoice, GUILayout.Height(34));
             if (section != _section) { _section = section; _scroll = Vector2.zero; }
             GUI.enabled = true;
             _scroll = GUILayout.BeginScrollView(_scroll);
@@ -220,7 +222,7 @@ public sealed class DisplaySettingsUI : MonoBehaviour
                 GUILayout.Label("Масштаб интерфейса: " + Mathf.RoundToInt(LocalUiScale.Value * 100) + "%", wrap);
                 float next = GUILayout.HorizontalSlider(LocalUiScale.Value, 0.75f, 1.5f, GUILayout.Height(24));
                 if (Mathf.Abs(next - LocalUiScale.Value) > 0.005f) _uiScale.SetScale(Mathf.Round(next * 100) / 100f);
-                if (GUILayout.Button("Вернуть масштаб 100%", GUILayout.Height(30))) _uiScale.SetScale(1);
+                if (GUILayout.Button("Вернуть масштаб 100%", VttUiSkin.ImGuiButton, GUILayout.Height(30))) _uiScale.SetScale(1);
             }
             else if (_section == 1)
             {
@@ -230,7 +232,7 @@ public sealed class DisplaySettingsUI : MonoBehaviour
                 bool hover = GUILayout.Toggle(LocalControls.TokenHover, " Показывать краткие сведения при наведении", GUILayout.Height(32));
                 if (hover != LocalControls.TokenHover) LocalControls.SetTokenHover(hover);
                 GUILayout.Label("ПКМ по токену — действия и подробности.\nПеретаскивание в режиме «По клеткам» — один шаг.\nWASD / стрелки — камера · колёсико — приближение.\nF1 — свободная камера · T — колесо приколов.\nЛКМ — выбранный инструмент · Esc / ПКМ — закончить.\nEsc во время штриха — отменить текущий штрих.", wrap);
-                if (GUILayout.Button("Сбросить личные настройки управления", GUILayout.Height(32)))
+                if (GUILayout.Button("Сбросить личные настройки управления", VttUiSkin.ImGuiButton, GUILayout.Height(32)))
                 { LocalControls.SetCameraSpeed(1); LocalControls.SetTokenHover(true); }
             }
             else
@@ -239,7 +241,7 @@ public sealed class DisplaySettingsUI : MonoBehaviour
                 GUILayout.Space(8);
                 GUILayout.Label("Перемещение игроков", wrap);
                 int policy = GUILayout.SelectionGrid((int)SceneFileStore.MovementPolicy,
-                    new[] { "Свободное", "Предупреждать", "Решает мастер", "По клеткам (по умолчанию)" }, 1, GUILayout.Height(128));
+                    new[] { "Свободное", "Предупреждать", "Решает мастер", "По клеткам (по умолчанию)" }, 1, VttUiSkin.ImGuiChoice, GUILayout.Height(128));
                 if (policy != (int)SceneFileStore.MovementPolicy) SceneFileStore.SetMovementPolicy((PlayerMovementPolicy)policy);
                 GUILayout.Label("По клеткам: одно перетаскивание — один шаг вверх, вниз, влево или вправо. Стены, закрытые двери и занятые клетки блокируют шаг. Мастер переносит без ограничений. В режимах подтверждения ожидание — до 30 секунд.", wrap);
                 var fog = FogManager.Instance;
@@ -261,9 +263,9 @@ public sealed class DisplaySettingsUI : MonoBehaviour
     {
         GUILayout.Label(label);
         GUILayout.BeginHorizontal();
-        if (GUILayout.Button(new GUIContent("‹", "Предыдущее значение"), GUILayout.Width(36), GUILayout.Height(30))) previous();
+        if (GUILayout.Button(new GUIContent("‹", "Предыдущее значение"), VttUiSkin.ImGuiButton, GUILayout.Width(36), GUILayout.Height(30))) previous();
         GUILayout.Label(value, new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter }, GUILayout.Height(30));
-        if (GUILayout.Button(new GUIContent("›", "Следующее значение"), GUILayout.Width(36), GUILayout.Height(30))) next();
+        if (GUILayout.Button(new GUIContent("›", "Следующее значение"), VttUiSkin.ImGuiButton, GUILayout.Width(36), GUILayout.Height(30))) next();
         GUILayout.EndHorizontal();
     }
 }

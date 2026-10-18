@@ -14,6 +14,8 @@ public class CharacterSheetUI : MonoBehaviour
     public CharacterData characterData;
 
     public static CharacterSheetUI Instance { get; private set; }
+    public bool IsOpen => _pn != null && _pn.activeInHierarchy;
+    public float PanelPixelWidth => IsOpen ? _pn.GetComponent<RectTransform>().rect.width * _cv.scaleFactor : 0;
 
     float PW = 740f;  // ширина панели
     float CW = 350f;  // ширина колонки
@@ -92,6 +94,14 @@ public class CharacterSheetUI : MonoBehaviour
     void Update()
     {
         SyncSessionAccess();
+        if (_pn != null && _pn.activeInHierarchy && !GameplayInputGate.IsModalOpen && !TokenController.IsMenuOpen
+            && !GameplayInputGate.IsTextInputFocused && GameplayInputGate.LastToolExitFrame != Time.frameCount
+            && UnityEngine.InputSystem.Keyboard.current?.escapeKey.wasPressedThisFrame == true
+            && !SceneEditor.IsEditing && !FogManager.IsManualEditing && MeasurementTool.Instance?.IsLocalActive != true)
+        {
+            SetSheetVisible(false);
+            GameplayInputGate.MarkToolExit();
+        }
     }
 
     /// <summary>Вызывается при входе/выходе из сессии.</summary>
@@ -124,7 +134,7 @@ public class CharacterSheetUI : MonoBehaviour
         if (show && !IsSessionActive) return;
 
         _pn.SetActive(show);
-        if (show) RefreshDisplay();
+        if (show) { DmPanelUI.Instance?.Hide(); RefreshDisplay(); }
     }
 
     // ══════════════════════════════  Сборка  ══════════════════════════════
@@ -159,7 +169,7 @@ public class CharacterSheetUI : MonoBehaviour
         // Панель
         _pn = GO("Panel", typeof(RectTransform), typeof(Image));
         _pn.transform.SetParent(cgo.transform, false);
-        _pn.GetComponent<Image>().color = new Color(0.05f, 0.07f, 0.11f, 0.96f);
+        VttUiSkin.Surface(_pn.GetComponent<Image>(), VttUiSkin.Panel);
         RS(_pn, PR, PR, PR, new(PW, th), new(-12, -12));
 
         float cy = -PD;
@@ -193,7 +203,7 @@ public class CharacterSheetUI : MonoBehaviour
         _page2.SetActive(_currentPage == 2);
         _page3.SetActive(_currentPage == 3);
         _page4.SetActive(_currentPage == 4);
-
+        _pn.AddComponent<UiPanelViewport>();
     }
 
     float BuildTabs(float y, Font f)
@@ -201,7 +211,7 @@ public class CharacterSheetUI : MonoBehaviour
         float w = PW - PD*2;
         int n = 5;
         float tw = (w - (n-1)*2f) / n;
-        string[] names = { "ХАР-КИ", "АТАКИ", "СПОСОБ.", "СНАРЯЖ.", "ЗАМЕТКИ" };
+        string[] names = { "Характеристики", "Атаки", "Способности", "Снаряжение", "Заметки" };
 
         Color activeBg = new Color(0.12f, 0.15f, 0.25f);
         Color inactiveBg = new Color(0.07f, 0.09f, 0.16f);
@@ -220,6 +230,7 @@ public class CharacterSheetUI : MonoBehaviour
             var btn = GO($"Tab{i}", typeof(RectTransform), typeof(Image), typeof(Button));
             btn.transform.SetParent(bg.transform, false);
             _tabImages[i] = btn.GetComponent<Image>();
+            VttUiSkin.ButtonStyle(_tabImages[i], VttUiSkin.Button, 6);
             int page = i;
             btn.GetComponent<Button>().onClick.AddListener(() => SwitchPage(page));
             R(btn, AL, AL, PL, new(tw, TABH), new(tx, 0));
@@ -968,45 +979,61 @@ public class CharacterSheetUI : MonoBehaviour
     void ImportCharacter()
     {
 #if UNITY_EDITOR
+        RequestCharacterImport(UnityEditor.EditorUtility.OpenFilePanel("Импорт персонажа LSS", "", "json"));
+#else
+        SimpleFileBrowser.FileBrowser.ShowLoadDialog(paths => { if (paths.Length > 0) RequestCharacterImport(paths[0]); },
+            null, SimpleFileBrowser.FileBrowser.PickMode.Files, false, null, null, "Импорт персонажа LSS", "Импортировать");
+#endif
+    }
+
+    void RequestCharacterImport(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return;
+        DiceUI.Instance?.ConfirmAction("Заменить лист персонажа?", "Поля локального листа будут заменены данными LSS. При необходимости сначала экспортируйте нынешний лист.", () =>
+        {
+            try
+            {
+                if (new FileInfo(path).Length > 4 * 1024 * 1024) throw new System.FormatException("Файл превышает 4 МБ.");
+                ImportCharacterJson(File.ReadAllText(path), _cd);
+                RefreshDisplay(); DiceUI.Instance?.ShowToolNotice("Лист персонажа импортирован.");
+            }
+            catch (System.Exception e) { DiceUI.Instance?.ShowToolNotice("Персонаж не импортирован: " + e.Message); }
+        });
+    }
+
+    // Parse into a detached candidate: a failed import must leave the user's sheet intact.
+    public static void ImportCharacterJson(string json, CharacterData target)
+    {
+        var root = Newtonsoft.Json.Linq.JObject.Parse(json);
+        if (root["data"]?.Type != Newtonsoft.Json.Linq.JTokenType.String)
+            throw new System.FormatException("Ожидается файл персонажа LSS с полем data.");
+        var data = Newtonsoft.Json.Linq.JObject.Parse((string)root["data"]);
+        if ((string)data["jsonType"] != "character") throw new System.FormatException("Файл не содержит лист персонажа LSS.");
+        root["data"] = data.ToString(Newtonsoft.Json.Formatting.None);
+        var preview = new GameObject("Character import preview");
         try
         {
-            string path = UnityEditor.EditorUtility.OpenFilePanel(
-                "Загрузить персонажа LSS", "", "json");
-            if (string.IsNullOrEmpty(path)) return;
-
-            string json = File.ReadAllText(path);
-            LssJsonConverter.ImportFromLss(json, _cd);
-            RefreshDisplay();
-            Debug.Log("[LSS] Персонаж загружен из " + path);
+            var candidate = preview.AddComponent<CharacterData>();
+            JsonUtility.FromJsonOverwrite(JsonUtility.ToJson(target), candidate);
+            LssJsonConverter.ImportFromLss(root.ToString(Newtonsoft.Json.Formatting.None), candidate);
+            JsonUtility.FromJsonOverwrite(JsonUtility.ToJson(candidate), target);
         }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"[LSS UI] Ошибка импорта: {e.Message}");
-        }
-#else
-        Debug.LogWarning("[LSS] Импорт доступен только в Unity Editor");
-#endif
+        finally { if (Application.isPlaying) Destroy(preview); else DestroyImmediate(preview); }
     }
 
     void ExportCharacter()
     {
-#if UNITY_EDITOR
-        try
+        void Export(string path)
         {
-            string path = UnityEditor.EditorUtility.SaveFilePanel(
-                "Выгрузить персонажа LSS", "", "character.json", "json");
             if (string.IsNullOrEmpty(path)) return;
-
-            string json = LssJsonConverter.ExportToLss(_cd);
-            File.WriteAllText(path, json);
-            Debug.Log("[LSS] Персонаж выгружен в " + path);
+            try { File.WriteAllText(path, LssJsonConverter.ExportToLss(_cd)); DiceUI.Instance?.ShowToolNotice("Лист персонажа экспортирован."); }
+            catch (System.Exception e) { DiceUI.Instance?.ShowToolNotice("Не удалось экспортировать персонажа: " + e.Message); }
         }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"[LSS] Ошибка экспорта: {e.Message}");
-        }
+#if UNITY_EDITOR
+        Export(UnityEditor.EditorUtility.SaveFilePanel("Экспорт персонажа LSS", "", "character.json", "json"));
 #else
-        Debug.LogWarning("[LSS] Экспорт доступен только в Unity Editor");
+        SimpleFileBrowser.FileBrowser.ShowSaveDialog(paths => { if (paths.Length > 0) Export(paths[0]); },
+            null, SimpleFileBrowser.FileBrowser.PickMode.Files, false, null, "character.json", "Экспорт персонажа LSS", "Экспортировать");
 #endif
     }
 
@@ -1036,6 +1063,7 @@ public class CharacterSheetUI : MonoBehaviour
         g.transform.SetParent(p, false);
         var tx = g.GetComponent<Text>();
         tx.text=t; tx.font=f; tx.fontSize=(int)sz; tx.fontStyle=st; tx.color=c; tx.alignment=a; tx.raycastTarget=false;
+        tx.supportRichText = false;
         return g;
     }
 
@@ -1043,7 +1071,7 @@ public class CharacterSheetUI : MonoBehaviour
     {
         var g = GO("B", typeof(RectTransform), typeof(Image), typeof(Button));
         g.transform.SetParent(p, false);
-        g.GetComponent<Image>().color = bg;
+        VttUiSkin.ButtonStyle(g.GetComponent<Image>(), bg, 6);
         g.GetComponent<Button>().onClick.AddListener(cb);
         R(g, AML, AML, PML, new(w,h), new(x,0));
         var lb = Txt(g.transform, l, f, 11, FontStyle.Bold, Color.white, TextAnchor.MiddleCenter);
@@ -1072,7 +1100,7 @@ public class CharacterSheetUI : MonoBehaviour
     {
         var g = GO("B", typeof(RectTransform), typeof(Image), typeof(Button));
         g.transform.SetParent(p, false);
-        g.GetComponent<Image>().color = bg;
+        VttUiSkin.ButtonStyle(g.GetComponent<Image>(), bg, 6);
         g.GetComponent<Button>().onClick.AddListener(cb);
         R(g, AL, AL, PL, new(w,h), new(x,y));
         var lb = Txt(g.transform, l, f, 11, FontStyle.Bold, Color.white, TextAnchor.MiddleCenter);

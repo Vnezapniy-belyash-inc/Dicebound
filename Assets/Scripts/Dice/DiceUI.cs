@@ -35,6 +35,8 @@ public class DiceUI : MonoBehaviour
     private int _rollingCount;
     private Canvas _canvas;
     private GameObject _sidebarGO;
+    public float ToolsPanelPixelWidth => _sidebarGO != null && _sidebarGO.activeInHierarchy && _canvas != null
+        ? _sidebarGO.GetComponent<RectTransform>().rect.width * _canvas.scaleFactor : 0;
     private GameObject _bottomPanelGO; // нижний док
     private GameObject _debugPanelGO;  // старые служебные элементы карты
     private GameObject _mapTexButton;
@@ -75,7 +77,6 @@ public class DiceUI : MonoBehaviour
 
     // Кнопка выхода
     private GameObject _leaveButton;
-    private GameObject _leaveConfirmDialog;
 
     // Список игроков (Tab)
     private GameObject _playerListPanel;
@@ -158,6 +159,16 @@ public class DiceUI : MonoBehaviour
 
         UpdateHostMapControls();
         UpdateToolFeedback();
+        if ((DmPanelUI.Instance?.IsOpen == true || CharacterSheetUI.Instance?.IsOpen == true) && _logPanelGO?.activeSelf == true)
+        {
+            _logPanelGO.SetActive(false);
+            _logTab?.SetActive(true);
+        }
+        if (DmPanelUI.Instance?.IsOpen == true || CharacterSheetUI.Instance?.IsOpen == true)
+        {
+            _bottomPanelGO?.SetActive(false);
+            if (Screen.width / LocalUiScale.Value < 1500 && !GameplayInputGate.IsModalOpen) InitiativeTracker.Instance?.SetVisible(false);
+        }
         if (Time.unscaledTime >= _nextHeaderRefresh)
         {
             UpdateSessionHeader();
@@ -185,6 +196,7 @@ public class DiceUI : MonoBehaviour
     {
         if (panel == null) return;
         bool show = !panel.activeSelf;
+        if (show && (panel == _logPanelGO || panel == _bottomPanelGO)) { DmPanelUI.Instance?.Hide(); CharacterSheetUI.Instance?.SetSheetVisible(false); }
         panel.SetActive(show);
         if (tab != null) tab.SetActive(!show);
     }
@@ -367,7 +379,8 @@ public class DiceUI : MonoBehaviour
         if (_topBarGO != null) _topBarGO.SetActive(true);
         if (_sidebarGO != null) _sidebarGO.SetActive(true);
         if (_bottomPanelGO != null) _bottomPanelGO.SetActive(true);
-        if (_logPanelGO != null) { _logPanelGO.SetActive(true); if (_logTab != null) _logTab.SetActive(false); }
+        if (_logPanelGO != null) _logPanelGO.SetActive(false);
+        if (_logTab != null) _logTab.SetActive(true);
         if (_leaveButton != null) _leaveButton.SetActive(true);
         if (_debugPanelGO != null) _debugPanelGO.SetActive(false);
         UpdateHostMapControls();
@@ -386,7 +399,6 @@ public class DiceUI : MonoBehaviour
         if (_logPanelGO != null) _logPanelGO.SetActive(false);
         if (_logTab != null) _logTab.SetActive(false);
         if (_leaveButton != null) _leaveButton.SetActive(false);
-        if (_leaveConfirmDialog != null) _leaveConfirmDialog.SetActive(false);
         if (_textureMenu != null) _textureMenu.SetActive(false);
         if (_toolContext != null) _toolContext.SetActive(false);
         if (_confirmPanel != null) _confirmPanel.SetActive(false);
@@ -507,9 +519,8 @@ public class DiceUI : MonoBehaviour
         _leaveButton.SetActive(false); // скрыта до входа в игру
 
         Image img = _leaveButton.AddComponent<Image>();
-        VttUiSkin.ButtonStyle(img, new Color(0.27f, 0.09f, 0.11f), 7);
-
         Button btn = _leaveButton.AddComponent<Button>();
+        VttUiSkin.ButtonStyle(img, VttUiSkin.Danger, 7);
         btn.onClick.AddListener(ShowLeaveConfirm);
 
         RectTransform rt = _leaveButton.GetComponent<RectTransform>();
@@ -528,48 +539,16 @@ public class DiceUI : MonoBehaviour
         xrt.anchorMin = Vector2.zero; xrt.anchorMax = Vector2.one;
         xrt.sizeDelta = Vector2.zero;
 
-        // Диалог подтверждения
-        _leaveConfirmDialog = new GameObject("LeaveConfirm");
-        _leaveConfirmDialog.transform.SetParent(canvasTr, false);
-        _leaveConfirmDialog.SetActive(false);
-
-        Image dImg = _leaveConfirmDialog.AddComponent<Image>();
-        VttUiSkin.Surface(dImg, VttUiSkin.Panel, 12);
-
-        RectTransform drt = _leaveConfirmDialog.GetComponent<RectTransform>();
-        drt.anchorMin = drt.anchorMax = drt.pivot = new Vector2(0.5f, 0.5f);
-        drt.sizeDelta = new Vector2(300f, 120f);
-        drt.anchoredPosition = Vector2.zero;
-
-        // Текст
-        GameObject qGO = new GameObject("Question");
-        qGO.transform.SetParent(_leaveConfirmDialog.transform, false);
-        Text qTxt = qGO.AddComponent<Text>();
-        qTxt.text = "Выйти из лобби?";
-        qTxt.font = font; qTxt.fontSize = 20; qTxt.fontStyle = FontStyle.Bold;
-        qTxt.color = Color.white; qTxt.alignment = TextAnchor.MiddleCenter;
-        RectTransform qrt = qTxt.GetComponent<RectTransform>();
-        qrt.anchorMin = new Vector2(0, 0.5f); qrt.anchorMax = new Vector2(1, 1f);
-        qrt.sizeDelta = Vector2.zero; qrt.anchoredPosition = Vector2.zero;
-
-        // Кнопка Да
-        MakeButton(_leaveConfirmDialog.transform, "Да", 40f, -80f, 90f, 34f, font, DoLeave);
-
-        // Кнопка Нет
-        MakeButton(_leaveConfirmDialog.transform, "Нет", 170f, -80f, 90f, 34f, font,
-            () => _leaveConfirmDialog.SetActive(false));
     }
 
     void ShowLeaveConfirm()
     {
-        if (_leaveConfirmDialog != null)
-        {
-            var question = _leaveConfirmDialog.transform.Find("Question").GetComponent<Text>();
-            bool unsaved = SceneFileStore.HasUnsavedChanges();
-            question.text = unsaved ? "Выйти из лобби?\nСессия не сохранена в JSON." : "Выйти из лобби?";
-            question.fontSize = unsaved ? 16 : 20;
-            _leaveConfirmDialog.SetActive(true);
-        }
+        bool host = IsLocalHost();
+        bool unsaved = host && SceneFileStore.HasUnsavedChanges();
+        string detail = host ? "Подключённые игроки будут отключены." : "Вы сможете снова войти по коду сессии.";
+        if (unsaved) detail += "\nЕсть несохранённые изменения или черновики. Отмените выход и сохраните нужные данные.";
+        ConfirmAction(host ? "Завершить сессию?" : "Выйти из сессии?", detail, DoLeave);
+        if (_confirmAccept != null) _confirmAccept.GetComponentInChildren<Text>().text = host ? "Завершить сессию" : "Выйти";
     }
 
     void DoLeave()
@@ -646,6 +625,7 @@ public class DiceUI : MonoBehaviour
 
         BuildToolContext();
         BuildTextureMenu();
+        sidebarGO.AddComponent<UiPanelViewport>();
     }
 
     Image MakeToolButton(Transform parent, string label, string iconKey, float y,
@@ -773,12 +753,13 @@ public class DiceUI : MonoBehaviour
         _confirmBody.GetComponent<RectTransform>().sizeDelta = new Vector2(400, 76);
         _confirmBody.alignment = TextAnchor.UpperLeft;
         _confirmBody.horizontalOverflow = HorizontalWrapMode.Wrap;
-        MakeContextButton(box.transform, "Отмена", 12, -154, 190, 38,
+        var cancel = MakeContextButton(box.transform, "Отмена", 12, -154, 190, 38,
             () => _confirmPanel.SetActive(false));
         var accept = MakeContextButton(box.transform, "Подтвердить", 228, -154, 190, 38, null);
         accept.GetComponent<Image>().color = new Color(0.33f, 0.12f, 0.15f);
         _confirmAccept = accept.GetComponent<Button>();
         _confirmPanel.SetActive(false);
+        _confirmPanel.AddComponent<UiModalScope>().initialSelection = cancel.GetComponent<Button>();
     }
 
     public void ConfirmAction(string title, string detail, System.Action action)
@@ -786,6 +767,7 @@ public class DiceUI : MonoBehaviour
         if (_confirmPanel == null || action == null) return;
         _confirmTitle.text = title;
         _confirmBody.text = detail;
+        _confirmAccept.GetComponentInChildren<Text>().text = "Подтвердить";
         _confirmAccept.onClick.RemoveAllListeners();
         _confirmAccept.onClick.AddListener(() => {
             _confirmPanel.SetActive(false);
@@ -1363,10 +1345,10 @@ public class DiceUI : MonoBehaviour
             btnGO.transform.SetAsLastSibling();
 
             Image img = btnGO.AddComponent<Image>();
-            VttUiSkin.ButtonStyle(img, VttUiSkin.Button, 6);
             img.raycastTarget = true;
 
             Button btn = btnGO.AddComponent<Button>();
+            VttUiSkin.ButtonStyle(img, VttUiSkin.Button, 6);
             btn.onClick.AddListener(() => TogglePanel(panelGO, _logTab)); // поле, не параметр!
 
             RectTransform brt = btnGO.GetComponent<RectTransform>();
@@ -1435,7 +1417,7 @@ public class DiceUI : MonoBehaviour
         // Return handle beside the bottom-right roll journal.
         _logTab = MakeTab(_canvas.transform, "◀",
             new Vector2(1f, 0f), new Vector2(1f, 0.5f), new Vector2(28f, 64f),
-            () => { if (_logPanelGO != null) { _logPanelGO.SetActive(true); _logTab.SetActive(false); } });
+            () => TogglePanel(_logPanelGO, _logTab));
         _logTab.GetComponent<RectTransform>().anchoredPosition = new Vector2(0f, 196f);
 
         _logTab.SetActive(false);
@@ -1447,9 +1429,9 @@ public class DiceUI : MonoBehaviour
         go.transform.SetParent(parent, false);
 
         Image img = go.AddComponent<Image>();
-        VttUiSkin.ButtonStyle(img, VttUiSkin.Panel, 7);
 
         Button btn = go.AddComponent<Button>();
+        VttUiSkin.ButtonStyle(img, VttUiSkin.Panel, 7);
         btn.onClick.AddListener(onClick);
 
         RectTransform rt = go.GetComponent<RectTransform>();
@@ -1484,9 +1466,9 @@ public class DiceUI : MonoBehaviour
         go.transform.SetParent(parent, false);
 
         Image img = go.AddComponent<Image>();
-        VttUiSkin.ButtonStyle(img, VttUiSkin.Button, 6);
 
         Button btn = go.AddComponent<Button>();
+        VttUiSkin.ButtonStyle(img, VttUiSkin.Button, 6);
         btn.onClick.AddListener(onClick);
 
         RectTransform rt = go.GetComponent<RectTransform>();
@@ -1505,6 +1487,7 @@ public class DiceUI : MonoBehaviour
         txt.fontSize = 16;
         txt.color = Color.white;
         txt.alignment = TextAnchor.MiddleCenter;
+        VttUiSkin.ButtonCaption(txt, 16);
 
         RectTransform lrt = txt.GetComponent<RectTransform>();
         lrt.anchorMin = Vector2.zero;

@@ -59,7 +59,14 @@ public sealed class LocalUiScale : MonoBehaviour
             else if (scaler.uiScaleMode == CanvasScaler.ScaleMode.ConstantPixelSize)
                 scaler.scaleFactor = baseline.factor * Value;
             ApplyScalerNow(scaler, canvas);
+            if (scaler.uiScaleMode == CanvasScaler.ScaleMode.ScaleWithScreenSize && canvas.scaleFactor < 0.9f * Value)
+            {
+                // Small windows should scroll tall panels instead of reducing all body text to 7 px.
+                scaler.referenceResolution *= canvas.scaleFactor / (0.9f * Value);
+                ApplyScalerNow(scaler, canvas);
+            }
         }
+        Canvas.ForceUpdateCanvases();
         foreach (var header in Object.FindObjectsByType<ResponsiveSessionHeader>(FindObjectsInactive.Exclude)) header.RefreshLayout();
         Canvas.ForceUpdateCanvases();
         foreach (var entry in _canvases)

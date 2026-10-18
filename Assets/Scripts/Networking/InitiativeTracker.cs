@@ -304,7 +304,12 @@ public partial class InitiativeTracker : NetworkBehaviour
         if (!visible && _addPanel != null) _addPanel.SetActive(false);
     }
 
-    public void ToggleVisible() => SetVisible(!_userVisible);
+    public void ToggleVisible()
+    {
+        if (!_userVisible && Screen.width / LocalUiScale.Value < 1500)
+        { DmPanelUI.Instance?.Hide(); CharacterSheetUI.Instance?.SetSheetVisible(false); }
+        SetVisible(!_userVisible);
+    }
 
     private void UpdateHostControls()
     {
@@ -923,7 +928,7 @@ public partial class InitiativeTracker : NetworkBehaviour
             new Vector2(0, 1), new Vector2(0, 1), new Vector2(125, 22), new Vector2(18, -96));
         _initInput = Input(_addPanel.transform, "0", 74, 32, 150, -93);
         _initInput.contentType = InputField.ContentType.IntegerNumber;
-        Label(_addPanel.transform, "HP", 13, new Color(1f, 0.36f, 0.38f),
+        Label(_addPanel.transform, "ХП", 13, new Color(1f, 0.36f, 0.38f),
             TextAnchor.MiddleLeft, new Vector2(0, 1), new Vector2(0, 1),
             new Vector2(125, 22), new Vector2(18, -138));
         _hpInput = Input(_addPanel.transform, "0", 100, 32, 150, -135);
@@ -936,11 +941,14 @@ public partial class InitiativeTracker : NetworkBehaviour
             () => _addPanel.SetActive(false), VttUiSkin.Button);
         Button(_addPanel.transform, "Добавить", 112, 34, 284, -178,
             SubmitAdd, new Color(0.10f, 0.30f, 0.48f));
+        _addPanel = UiModalScope.Wrap(_addPanel, _nameInput);
     }
 
     public void ShowAddPanel()
     {
         if (!IsHost || _addPanel == null || FogManager.Instance?.Preview == true) return;
+        if (Screen.width / LocalUiScale.Value < 1500)
+        { DmPanelUI.Instance?.Hide(); CharacterSheetUI.Instance?.SetSheetVisible(false); }
         _addErrorText.text = "";
         SetVisible(true);
         _addPanel.SetActive(true);
@@ -965,7 +973,7 @@ public partial class InitiativeTracker : NetworkBehaviour
         }
         if (!int.TryParse(_hpInput.text, out int hp) || hp < 0)
         {
-            _addErrorText.text = "Укажите HP неотрицательным числом.";
+            _addErrorText.text = "Укажите ХП неотрицательным числом.";
             StartCoroutine(FocusAfterFrame(_hpInput));
             return;
         }
@@ -1008,6 +1016,7 @@ public partial class InitiativeTracker : NetworkBehaviour
         text.color = color;
         text.alignment = align;
         text.raycastTarget = false;
+        text.supportRichText = false;
         return text;
     }
 
@@ -1020,9 +1029,9 @@ public partial class InitiativeTracker : NetworkBehaviour
         VttUiSkin.ButtonStyle(go.GetComponent<Image>(), color, 7);
         go.GetComponent<Button>().onClick.AddListener(() => click());
         if (!string.IsNullOrEmpty(title))
-            Label(go.transform, title, 13, VttUiSkin.Text, TextAnchor.MiddleCenter,
+            VttUiSkin.ButtonCaption(Label(go.transform, title, 14, VttUiSkin.Text, TextAnchor.MiddleCenter,
                 new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
-                new Vector2(width - 4, height - 4), Vector2.zero, true);
+                new Vector2(width - 8, height - 4), Vector2.zero));
         return go;
     }
 

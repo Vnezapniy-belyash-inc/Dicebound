@@ -20,6 +20,9 @@ public partial class DmPanelUI : MonoBehaviour
         StatBlockPublicFields.Description, StatBlockPublicFields.Actions
     };
     public static DmPanelUI Instance { get; private set; }
+    public bool IsOpen => _panel != null && _panel.activeInHierarchy;
+    public float PanelPixelWidth => IsOpen ? _panel.GetComponent<RectTransform>().rect.width * _canvas.scaleFactor : 0;
+    public void Hide() { if (_panel != null) _panel.SetActive(false); }
 
     private Canvas _canvas;
     private Font _font;
@@ -100,6 +103,19 @@ public partial class DmPanelUI : MonoBehaviour
         RefreshDraftContext();
         if (_panel == null || !_panel.activeSelf) return;
         if (!IsLocalHost) { _panel.SetActive(false); return; }
+        if (!GameplayInputGate.IsModalOpen && !TokenController.IsMenuOpen && !GameplayInputGate.IsTextInputFocused
+            && GameplayInputGate.LastToolExitFrame != Time.frameCount && Keyboard.current?.escapeKey.wasPressedThisFrame == true
+            && !SceneEditor.IsEditing && !FogManager.IsManualEditing && MeasurementTool.Instance?.IsLocalActive != true
+            && EffectPaintTool.Instance?.IsActive != true)
+        {
+            if (_transitionPickingCell) _transitionPickingCell = false;
+            else if (_transitionPanel != null && _transitionPanel.activeSelf) _transitionPanel.SetActive(false);
+            else if (_statBlockVisibilityPanel != null && _statBlockVisibilityPanel.activeSelf) _statBlockVisibilityPanel.SetActive(false);
+            else if (_mapCatalogPanel != null && _mapCatalogPanel.activeSelf) _mapCatalogPanel.SetActive(false);
+            else _panel.SetActive(false);
+            GameplayInputGate.MarkToolExit();
+            return;
+        }
         if (_transitionPanel != null && _transitionPanel.activeSelf && _transitionPickingCell)
             UpdateTransitionCellPicker();
         if (Time.unscaledTime < _nextRefresh) return;
@@ -112,13 +128,14 @@ public partial class DmPanelUI : MonoBehaviour
     {
         if (!IsLocalHost || _panel == null) return;
         _panel.SetActive(!_panel.activeSelf);
-        if (_panel.activeSelf) Refresh();
+        if (_panel.activeSelf) { CharacterSheetUI.Instance?.SetSheetVisible(false); Refresh(); }
     }
 
     public void ShowTokenCreation()
     {
         if (!IsLocalHost || _panel == null) return;
         _panel.SetActive(true);
+        CharacterSheetUI.Instance?.SetSheetVisible(false);
         ShowPage(3);
         _tokenNameInput?.ActivateInputField();
     }
@@ -138,8 +155,9 @@ public partial class DmPanelUI : MonoBehaviour
 
         _panel = Box(root.transform, "Dungeon Master", VttUiSkin.Panel, 12);
         Place(_panel, new Vector2(1, 1), new Vector2(1, 1),
-            new Vector2(410, 660), new Vector2(-14, -68));
+            new Vector2(410, 676), new Vector2(-14, -68));
         _panel.SetActive(false);
+        _panel.AddComponent<UiPanelViewport>();
         Label(_panel.transform, "ПАНЕЛЬ МАСТЕРА", 17, VttUiSkin.Text, TextAnchor.MiddleLeft,
             new Vector2(0, 1), new Vector2(0, 1), new Vector2(310, 34),
             new Vector2(18, -12), true);
@@ -224,9 +242,11 @@ public partial class DmPanelUI : MonoBehaviour
         _statBlockInputs[1] = CreateInput(parent, "Тип существа", 0, -138, 170, 30);
         _statBlockInputs[2] = CreateInput(parent, "Размер", 180, -138, 80, 30);
         _statBlockInputs[3] = CreateInput(parent, "Мировоззрение", 268, -138, 82, 30);
-        _statBlockInputs[4] = CreateInput(parent, "КД", 0, -172, 64, 30);
-        _statBlockInputs[5] = CreateInput(parent, "ХП", 72, -172, 64, 30);
-        _statBlockInputs[6] = CreateInput(parent, "Скорость", 144, -172, 206, 30);
+        _statBlockInputs[4] = CreateInput(parent, "КД", 0, -172, 82, 30);
+        _statBlockInputs[5] = CreateInput(parent, "ХП", 90, -172, 82, 30);
+        _statBlockInputs[6] = CreateInput(parent, "Скорость", 180, -172, 170, 30);
+        VttUiSkin.InputPrefix(_statBlockInputs[4], "КД");
+        VttUiSkin.InputPrefix(_statBlockInputs[5], "ХП");
         _statBlockInputs[7] = CreateInput(parent, "СИЛ,ЛОВ,ТЕЛ,ИНТ,МДР,ХАР", 0, -206, 260, 30);
         _statBlockInputs[8] = CreateInput(parent, "Опасность", 268, -206, 82, 30);
         _statBlockInputs[9] = CreateInput(parent, "Описание", 0, -240, 350, 86, true);
@@ -355,6 +375,10 @@ public partial class DmPanelUI : MonoBehaviour
         _referenceSignature = snapshot;
         foreach (Transform child in _referenceList) Destroy(child.gameObject);
         _referenceList.sizeDelta = new Vector2(0, Mathf.Max(108, filtered.Count * 32));
+        if (filtered.Count == 0)
+            Label(_referenceList, string.IsNullOrEmpty(query) ? "Справочник пуст. Нажмите «Новая», чтобы добавить запись."
+                : "Ничего не найдено. Измените или очистите поиск.", 14, VttUiSkin.Muted, TextAnchor.MiddleLeft,
+                new Vector2(0, 1), new Vector2(0, 1), new Vector2(330, 64), new Vector2(8, -4));
         for (int i = 0; i < filtered.Count; i++)
         {
             var entry = filtered[i];
@@ -476,6 +500,9 @@ public partial class DmPanelUI : MonoBehaviour
         _statBlockSignature = snapshot;
         foreach (Transform child in _statBlockList) Destroy(child.gameObject);
         _statBlockList.sizeDelta = new Vector2(0, Mathf.Max(66, blocks.Length * 32));
+        if (blocks.Length == 0)
+            Label(_statBlockList, "Нет статблоков. Создайте новый или импортируйте персонажа.", 14, VttUiSkin.Muted,
+                TextAnchor.MiddleLeft, new Vector2(0, 1), new Vector2(0, 1), new Vector2(218, 64), new Vector2(4, 0));
         for (int i = 0; i < blocks.Length; i++)
         {
             var block = blocks[i];
@@ -702,8 +729,8 @@ public partial class DmPanelUI : MonoBehaviour
         var markup = Button(parent, "Скрыть разметку", 350, 32, 0, -294,
             () => { SceneEditor.Instance?.ToggleMarkup(); Refresh(); }, VttUiSkin.Button);
         _sceneMarkupText = markup.GetComponentInChildren<Text>();
-        Button(parent, "Сохранить JSON", 170, 36, 0, -335, SceneFileStore.SaveDialog, VttUiSkin.Button);
-        Button(parent, "Загрузить JSON", 170, 36, 180, -335, SceneFileStore.LoadDialog, VttUiSkin.Button);
+        Button(parent, "Сохранить сцену…", 170, 36, 0, -335, SceneFileStore.SaveDialog, VttUiSkin.Button);
+        Button(parent, "Загрузить сцену…", 170, 36, 180, -335, SceneFileStore.LoadDialog, VttUiSkin.Button);
         Button(parent, "Сохранить сессию", 170, 34, 0, -376, SceneFileStore.SaveCampaignDialog, VttUiSkin.Button);
         Button(parent, "Загрузить сессию", 170, 34, 180, -376, SceneFileStore.LoadCampaignDialog, VttUiSkin.Button);
         Button(parent, "←", 40, 32, 0, -416, () => SceneFileStore.CycleScene(-1), VttUiSkin.Button);
@@ -711,19 +738,21 @@ public partial class DmPanelUI : MonoBehaviour
         Button(parent, "Пустая", 126, 32, 176, -416, SceneFileStore.CreateEmptyScene, VttUiSkin.Button);
         Button(parent, "→", 40, 32, 308, -416, () => SceneFileStore.CycleScene(1), VttUiSkin.Button);
         var sceneNameBox = Box(parent, "SceneName", VttUiSkin.Button, 7);
-        Place(sceneNameBox, new Vector2(0, 1), new Vector2(0, 1), new Vector2(150, 30), new Vector2(0, -452));
+        Place(sceneNameBox, new Vector2(0, 1), new Vector2(0, 1), new Vector2(144, 30), new Vector2(0, -452));
         var sceneNameText = Label(sceneNameBox.transform, "", 13, VttUiSkin.Text, TextAnchor.MiddleLeft,
             new Vector2(0, 0.5f), new Vector2(0, 0.5f), new Vector2(130, 26), new Vector2(10, 0));
         _sceneNameInput = sceneNameBox.AddComponent<InputField>();
         _sceneNameInput.textComponent = sceneNameText;
         _sceneNameInput.lineType = InputField.LineType.SingleLine;
         _sceneNameInput.characterLimit = 64;
-        Button(parent, "Переименовать", 92, 30, 156, -452, RenameActiveScene, VttUiSkin.Button);
-        Button(parent, "Удалить", 92, 30, 256, -452, () => DiceUI.Instance?.ConfirmAction(
+        _sceneNameInput.placeholder = Label(sceneNameBox.transform, "Новое имя сцены", 12, VttUiSkin.Muted, TextAnchor.MiddleLeft,
+            new Vector2(0, 0.5f), new Vector2(0, 0.5f), new Vector2(128, 26), new Vector2(8, 0));
+        Button(parent, "Переименовать", 118, 30, 150, -452, RenameActiveScene, VttUiSkin.Button);
+        Button(parent, "Удалить", 76, 30, 274, -452, () => DiceUI.Instance?.ConfirmAction(
             "Удалить активную сцену?", "Будет загружена следующая сцена. Последнюю сцену удалить нельзя.",
             SceneFileStore.DeleteActiveScene), VttUiSkin.Button);
         _sceneNotice = Label(parent, "", 12, VttUiSkin.Text, TextAnchor.UpperLeft,
-            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 28), new Vector2(0, -486));
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 42), new Vector2(0, -486));
         Button(parent, "Переходы…", 130, 28, 220, -4, ToggleTransitionsPanel, VttUiSkin.Button);
         _transitionPanel = Box(parent, "SceneTransitions", VttUiSkin.Panel, 10);
         Place(_transitionPanel, new Vector2(0, 1), new Vector2(0, 1),
@@ -792,7 +821,13 @@ public partial class DmPanelUI : MonoBehaviour
 
     private void RenameActiveScene()
     {
-        if (_sceneNameInput == null || string.IsNullOrWhiteSpace(_sceneNameInput.text)) return;
+        if (_sceneNameInput == null) return;
+        if (string.IsNullOrWhiteSpace(_sceneNameInput.text))
+        {
+            _sceneNotice.text = "Введите новое имя сцены в поле слева.";
+            _sceneNameInput.ActivateInputField();
+            return;
+        }
         SceneFileStore.RenameActiveScene(_sceneNameInput.text);
         _sceneNameInput.text = string.Empty;
     }
@@ -1172,6 +1207,9 @@ public partial class DmPanelUI : MonoBehaviour
             Destroy(child.gameObject);
         }
         _tokensContent.sizeDelta = new Vector2(0, Mathf.Max(208, tokens.Count * 96));
+        if (tokens.Count == 0)
+            Label(_tokensContent, "На сцене нет токенов. Создайте токен выше и назначьте ему владельца.", 14, VttUiSkin.Muted,
+                TextAnchor.MiddleLeft, new Vector2(0, 1), new Vector2(0, 1), new Vector2(330, 70), new Vector2(8, -4));
         for (int i = 0; i < tokens.Count; i++)
         {
             var token = tokens[i];
@@ -1183,8 +1221,9 @@ public partial class DmPanelUI : MonoBehaviour
                     else _selectedInitiativeTokenIds.Add(token.SceneId);
                     RefreshTokens(true);
                 }, VttUiSkin.Button);
-            Label(row.transform, token.TokenName, 13, VttUiSkin.Text, TextAnchor.MiddleLeft,
+            var nameLabel = Label(row.transform, token.TokenName, 13, VttUiSkin.Text, TextAnchor.MiddleLeft,
                 new Vector2(0, 1), new Vector2(0, 1), new Vector2(172, 24), new Vector2(36, -3), true);
+            UiOverflowTooltip.Attach(nameLabel, row);
             string status = (token.IsHidden ? "Скрыт" : "Виден") + (token.IsHero ? " · герой" : "") +
                 $" · {token.VisionFeet} фт";
             Label(row.transform, status, 11, VttUiSkin.Muted, TextAnchor.MiddleLeft,
@@ -1208,7 +1247,7 @@ public partial class DmPanelUI : MonoBehaviour
                 var participants = new List<ulong>(NetworkManager.Singleton.ConnectedClientsIds); participants.Sort(); participants.Add(ulong.MaxValue);
                 int index = participants.IndexOf(token.ControllerClientId); token.AssignController(participants[(index + 1) % participants.Count]); RefreshTokens(true);
             }, VttUiSkin.Button);
-            Button(row.transform, token.EveryoneCanMove ? "Двигать: всем" : "Только хозяину", 126, 28, 154, -56, () => {
+            Button(row.transform, token.EveryoneCanMove ? "Двигать: всем" : "Владельцу и ГМ", 126, 28, 154, -56, () => {
                 if (!IsLocalHost || token == null || !token.IsSpawned) return;
                 token.SetEveryoneCanMove(!token.EveryoneCanMove); RefreshTokens(true);
             }, VttUiSkin.Button);
@@ -1673,9 +1712,9 @@ public partial class DmPanelUI : MonoBehaviour
             new Vector2(width, height), new Vector2(x, y));
         VttUiSkin.ButtonStyle(go.GetComponent<Image>(), background, 7);
         go.GetComponent<Button>().onClick.AddListener(() => callback());
-        Label(go.transform, title, 13, VttUiSkin.Text, TextAnchor.MiddleCenter,
+        VttUiSkin.ButtonCaption(Label(go.transform, title, 14, VttUiSkin.Text, TextAnchor.MiddleCenter,
             new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
-            new Vector2(width - 4, height - 4), Vector2.zero, true);
+            new Vector2(width - 8, height - 4), Vector2.zero));
         return go;
     }
 

@@ -5,12 +5,14 @@ using UnityEngine.InputSystem;
 /// <summary>Always-visible tool state, bounded by the viewport and independent of the DM panel.</summary>
 public sealed class ActiveToolUI : MonoBehaviour
 {
-    private static bool Visible => NetworkManager.Singleton?.IsHost == true &&
+    private static float Left => (DiceUI.Instance?.ToolsPanelPixelWidth ?? 0) + 24;
+    private static float Available => Screen.width - Left - 24 - Mathf.Max(DmPanelUI.Instance?.PanelPixelWidth ?? 0, CharacterSheetUI.Instance?.PanelPixelWidth ?? 0);
+    private static bool Visible => Available >= 330 && NetworkManager.Singleton?.IsHost == true &&
         (SceneEditor.IsEditing || FogManager.IsManualEditing || FogManager.Instance?.Preview == true);
-    private static float Scale => Mathf.Min(LocalUiScale.Value, Mathf.Max(0.5f, (Screen.width * 0.57f - 24) / 620f));
+    private static float Scale => Mathf.Min(LocalUiScale.Value, Available / 620f);
     private static float Top => Mathf.Max(54, (DiceUI.Instance?.SessionHeaderPixelHeight ?? 0) + 6);
     public static bool IsPointerOverPanel => Visible && Mouse.current != null
-        && new Rect(12, Screen.height - Top - 88 * Scale, 620 * Scale, 88 * Scale).Contains(Mouse.current.position.ReadValue());
+        && new Rect(Left, Screen.height - Top - 88 * Scale, 620 * Scale, 88 * Scale).Contains(Mouse.current.position.ReadValue());
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void Bootstrap() => new GameObject("ActiveToolUI").AddComponent<ActiveToolUI>();
     private void Awake() => DontDestroyOnLoad(gameObject);
@@ -26,7 +28,7 @@ public sealed class ActiveToolUI : MonoBehaviour
     {
         if (!Visible || !GameplayInputGate.AllowsImGuiOverlays) return;
         var matrix = GUI.matrix; GUI.matrix = Matrix4x4.Scale(new Vector3(Scale, Scale, 1));
-        float x = 12 / Scale, y = Top / Scale;
+        float x = Left / Scale, y = Top / Scale;
         GUI.Box(new Rect(x, y, 620, 88), "", VttUiSkin.ImGuiPanel);
         string state = SceneEditor.IsEditing ? SceneEditor.Instance.Notice : FogManager.IsManualEditing
             ? (FogManager.Instance.ManualMode == 1 ? "Кисть: раскрыть туман" : "Кисть: закрыть туман") + ". ЛКМ — рисовать; ПКМ — закончить; Esc — отменить штрих."
