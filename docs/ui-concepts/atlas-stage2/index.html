@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dicebound · прототип стола мастера</title>
+<link rel="stylesheet" href="prototype.css">
+<body>
+<div class="prototype">ЭТАП 2 · ИНТЕРАКТИВНЫЙ ПРОТОТИП · демоданные · без подключения к игре <button data-action="reset">Сбросить пример</button></div>
+<header><strong>Dicebound</strong><button data-panel="scenes" id="sceneTitle">Старая обитель ▾</button><span>Мастер · демосессия</span><button data-action="combat" id="combatToggle">Бой включён</button><button data-panel="players">Участники / код</button></header>
+<div class="workspace">
+<nav aria-label="Разделы"><button data-action="home">◈ <span>Стол</span></button><button data-panel="scenes">▤ <span>Сцены</span></button><button data-panel="tokens">♙ <span>Токены</span></button><button data-panel="library">▥ <span>Библиотека</span></button><button data-panel="sheet">▧ <span>Мой лист</span></button><button data-panel="players">♧ <span>Игроки</span></button><small>Esc — назад<br>ПКМ — меню</small></nav>
+<main>
+<section id="initiative" aria-label="Инициатива"></section>
+<section class="toolbox" aria-label="Инструменты мастера"><div id="tools" class="toolrow"></div><div id="context" hidden></div></section>
+<div class="mapwrap">
+<div id="map" tabindex="0" aria-label="Демонстрационная карта. Выберите токен или инструмент.">
+<svg id="plan" viewBox="0 0 1200 720" preserveAspectRatio="none" aria-hidden="true"><path d="M120 130H780V570H430V480H120Z M430 130V330H780 M600 330V570"/><path class="door" d="M420 130h45 M600 420v45 M430 310v45"/></svg>
+<div class="maptitle">СТАРАЯ ОБИТЕЛЬ · схема карты</div><div id="fog"></div><div id="marks"></div><div id="tokens"></div><button id="info" data-action="info" hidden>ⓘ Информация</button>
+<div id="previewBanner" hidden>ПРЕДПРОСМОТР ИГРОКА · перемещение и разметка недоступны <button data-action="preview">Вернуться мастером</button></div>
+</div>
+<aside id="panel" aria-label="Открытая панель" hidden></aside>
+<div class="status" id="status" role="status" aria-live="polite">Выбор: нажмите токен, затем «Информация».</div>
+</div>
+<footer><button data-action="diceDock" id="diceToggle">Кубики ▾</button><div id="diceDock"></div><button data-panel="requests" id="requests">Перемещения · 2</button><button data-panel="journal">Журнал бросков ▴</button></footer>
+</main></div>
+<div id="modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="Подтверждение"><div id="modalBody"></div></div>
+<script src="prototype.js"></script>
+</body></html>

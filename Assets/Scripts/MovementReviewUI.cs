@@ -4,7 +4,7 @@ using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 /// <summary>Only the generic decision reaches the owner; geometry stays on the server.</summary>
-public sealed class MovementReviewUI : MonoBehaviour
+public sealed partial class MovementReviewUI : MonoBehaviour
 {
     private static TokenController _token;
     private static MovementReviewUI _instance;
@@ -46,6 +46,7 @@ public sealed class MovementReviewUI : MonoBehaviour
 
     private void Update()
     {
+        UpdateAtlasMovement();
         _blocker.SetActive(IsOpen);
         if (NetworkManager.Singleton?.IsListening != true) { _token = null; _hostOpen = false; _blocker.SetActive(false); return; }
         if (_token != null && (!_token.IsSpawned || Time.unscaledTime >= _deadline || !Application.isFocused)) Cancel();
@@ -61,47 +62,5 @@ public sealed class MovementReviewUI : MonoBehaviour
         if (_token != null && _token.IsSpawned) _token.AnswerMovement(_request, false);
         _token = null;
     }
-    private void OnGUI()
-    {
-        if (NetworkManager.Singleton?.IsListening != true || HostSceneCurtain.IsBlockingLocalPlayer) return;
-        var matrix = GUI.matrix; int depth = GUI.depth; GUI.depth = -1100;
-        if (!IsOpen) { GUI.depth = depth; return; }
-        float scale = Mathf.Min(LocalUiScale.Value, Mathf.Min(Screen.width / 540f, Screen.height / 340f));
-        GUI.matrix = Matrix4x4.Scale(new Vector3(scale, scale, 1));
-        float w = Screen.width / scale, h = Screen.height / scale;
-        GUI.Box(new Rect(0, 0, w, h), "", VttUiSkin.ImGuiPanel);
-        GUILayout.BeginArea(new Rect((w - 500) / 2, (h - 300) / 2, 500, 300), VttUiSkin.ImGuiPanel);
-        var wrap = new GUIStyle(GUI.skin.label) { wordWrap = true, richText = false, fontSize = 16 };
-        GUILayout.Space(12);
-        if (_token != null)
-        {
-            GUILayout.Label(_approval ? "Ожидание решения мастера" : "Проверить перемещение", wrap);
-            GUILayout.Label("Выбранный путь требует внимания. До подтверждения токен остаётся на исходной клетке, карта не раскрывается.", wrap);
-            GUILayout.Label("Осталось: " + Mathf.CeilToInt(Mathf.Max(0, _deadline - Time.unscaledTime)) + " с.", wrap);
-            GUILayout.FlexibleSpace();
-            if (!_approval && GUILayout.Button("Подтвердить перемещение", VttUiSkin.ImGuiButton, GUILayout.Height(38)))
-            { _token.AnswerMovement(_request, true); _token = null; }
-            if (GUILayout.Button("Отменить · Esc", VttUiSkin.ImGuiButton, GUILayout.Height(38))) Cancel();
-        }
-        else
-        {
-            GUILayout.Label("Запросы игроков · решение действует один раз", wrap);
-            _scroll = GUILayout.BeginScrollView(_scroll);
-            foreach (var token in _pending)
-            {
-                if (token == null || !token.HasMovementRequest) continue;
-                var grid = FindAnyObjectByType<GridManager>();
-                var cell = grid == null ? Vector2Int.zero : grid.GetGridPosition(token.RequestedMovementPosition);
-                GUILayout.Label(token.TokenName + " → клетка " + (cell.x + 1) + ", " + (cell.y + 1) + " · " + Mathf.CeilToInt(token.MovementSecondsLeft) + " с.", wrap);
-                GUILayout.BeginHorizontal();
-                if (GUILayout.Button("Разрешить", GUILayout.Height(32))) token.ResolveMovementAsMaster(true);
-                if (GUILayout.Button("Отклонить", GUILayout.Height(32))) token.ResolveMovementAsMaster(false);
-                GUILayout.EndHorizontal();
-            }
-            if (_pending.Length == 0) GUILayout.Label("Нет ожидающих запросов.", wrap);
-            GUILayout.EndScrollView();
-            if (GUILayout.Button("Закрыть · Esc", VttUiSkin.ImGuiButton, GUILayout.Height(36))) _hostOpen = false;
-        }
-        GUILayout.EndArea(); GUI.matrix = matrix; GUI.depth = depth;
-    }
+
 }

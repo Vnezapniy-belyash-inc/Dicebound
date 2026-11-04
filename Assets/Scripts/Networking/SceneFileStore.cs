@@ -595,6 +595,7 @@ public static class SceneFileStore
     }
 
     public static void CycleScene(int direction) => Safely(() => CycleSceneCore(direction));
+    public static void SelectScene(string id) => Safely(() => { if(NetworkManager.Singleton?.IsHost!=true)return;CaptureCampaign(_campaign?.title??"Кампания");SwitchToScene(id); });
 
     public static CampaignScene[] GetCampaignScenes() => _campaign?.scenes ?? Array.Empty<CampaignScene>();
 

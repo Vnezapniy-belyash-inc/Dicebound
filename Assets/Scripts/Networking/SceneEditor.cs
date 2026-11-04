@@ -432,6 +432,7 @@ public sealed partial class SceneEditor : MonoBehaviour
     }
     private void OnGUI()
     {
+        if(DiceUI.Instance?.AtlasInterfaceActive==true)return;
         if (_network == null || !_network.IsListening || IsMaster || !GameplayInputGate.AllowsImGuiOverlays) return;
         if (GUI.Button(new Rect(12, Screen.height - 72, 180, 28), PlayerShowMarkup ? "Скрыть стены и двери" : "Показать стены и двери"))
             PlayerShowMarkup = !PlayerShowMarkup;

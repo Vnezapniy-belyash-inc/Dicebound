@@ -1,0 +1,48 @@
+/* Player submenu revision: integrated dark disclosure, no floating cream form blocks. */
+#playerMenu{width:256px;padding:15px 12px;scrollbar-gutter:stable}
+#playerMenu>.toolitem>button,#playerMenu>button{border-radius:5px;min-height:43px;padding:11px 10px}
+#playerMenu [data-tool]:not([data-tool="select"]):after,#playerMenu [data-action="dice"]:after{content:'';margin-left:auto;width:6px;height:6px;border-right:1.5px solid #b5c2a3;border-bottom:1.5px solid #b5c2a3;rotate:-45deg;transition:rotate .15s}
+#playerMenu [aria-expanded="true"]:after{rotate:45deg}
+#playerMenu .toolitem:has(>.options:not([hidden])){background:#0e2c234d;border-radius:5px;border:1px solid #899b6b30}
+#playerMenu .toolitem:has(>.options:not([hidden]))>button{border:0;background:#59704a28;color:#fff3d3;box-shadow:none;border-radius:4px 4px 0 0}
+#playerMenu .options{background:transparent;border:0;border-radius:0;margin:0 9px 9px 21px;padding:7px 0 0 11px;box-shadow:none;border-left:1px solid #b397644f;color:#e8e8cf}
+#playerMenu .options .option-list{display:flex;flex-direction:column;gap:3px}
+#playerMenu .options button.option-choice{margin:0;display:flex;align-items:center;gap:10px;width:100%;min-height:36px;padding:8px 9px;border:1px solid transparent;border-radius:4px;background:transparent;color:#c5d1b6;box-shadow:none;font-size:13px;font-weight:400;text-align:left}
+#playerMenu .options button.option-choice:hover{background:#c2c8a411;color:#fff3d6;border-color:#a1af8550}
+#playerMenu .options button.option-choice.active{background:#a9ad6f1f;color:#fff0ca;border-color:#a98d535c;box-shadow:inset 2px 0 #c39c5a}
+.option-check{margin-left:auto;color:#d0ae70;font-size:13px;min-width:12px;text-align:right}
+.option-symbol{display:inline-block;width:15px;height:15px;flex:none;border:1.5px solid currentColor;opacity:.85}
+.option-symbol.circle{border-radius:50%}.option-symbol.square{border-radius:1px}.option-symbol.cone{border:0;background:currentColor;clip-path:polygon(50% 5%,100% 95%,0 95%)}
+.option-symbol.fire{border:0;border-radius:60% 10% 60% 60%;rotate:-45deg;background:#cf9a5d;width:12px;height:15px;margin:0 2px}
+.option-symbol.water{border:0;background:#88adbc;border-radius:60% 10% 60% 60%;rotate:-45deg;width:12px;height:15px;margin:0 2px}
+.option-symbol.nature{border:1.5px solid #a6bb80;border-radius:90% 0 90% 0;rotate:-15deg}
+.option-symbol.eraser{width:14px;height:11px;border-radius:1px;rotate:-35deg}
+#playerMenu .options .option-hint{font-size:11px;line-height:1.6;color:#9fb395;margin:10px 7px 8px}
+#playerMenu .options .option-footer{display:flex;flex-direction:column;gap:0;border-top:1px solid #a4b18425;margin-top:9px;padding-top:5px}
+#playerMenu .options .option-footer button{width:100%;display:flex;align-items:center;justify-content:space-between;min-height:30px;border:0;background:transparent;color:#9fb395;font-size:11px;font-weight:400;box-shadow:none;margin:0;padding:7px}
+#playerMenu .options .option-footer button:hover{color:#fff1d3;background:#d5cfaa0c}
+#playerMenu .options .option-footer kbd{font:10px 'Segoe UI',sans-serif;color:#a8b895;border:1px solid #adbb8e40;border-radius:3px;padding:1px 4px;margin-left:auto}
+.eraser-row{border-top:1px solid #a4b18425;padding-top:5px;margin-top:6px}
+.ruler-sample{position:relative;height:28px;display:flex;justify-content:space-between;align-items:center;margin:7px 10px 12px;color:#c2cbab;font:11px Georgia,serif}
+.ruler-sample i{position:absolute;left:15px;right:15px;height:1px;background:#b59d65}
+.ruler-sample i:before,.ruler-sample i:after{content:'';position:absolute;top:-4px;height:9px;width:1px;background:#b59d65}.ruler-sample i:after{right:0}
+#playerMenu .options .dice-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;padding-top:3px}
+#playerMenu .options .dice-grid button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;width:100%;margin:0;padding:9px 2px 7px;min-height:62px;border:1px solid #99ac7f38;background:#d7d5aa08;color:#d5ddc0;box-shadow:none;font-size:10px;font-weight:400}
+#playerMenu .options .dice-grid button:hover{background:#a7b68020;border-color:#c5a66c;color:#fff0cd}
+#playerMenu .options .dice-grid button:last-child{grid-column:span 2}
+.die-face{width:23px;height:25px;display:grid;place-items:center;border:1px solid #abb78e;border-radius:4px;font:12px Georgia,serif;color:#e3d5ab;rotate:-5deg}
+#playerMenu .options .dice-grid button[data-value="d4"] .die-face{clip-path:polygon(50% 0,100% 100%,0 100%);border:0;background:#9cae7833;padding-top:6px}
+#playerMenu .options .dice-grid button[data-value="d20"] .die-face{border-radius:35% 35% 20% 20%}
+@media(max-width:1100px){#playerMenu{width:236px}}
+@media(max-width:850px){#playerMenu{width:256px;max-width:85vw}#playerMenu .options button.option-choice{min-height:40px}#playerMenu .options .option-footer button{min-height:34px}.option-choice span{font-size:13px!important}.option-choice .option-check{font-size:12px!important}}
+@media(prefers-reduced-motion:reduce){#playerMenu [aria-expanded]:after{transition:none}}
+.option-step{font-size:10px;text-transform:uppercase;letter-spacing:.7px;color:#b7c39e;margin:10px 6px 7px}
+#playerMenu .options .effect-palette{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}
+#playerMenu .options button.effect-choice{display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:7px;width:100%;margin:0;padding:9px 7px;min-height:72px;border:1px solid #98a67b38;border-radius:4px;background:#d5d3ad08;box-shadow:none;color:#ccd5ba;text-align:left;font-size:10px;line-height:1.4;font-weight:400;white-space:normal}
+#playerMenu .options button.effect-choice:hover:not(:disabled){border-color:#c7ab70;background:#c3c89d16;color:#fff0cf}
+#playerMenu .options button.effect-choice.active{border-color:#bd9a5e;background:#a9ad6f1f;box-shadow:inset 2px 0 #c39c5a;color:#fff0ca}
+#playerMenu .options button.effect-choice:disabled{opacity:.4;cursor:default}
+.effect-swatch{display:block;width:100%;height:12px;background:rgb(var(--effect-rgb));border:1px solid #ffffff35;border-radius:2px}
+#marks .mark[style*="--effect-rgb"]{background:rgba(var(--effect-rgb),var(--effect-alpha,.45));border-color:rgb(var(--effect-rgb))}
+#marks .area-preview{border:2px dashed #fbf4df;background:#e7dec626;box-shadow:0 0 0 1px #30513d}
+@media(max-width:850px){#playerMenu .options button.effect-choice span{font-size:10px}#playerMenu .options button.effect-choice{min-height:76px}}

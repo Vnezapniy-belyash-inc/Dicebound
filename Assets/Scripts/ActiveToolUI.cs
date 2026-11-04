@@ -26,6 +26,7 @@ public sealed class ActiveToolUI : MonoBehaviour
     }
     private void OnGUI()
     {
+        if(DiceUI.Instance?.AtlasInterfaceActive==true)return;
         if (!Visible || !GameplayInputGate.AllowsImGuiOverlays) return;
         var matrix = GUI.matrix; GUI.matrix = Matrix4x4.Scale(new Vector3(Scale, Scale, 1));
         float x = Left / Scale, y = Top / Scale;

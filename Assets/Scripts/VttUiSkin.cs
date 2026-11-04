@@ -5,12 +5,12 @@ using UnityEngine.UI;
 /// <summary>Shared uGUI appearance. Views keep their own existing gameplay callbacks.</summary>
 public static class VttUiSkin
 {
-    public static readonly Color Panel = new(0.055f, 0.070f, 0.092f, 0.94f);
-    public static readonly Color Raised = new(0.090f, 0.112f, 0.144f, 0.96f);
-    public static readonly Color Button = new(0.120f, 0.150f, 0.190f, 0.98f);
-    public static readonly Color Stroke = new(0.30f, 0.37f, 0.45f, 0.64f);
-    public static readonly Color Text = new(0.94f, 0.96f, 0.99f, 1f);
-    public static readonly Color Muted = new(0.67f, 0.72f, 0.79f, 1f);
+    public static readonly Color Panel = new(.98f, .95f, .88f, 1);
+    public static readonly Color Raised = new(.93f, .88f, .77f, 1);
+    public static readonly Color Button = new(.96f, .92f, .83f, 1);
+    public static readonly Color Stroke = new(.66f, .52f, .32f, .55f);
+    public static readonly Color Text = new(.10f, .24f, .19f, 1);
+    public static readonly Color Muted = new(.38f, .43f, .33f, 1);
     public static readonly Color Blue = new(0.25f, 0.51f, 0.96f, 1f);
     public static readonly Color Green = new(0.41f, 0.80f, 0.46f, 1f);
     public static readonly Color Red = new(0.94f, 0.30f, 0.31f, 1f);

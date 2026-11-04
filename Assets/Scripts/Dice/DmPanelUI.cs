@@ -142,54 +142,7 @@ public partial class DmPanelUI : MonoBehaviour
 
     private void BuildUI()
     {
-        var root = new GameObject("DmCanvas", typeof(RectTransform), typeof(Canvas),
-            typeof(CanvasScaler), typeof(GraphicRaycaster));
-        root.transform.SetParent(transform, false);
-        _canvas = root.GetComponent<Canvas>();
-        _canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-        _canvas.sortingOrder = 30;
-        var scaler = root.GetComponent<CanvasScaler>();
-        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-        scaler.referenceResolution = new Vector2(1920, 1080);
-        scaler.matchWidthOrHeight = 0.5f;
-
-        _panel = Box(root.transform, "Dungeon Master", VttUiSkin.Panel, 12);
-        Place(_panel, new Vector2(1, 1), new Vector2(1, 1),
-            new Vector2(410, 676), new Vector2(-14, -68));
-        _panel.SetActive(false);
-        _panel.AddComponent<UiPanelViewport>();
-        Label(_panel.transform, "ПАНЕЛЬ МАСТЕРА", 17, VttUiSkin.Text, TextAnchor.MiddleLeft,
-            new Vector2(0, 1), new Vector2(0, 1), new Vector2(310, 34),
-            new Vector2(18, -12), true);
-        Button(_panel.transform, "×", 32, 30, 362, -14,
-            () => _panel.SetActive(false), VttUiSkin.Button);
-
-        _pages = new GameObject[8];
-        _tabs = new Image[8];
-        string[] titles = { "Карта", "Игроки", "Бой", "Токены", "Сцена", "Туман", "Статблоки", "Справочник" };
-        for (int i = 0; i < _pages.Length; i++)
-        {
-            int pageIndex = i;
-            var tab = Button(_panel.transform, titles[i], 92, 32, 8 + (i % 4) * 98, -54 - (i / 4) * 38,
-                () => ShowPage(pageIndex), VttUiSkin.Button);
-            tab.GetComponentInChildren<Text>().fontSize = 13;
-            _tabs[i] = tab.GetComponent<Image>();
-            _pages[i] = new GameObject(titles[i] + "Page", typeof(RectTransform));
-            _pages[i].transform.SetParent(_panel.transform, false);
-            Place(_pages[i], new Vector2(0, 1), new Vector2(0, 1),
-                new Vector2(374, 506), new Vector2(18, -144));
-        }
-        BuildMapPage(_pages[0].transform);
-        BuildPlayersPage(_pages[1].transform);
-        BuildInitiativePage(_pages[2].transform);
-        BuildTokensPage(_pages[3].transform);
-        BuildScenePage(_pages[4].transform);
-        BuildFogPage(_pages[5].transform);
-        BuildStatBlockPage(_pages[6].transform);
-        BuildReferencePage(_pages[7].transform);
-        ClearStatBlockInputs(); ClearReferenceInputs();
-        WatchLibraryDrafts();
-        ShowPage(0);
+        BuildAtlasWorkspace();
     }
 
     private void BuildFogPage(Transform parent)
@@ -1298,7 +1251,7 @@ public partial class DmPanelUI : MonoBehaviour
         for (int i = 0; i < _pages.Length; i++)
         {
             _pages[i].SetActive(i == index);
-            _tabs[i].color = i == index ? new Color(0.11f, 0.29f, 0.48f) : VttUiSkin.Button;
+            AtlasUi.Select(_tabs[i].GetComponent<Button>(),i==index);
         }
         if (index == 7) RefreshReferences(true);
         Refresh();
@@ -1706,16 +1659,8 @@ public partial class DmPanelUI : MonoBehaviour
     private GameObject Button(Transform parent, string title, float width, float height,
         float x, float y, Action callback, Color background)
     {
-        var go = new GameObject("Button " + title, typeof(RectTransform), typeof(Image), typeof(Button));
-        go.transform.SetParent(parent, false);
-        Place(go, new Vector2(0, 1), new Vector2(0, 1),
-            new Vector2(width, height), new Vector2(x, y));
-        VttUiSkin.ButtonStyle(go.GetComponent<Image>(), background, 7);
-        go.GetComponent<Button>().onClick.AddListener(() => callback());
-        VttUiSkin.ButtonCaption(Label(go.transform, title, 14, VttUiSkin.Text, TextAnchor.MiddleCenter,
-            new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
-            new Vector2(width - 8, height - 4), Vector2.zero));
-        return go;
+        var button=AtlasUi.Button(parent,title,()=>callback(),height:height);
+        AtlasUi.Place((RectTransform)button.transform,x,-y,width,height);return button.gameObject;
     }
 
     private void OnDestroy()

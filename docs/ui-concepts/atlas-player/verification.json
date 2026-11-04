@@ -1,0 +1,24 @@
+{
+  "result": "PASS",
+  "count": 15,
+  "checks": [
+    "Selection default; all sidebar tool contexts hidden",
+    "Ruler and areas expand inline, exclusive active tool",
+    "Only public stats in token cards; no HP editor",
+    "Own token exposes local sheet, other token does not",
+    "One content panel; sheet notes retained in memory",
+    "Player initiative is read-only, collapse works",
+    "Area and marks; eraser retains area; own clear retains area",
+    "Dice logs result, clearing dice preserves journal",
+    "Player request confirmation has no master approval action",
+    "Pointer blocks foreign token; own token drag allowed unless awaiting",
+    "Ruler produces non-destructive demo measurement",
+    "Esc handles modal, tool, panel separately",
+    "Narrow layout closes sidebar on tool/panel and can reopen",
+    "Modal blocks delegated underlying actions",
+    "No horizontal toolbar, no GM navigation, no network calls"
+  ],
+  "limitations": [
+    "State and DOM-adapter checks, not a browser render or real pointer/CSS test."
+  ]
+}

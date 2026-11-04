@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dicebound · прототип игрока</title><link rel="stylesheet" href="base.css"><link rel="stylesheet" href="player.css">
+<body>
+<div class="prototype">ЭТАП 2 · ПРОТОТИП ИГРОКА · только демоданные <button data-action="requestDemo">Демо: запрос перемещения</button><button data-action="reset">Сбросить</button></div>
+<header><strong>Dicebound</strong><span>Старая обитель · Анна / игрок</span><button data-action="menu" id="menuToggle" aria-expanded="true">☰ Меню игрока</button><button data-panel="players">Участники</button></header>
+<div class="workspace">
+<nav id="playerMenu" aria-label="Меню игрока">
+<div class="identity"><strong>Анна</strong><span>Эллиан · ваш токен</span></div>
+<p class="sectionlabel">НА КАРТЕ</p>
+<div class="toolitem"><button data-tool="select">↖ <span>Выбор / перемещение</span></button></div>
+<div class="toolitem"><button data-tool="ruler">↔ <span>Линейка</span></button><div id="rulerOptions" class="options" hidden></div></div>
+<div class="toolitem"><button data-tool="area">◯ <span>Области</span></button><div id="areaOptions" class="options" hidden></div></div>
+<div class="toolitem"><button data-tool="paint">▦ <span>Отметки / ластик</span></button><div id="paintOptions" class="options" hidden></div></div>
+<p class="sectionlabel">ЗА СТОЛОМ</p>
+<button data-panel="sheet">▧ <span>Мой персонаж</span></button>
+<div class="toolitem"><button data-action="dice">◇ <span>Кубики</span></button><div id="diceOptions" class="options" hidden></div></div>
+<button data-panel="journal">≡ <span>Журнал бросков</span></button>
+<button data-panel="reference">▥ <span>Справочник</span></button>
+<div class="menubottom"><button data-panel="help">? <span>Управление</span></button><small>Esc — завершить / закрыть</small></div>
+</nav>
+<main>
+<section id="initiative" aria-label="Инициатива — только просмотр"></section>
+<div class="mapwrap">
+<div id="map" tabindex="0" aria-label="Карта игрока">
+<svg id="plan" viewBox="0 0 1200 720" preserveAspectRatio="none" aria-hidden="true"><path d="M120 130H780V570H430V480H120Z M430 130V330H780 M600 330V570"/><path class="door" d="M420 130h45 M600 420v45 M430 310v45"/></svg>
+<div class="maptitle">СТАРАЯ ОБИТЕЛЬ · демосхема</div><div id="fog"></div><div id="marks"></div><div id="tokens"></div><button id="info" data-action="info" hidden>ⓘ Информация</button>
+</div>
+<aside id="panel" aria-label="Панель игрока" hidden></aside>
+<div id="waiting" hidden>Перемещение ожидает решения мастера <button data-action="cancelRequest">Отменить</button></div>
+<div class="status" id="status" role="status" aria-live="polite">Выберите свой токен или инструмент слева.</div>
+</div>
+<footer><span>Игрок · мастер управляет сценой и туманом</span><span id="activeLabel">Выбор / перемещение</span></footer>
+</main></div>
+<div id="modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="Проверка перемещения"><div id="modalBody"></div></div>
+<script src="player.js"></script>
+</body></html>

@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 using UnityEngine.UI;
 using System.IO;
 #if UNITY_EDITOR
@@ -9,7 +9,7 @@ using UnityEditor;
 /// Чарник D&D в стиле референса: блоки статов, навыки с кружками, пассивные чувства.
 /// Вкладка ◀ или кнопка интерфейса — только после подключения к сессии (Host/Join).
 /// </summary>
-public class CharacterSheetUI : MonoBehaviour
+public partial class CharacterSheetUI : MonoBehaviour
 {
     public CharacterData characterData;
 
@@ -134,7 +134,7 @@ public class CharacterSheetUI : MonoBehaviour
         if (show && !IsSessionActive) return;
 
         _pn.SetActive(show);
-        if (show) { DmPanelUI.Instance?.Hide(); RefreshDisplay(); }
+        if (show) { DiceUI.Instance?.AtlasCloseContext(); DmPanelUI.Instance?.Hide(); RefreshDisplay(); }
     }
 
     // ══════════════════════════════  Сборка  ══════════════════════════════
@@ -143,67 +143,7 @@ public class CharacterSheetUI : MonoBehaviour
 
     void B()
     {
-        EvSys();
-        Font f = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-        if (!_cd) _cd = FindAnyObjectByType<CharacterData>();
-        if (!_cd) return;
-
-        // Canvas
-        var cgo = GO("CharCanvas", typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
-        cgo.transform.SetParent(transform, false);
-        _cv = cgo.GetComponent<Canvas>();
-        _cv.renderMode = RenderMode.ScreenSpaceOverlay;
-        _cv.sortingOrder = 25;
-        var sc = cgo.GetComponent<CanvasScaler>();
-        sc.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-        sc.referenceResolution = new Vector2(1920, 1080);
-        sc.matchWidthOrHeight = 0.5f;
-
-        // Высота
-        float OTHER_H = 100f;
-        float lh = BlockH(0) + BlockH(2) + BlockH(3) + BlockH(5) + 3*GAP;
-        float rh = BlockH(1) + BlockH(4) + GAP + GAP + 88f + GAP + OTHER_H;
-        float blocks = Mathf.Max(lh, rh);
-        float th = SBH + PD + TABH + PD + blocks + PD;
-
-        // Панель
-        _pn = GO("Panel", typeof(RectTransform), typeof(Image));
-        _pn.transform.SetParent(cgo.transform, false);
-        VttUiSkin.Surface(_pn.GetComponent<Image>(), VttUiSkin.Panel);
-        RS(_pn, PR, PR, PR, new(PW, th), new(-12, -12));
-
-        float cy = -PD;
-
-        // ── Статус-бар ──
-        cy = BuildStatusBar(cy, f);
-        cy -= PD;
-
-        // ── Вкладки ──
-        cy = BuildTabs(cy, f);
-        cy -= PD;
-
-        // ── Страница 0: Статы ──
-        _page0 = BuildPage0(cy, f);
-
-        // ── Страница 1: Атаки ──
-        _page1 = BuildPage1(cy, blocks, f);
-
-        // ── Страница 2: Способности ──
-        _page2 = BuildPage2(cy, blocks, f);
-
-        // ── Страница 3: Снаряжение ──
-        _page3 = BuildPage3(cy, blocks, f);
-
-        // ── Страница 4: Заметки ──
-        _page4 = BuildPage4(cy, blocks, f);
-
-        // Показать активную
-        _page0.SetActive(_currentPage == 0);
-        _page1.SetActive(_currentPage == 1);
-        _page2.SetActive(_currentPage == 2);
-        _page3.SetActive(_currentPage == 3);
-        _page4.SetActive(_currentPage == 4);
-        _pn.AddComponent<UiPanelViewport>();
+        BuildAtlasCharacter();
     }
 
     float BuildTabs(float y, Font f)
@@ -213,10 +153,10 @@ public class CharacterSheetUI : MonoBehaviour
         float tw = (w - (n-1)*2f) / n;
         string[] names = { "Характеристики", "Атаки", "Способности", "Снаряжение", "Заметки" };
 
-        Color activeBg = new Color(0.12f, 0.15f, 0.25f);
-        Color inactiveBg = new Color(0.07f, 0.09f, 0.16f);
-        Color activeText = new Color(0.92f, 0.88f, 0.65f);
-        Color inactiveText = new Color(0.5f, 0.55f, 0.65f);
+        Color activeBg = AtlasUi.Forest;
+        Color inactiveBg = AtlasUi.Raised;
+        Color activeText = AtlasUi.Light;
+        Color inactiveText = AtlasUi.Ink;
 
         // Фон вкладок
         var bg = GO("TabBar", typeof(RectTransform), typeof(Image));
@@ -246,10 +186,10 @@ public class CharacterSheetUI : MonoBehaviour
 
     void RefreshTabs()
     {
-        Color activeBg = new Color(0.12f, 0.15f, 0.25f);
-        Color inactiveBg = new Color(0.07f, 0.09f, 0.16f);
-        Color activeText = new Color(0.92f, 0.88f, 0.65f);
-        Color inactiveText = new Color(0.5f, 0.55f, 0.65f);
+        Color activeBg = AtlasUi.Forest;
+        Color inactiveBg = AtlasUi.Raised;
+        Color activeText = AtlasUi.Light;
+        Color inactiveText = AtlasUi.Ink;
 
         for (int i = 0; i < 5; i++)
         {
@@ -916,7 +856,7 @@ public class CharacterSheetUI : MonoBehaviour
             if (_checkTxt[si]) { _checkTxt[si].text = ModS(m); _checkTxt[si].color = ModC(m); }
             int sv = SaveVal(si);
             if (_saveTxt[si]) { _saveTxt[si].text = ModS(sv); _saveTxt[si].color = ModC(sv); }
-            if (_saveTgl[si]) _saveTgl[si].color = SaveProf(si) ? new Color(0.35f,0.7f,1f) : new Color(0.18f,0.2f,0.28f);
+            if (_saveTgl[si]) _saveTgl[si].color = SaveProf(si) ? AtlasUi.Raised : AtlasUi.Paper;
         }
 
         for (int ki=0; ki<_cd.skills.Length && ki<18; ki++)
@@ -932,9 +872,10 @@ public class CharacterSheetUI : MonoBehaviour
         }
 
         if (_profTxt) _profTxt.text = $"Бонус мастерства: +{_cd.proficiencyBonus}";
-        if (_pasPerTxt) _pasPerTxt.text = _cd.passiveWisdomPerception.ToString();
-        if (_pasInsTxt) _pasInsTxt.text = _cd.passiveWisdomInsight.ToString();
-        if (_pasInvTxt) _pasInvTxt.text = _cd.passiveIntAnalysis.ToString();
+        RefreshAtlasCharacter();
+        if (_pasPerTxt) _pasPerTxt.text = "Восприятие: "+_cd.passiveWisdomPerception;
+        if (_pasInsTxt) _pasInsTxt.text = "Проницательность: "+_cd.passiveWisdomInsight;
+        if (_pasInvTxt) _pasInvTxt.text = "Анализ: "+_cd.passiveIntAnalysis;
 
         // Статус-бар
         if (_nameIF) _nameIF.text = _cd.characterName;
@@ -1040,7 +981,7 @@ public class CharacterSheetUI : MonoBehaviour
     // ══════════════════════════════  Хелперы  ══════════════════════════════
 
     static string ModS(int m) => m>=0?$"+{m}":$"{m}";
-    static Color ModC(int m) => m>=0?new Color(0.5f,0.9f,0.5f):new Color(0.9f,0.4f,0.4f);
+    static Color ModC(int m) => m>=0?AtlasUi.Ink:new Color(.65f,.20f,.14f);
     static Vector2 A(float x,float y)=>new(x,y);
     static Vector2 P(float x,float y)=>new(x,y);
 

@@ -1,0 +1,27 @@
+{
+  "result": "PASS",
+  "count": 18,
+  "checks": [
+    "Default selection hides context, combat initiative visible",
+    "Combat toggles collapse; tool access survives",
+    "Next turn wraps and increments round",
+    "D/E share one active tool; context disappears for selection",
+    "HP draft applies once and validates without mutation",
+    "Delta buttons are not form submits",
+    "Dirty navigation offers stay/discard and preserves draft",
+    "One panel at a time and local sheet tabs",
+    "Map drawing does not change HP; undo restores marks",
+    "Preview blocks map actions",
+    "Scene switch exits tool, selection and panel",
+    "Roll creates result in correct range and journal",
+    "Movement request resolves once, no token movement",
+    "Esc closes modal, then tool, then panel, one level each",
+    "Dirty dock toggle protects HP form",
+    "Input focus consumes first Esc without discarding draft",
+    "Document click delegates +5 without submitting",
+    "Local-only assets, viewport and narrow-screen input shield"
+  ],
+  "limitations": [
+    "DOM-adapter logic checks only; not a browser render, real click or CSS layout test."
+  ]
+}

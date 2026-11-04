@@ -1,0 +1,13 @@
+{
+  "result": "PASS",
+  "checks": [
+    "Decorative SVG preserves text and actions",
+    "Icons excluded from accessibility names",
+    "No duplicate icon on repeated mutation",
+    "Icon restored after dynamic text update",
+    "Master unchanged; player has explicit area effect palette/application",
+    "Both pages load local shared style and icons",
+    "Focus, reduced motion and narrow breakpoint styles present"
+  ],
+  "limitations": "Static and DOM-adapter checks; no browser rendering."
+}

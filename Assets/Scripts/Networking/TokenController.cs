@@ -996,6 +996,8 @@ public partial class TokenController : NetworkDraggable
     private Vector2 _tokenInfoScroll;
     private bool HasPublicStatBlock => !ShowMasterStats && !string.IsNullOrEmpty(PublicStatBlockJson);
     public bool CanEditMasterStats => ShowMasterStats;
+    public void OpenAtlasDetails() => DiceUI.Instance?.AtlasTokenDetails(this);
+    public void AtlasLoadPortrait() { if(NetworkPermissions.CanUploadTokenPortrait(NetworkManager.LocalClientId,this)) LoadImageDialog(); }
 
     /// <summary>The shared hover/menu projection; never reads private fields in player view.</summary>
     public string GetDisplayedTokenInfo()
@@ -1104,6 +1106,12 @@ public partial class TokenController : NetworkDraggable
         if (!_wasHovered) _hoverSince = Time.unscaledTime;
 
         var mouse = Mouse.current;
+        if(DiceUI.Instance?.AtlasInterfaceActive==true)
+        {
+            if(mouse!=null&&mouse.leftButton.wasPressedThisFrame)DiceUI.Instance.AtlasSelectToken(this);
+            if(mouse!=null&&mouse.rightButton.wasPressedThisFrame)DiceUI.Instance.AtlasInspectToken(this);
+            return;
+        }
         if (mouse != null && mouse.rightButton.wasPressedThisFrame &&
             GameplayInputGate.LastToolExitFrame != Time.frameCount)
         {

@@ -16,6 +16,10 @@ public sealed class PublicReferenceLibrary : MonoBehaviour
     private static PublicReferenceLibrary _instance;
     private const int ChunkSize = 1000, MaxBytes = 16 * 1024 * 1024;
     public static bool IsOpen { get; private set; }
+    private bool _atlasOpen;
+    public static ReferenceEntry[] AtlasEntries => _instance == null ? Array.Empty<ReferenceEntry>() : (ReferenceEntry[])_instance._entries.Clone();
+    public static void OpenAtlas() { if(_instance!=null){_instance._atlasOpen=true;_instance._nextRequest=0;} DiceUI.Instance?.AtlasOpenPublicLibrary(); }
+    public static void CloseAtlas() { if(_instance!=null)_instance._atlasOpen=false; }
     private static bool _available;
     public static bool IsPointerOverButton
     {
@@ -81,7 +85,7 @@ public sealed class PublicReferenceLibrary : MonoBehaviour
             }
         }
         if (_network == null || !_network.IsConnectedClient) { if (IsOpen) SetOpen(false); return; }
-        if (IsOpen && !_network.IsServer && Time.unscaledTime >= _nextRequest)
+        if ((IsOpen || _atlasOpen) && !_network.IsServer && Time.unscaledTime >= _nextRequest)
         {
             _nextRequest = Time.unscaledTime + 5;
             using var writer = new FastBufferWriter(sizeof(int), Allocator.Temp);
@@ -233,6 +237,7 @@ public sealed class PublicReferenceLibrary : MonoBehaviour
 
     private void OnGUI()
     {
+        if(DiceUI.Instance?.AtlasInterfaceActive==true)return;
         if (IsOpen && Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Escape)
         { SetOpen(false); Event.current.Use(); }
         if (_network == null || !_network.IsConnectedClient || _network.IsServer || MovementReviewUI.IsOpen || DisplaySettingsUI.IsOpen || SceneArrivalPicker.IsOpen) return;
