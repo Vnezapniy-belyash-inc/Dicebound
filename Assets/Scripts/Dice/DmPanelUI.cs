@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -200,8 +200,9 @@ public partial class DmPanelUI : MonoBehaviour
         _statBlockInputs[6] = CreateInput(parent, "Скорость", 180, -172, 170, 30);
         VttUiSkin.InputPrefix(_statBlockInputs[4], "КД");
         VttUiSkin.InputPrefix(_statBlockInputs[5], "ХП");
-        _statBlockInputs[7] = CreateInput(parent, "СИЛ,ЛОВ,ТЕЛ,ИНТ,МДР,ХАР", 0, -206, 260, 30);
-        _statBlockInputs[8] = CreateInput(parent, "Опасность", 268, -206, 82, 30);
+        _statBlockInputs[7] = CreateInput(parent, "Характеристики", 0, -206, 260, 30);
+        _statBlockInputs[7].gameObject.SetActive(false);BuildAtlasAbilityFields(parent);
+        _statBlockInputs[8] = CreateInput(parent, "Опасность", 360, -172, 82, 30);
         _statBlockInputs[9] = CreateInput(parent, "Описание", 0, -240, 350, 86, true);
         _statBlockInputs[10] = CreateInput(parent, "Действия: название: описание; перенос — \\n", 0, -332, 350, 64, true);
         _statBlockInputs[0].characterLimit = 128;
@@ -594,6 +595,7 @@ public partial class DmPanelUI : MonoBehaviour
         foreach (var input in _statBlockInputs) input.SetTextWithoutNotify(string.Empty);
         _statBlockInputs[4].SetTextWithoutNotify("10");
         _statBlockInputs[5].SetTextWithoutNotify("0");
+        SyncAtlasAbilities();
         RememberStatBlockDraft();
         if (_statBlockHint != null) _statBlockHint.text = "Новая запись: заполните поля и сохраните.";
     }

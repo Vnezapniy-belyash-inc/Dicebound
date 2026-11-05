@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
@@ -93,4 +93,16 @@ public class DiceboundFogTests
             foreach (var message in ShaderUtil.GetShaderMessages(shader)) Assert.That(message.severity.ToString(), Is.Not.EqualTo("Error"), message.message);
         }
     }
+    [Test]
+    public void MaximumGridDenseFogRoundTripsAboveOldNetworkLimit()
+    {
+        int count=500*500*16;var a=new bool[count];var b=new bool[count];var random=new System.Random(73);
+        for(int i=0;i<count;i++){a[i]=random.Next(2)!=0;b[i]=random.Next(2)!=0;}
+        var codec=TypeOf("FogStateCodec");var payload=(byte[])codec.GetMethod("Encode").Invoke(null,new object[]{a,b});
+        int limit=(int)TypeOf("TabletopLimits").GetField("MaxFogStateBytes").GetRawConstantValue();
+        Assert.That(payload.Length,Is.GreaterThan(512*1024));Assert.That(payload.Length,Is.LessThanOrEqualTo(limit));
+        object[] args={payload,count,null,null};codec.GetMethod("Decode").Invoke(null,args);
+        CollectionAssert.AreEqual(a,(bool[])args[2]);CollectionAssert.AreEqual(b,(bool[])args[3]);
+    }
+
 }

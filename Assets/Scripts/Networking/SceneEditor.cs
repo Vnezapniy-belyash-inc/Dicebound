@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text;
 using Unity.Collections;
@@ -169,7 +169,7 @@ public sealed partial class SceneEditor : MonoBehaviour
             if (length <= 0 || length > MaxStateBytes || !reader.TryBeginRead(length)) return;
             var bytes = new byte[length]; reader.ReadBytesSafe(ref bytes, length);
             var geometry = JsonUtility.FromJson<SceneGeometry>(Encoding.UTF8.GetString(bytes));
-            if (width <= 0 || width > 256 || height <= 0 || height > 256 || !SceneValidation.Finite(size) || size < 0.1f || size > 10) return;
+            if (width <= 0 || width > TabletopLimits.MaxGridDimension || height <= 0 || height > TabletopLimits.MaxGridDimension || !SceneValidation.Finite(size) || size < 0.1f || size > 10) return;
             SceneValidation.Geometry(geometry, width, height);
             if (_grid.Width != width || _grid.Height != height || _grid.CellSize != size
                 || _grid.GridOrigin != origin || _grid.GridRotation != rotation)

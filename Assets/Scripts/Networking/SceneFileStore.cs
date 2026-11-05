@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -947,7 +947,10 @@ public static class SceneFileStore
 
     public static void DeleteActiveScene() => Safely(DeleteActiveSceneCore);
 
-    private static void DeleteActiveSceneCore()
+    public static void DeleteScene(string sceneId) => Safely(() => DeleteSceneCore(sceneId));
+    private static void DeleteActiveSceneCore()=>DeleteSceneCore(ActiveSceneId);
+
+    private static void DeleteSceneCore(string sceneId)
     {
         if (NetworkManager.Singleton?.IsHost != true) return;
         if (!HasCampaign) throw new InvalidOperationException("Сначала загрузите или сохраните сессию.");
@@ -957,8 +960,8 @@ public static class SceneFileStore
             DiceUI.Instance?.ShowToolNotice("Нельзя удалить последнюю сцену кампании.");
             return;
         }
-        int index = Array.FindIndex(_campaign.scenes, item => item.sceneId == _campaign.activeSceneId);
-        if (index < 0) throw new InvalidOperationException("Активная сцена не найдена.");
+        int index = Array.FindIndex(_campaign.scenes, item => item.sceneId == sceneId);
+        if (index < 0) throw new InvalidOperationException("Сцена не найдена.");
         int nextIndex = (index + 1) % _campaign.scenes.Length;
         string nextSceneId = _campaign.scenes[nextIndex].sceneId;
         CampaignDefinition previousCampaign = JsonUtility.FromJson<CampaignDefinition>(JsonUtility.ToJson(_campaign));
@@ -970,10 +973,10 @@ public static class SceneFileStore
         {
             var transitions = scene.scene.transitions ?? Array.Empty<SceneTransition>();
             scene.scene.transitions = Array.FindAll(transitions,
-                transition => transition != null && transition.targetSceneId != _campaign.activeSceneId);
+                transition => transition != null && transition.targetSceneId != sceneId);
         }
         _campaign.scenes = remaining;
-        try { SwitchToScene(nextSceneId); }
+        try { if(sceneId==_campaign.activeSceneId)SwitchToScene(nextSceneId);else{SceneValidation.Validate(_campaign);RefreshTransitionMarkers();} }
         catch { _campaign = previousCampaign; _campaignDirty = previousDirty; throw; }
         _campaignDirty = true;
         DiceUI.Instance?.ShowToolNotice("Сцена удалена.");

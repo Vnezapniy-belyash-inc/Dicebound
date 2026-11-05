@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 using System.Collections.Generic;
 
 /// <summary>
@@ -8,8 +8,8 @@ using System.Collections.Generic;
 public class GridManager : MonoBehaviour
 {
     [Header("Параметры сетки")]
-    public int gridWidth = 100;
-    public int gridHeight = 100;
+    public int gridWidth = TabletopLimits.DefaultGridDimension;
+    public int gridHeight = TabletopLimits.DefaultGridDimension;
     public float cellSize = 1f;
 
     [Header("Визуал")]

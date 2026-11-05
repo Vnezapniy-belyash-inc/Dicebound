@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using Unity.Netcode;
@@ -21,7 +21,7 @@ public class MapController : NetworkBehaviour
 
     [Header("Defaults")]
     public float minScale = 0.1f;
-    public float maxScale = 5f;
+    public float maxScale = TabletopLimits.MaxMapScale;
     public float defaultScale = 1f;
 
     private readonly NetworkVariable<float> _netScale = new(
@@ -428,7 +428,7 @@ public class MapController : NetworkBehaviour
     public void SetScale(float scale)
     {
         if (!IsHost) return;
-        if (!SceneValidation.Finite(scale)) { DiceUI.Instance?.ShowToolNotice("Введите конечное число масштаба от 0,1 до 5."); return; }
+        if (!SceneValidation.Finite(scale)) { DiceUI.Instance?.ShowToolNotice("Введите конечное число масштаба от 0,1 до 50."); return; }
         scale = Mathf.Clamp(scale, minScale, maxScale);
         if (IsServer) _netScale.Value = scale;
         else RequestScaleServerRpc(scale);

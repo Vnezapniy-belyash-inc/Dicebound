@@ -2968,7 +2968,7 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 10, y: 1, z: 10}
+  m_LocalScale: {x: 50, y: 1, z: 50}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
@@ -2985,8 +2985,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 9f8a3b2c1d4e5f6a7b8c9d0e1f2a3b4c, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::GridManager
-  gridWidth: 100
-  gridHeight: 100
+  gridWidth: 500
+  gridHeight: 500
   cellSize: 1
   gridColor: {r: 0, g: 0.9150943, b: 0.1211853, a: 1}
   lineWidth: 0.04

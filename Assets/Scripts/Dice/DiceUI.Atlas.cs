@@ -26,6 +26,8 @@ public partial class DiceUI
     private float _nativeRefreshAt;
     private string _nativeDrawerKind;
     private Button[] _nativeEffects;
+    private Button _nativeMenuButton, _nativeFogToggle;
+    private Image _nativeFogLamp;
     private RectTransform _nativeReferenceList;
     private InputField _nativeReferenceSearch;
     private string _nativeReferenceKey;
@@ -35,18 +37,18 @@ public partial class DiceUI
     private void BuildAtlasNativeUi()
     {
         _nativeRoot=AtlasUi.Node(_canvas.transform,"AtlasTable");AtlasUi.Fill(_nativeRoot);
-        _nativeHeader=AtlasUi.Panel(_nativeRoot,"AtlasHeader",AtlasUi.Forest);
+        _nativeHeader=AtlasUi.Panel(_nativeRoot,"AtlasHeader",AtlasUi.Forest,true);
         _topBarGO=_nativeHeader.gameObject;
-        _nativeNav=AtlasUi.Panel(_nativeRoot,"PlayerNavigation",AtlasUi.Forest);
-        _nativeRail=AtlasUi.Panel(_nativeRoot,"MasterNavigation",AtlasUi.Forest);
+        _nativeNav=AtlasUi.Panel(_nativeRoot,"PlayerNavigation",AtlasUi.Forest,true);
+        _nativeRail=AtlasUi.Panel(_nativeRoot,"MasterNavigation",AtlasUi.Forest,true);
         _nativePlayerContent=AtlasUi.Scroll(_nativeNav,"PlayerMenuScroll",out var navScroll,12);
-        navScroll.GetComponent<Image>().color=AtlasUi.Forest;AtlasUi.Fill((RectTransform)navScroll.transform);
+        navScroll.GetComponent<Image>().sprite=null;navScroll.GetComponent<Image>().color=AtlasUi.Forest;AtlasUi.Fill((RectTransform)navScroll.transform);
         _nativeInitiative=AtlasUi.Panel(_nativeRoot,"CompactInitiative",AtlasUi.Paper);
-        _nativeToolbar=AtlasUi.Column(_nativeRoot,"MasterToolbox",6,3);
-        _nativeToolbar.gameObject.AddComponent<Image>().color=AtlasUi.Paper;
+        _nativeToolbar=AtlasUi.Column(_nativeRoot,"MasterToolbox",10,8);
+        VttUiSkin.Surface(_nativeToolbar.gameObject.AddComponent<Image>(),AtlasUi.Paper,12,false);
         _nativeToolbar.gameObject.AddComponent<ContentSizeFitter>().verticalFit=ContentSizeFitter.FitMode.PreferredSize;
         _nativeToolRow=AtlasUi.Row(_nativeToolbar,"Tools",42,3);
-        _nativeContext=AtlasUi.Column(_nativeToolbar,"ToolSettings",4,4);
+        _nativeContext=AtlasUi.Column(_nativeToolbar,"ToolSettings",10,8);VttUiSkin.Surface(_nativeContext.gameObject.AddComponent<Image>(),AtlasUi.Raised,10,false);_nativeContext.gameObject.SetActive(false);
         _nativeNotice=AtlasUi.Text(_nativeRoot,"",13,AtlasUi.Muted,height:28);
         _nativeInfo=AtlasUi.Button(_nativeRoot,"ⓘ Информация",()=>AtlasInspectToken(_nativeSelected));_nativeInfo.gameObject.SetActive(false);
         _nativeTokenRing=AtlasUi.Node(_nativeRoot,"SelectedTokenRing");var ring=_nativeTokenRing.gameObject.AddComponent<AtlasGlyph>();ring.key="ring";ring.color=AtlasUi.Copper;ring.raycastTarget=false;_nativeTokenRing.gameObject.SetActive(false);
@@ -55,7 +57,7 @@ public partial class DiceUI
         var scene=AtlasUi.Button(_nativeHeader,"Сцена ▾",()=>{if(_nativeHost)NativeOpenScenes();},dark:true);
         AtlasUi.Place((RectTransform)scene.transform,280,12,270,40);_nativeSession=scene.GetComponentInChildren<Text>();
         var people=AtlasUi.Button(_nativeHeader,"Участники",()=>NativeOpenPeople(),dark:true,icon:"users-round");AtlasUi.Place((RectTransform)people.transform,570,12,155,40);
-        var menu=AtlasUi.Button(_nativeHeader,"Меню",()=>{_nativeMenuOpen=!_nativeMenuOpen;NativeLayout();},dark:true,icon:"fa-solid--tools");AtlasUi.Place((RectTransform)menu.transform,735,12,100,40);
+        var menu=AtlasUi.Button(_nativeHeader,"Меню",()=>{_nativeMenuOpen=!_nativeMenuOpen;NativeLayout();},dark:true,icon:"fa-solid--tools");AtlasUi.Place((RectTransform)menu.transform,735,12,100,40);_nativeMenuButton=menu;
         var session=AtlasUi.Button(_nativeHeader,"Сессия / настройки",NativeSessionMenu,dark:true);var sr=(RectTransform)session.transform;sr.anchorMin=sr.anchorMax=new Vector2(1,1);sr.pivot=new Vector2(1,1);sr.sizeDelta=new Vector2(200,40);sr.anchoredPosition=new Vector2(-16,-12);
         _nativeStatus=AtlasUi.Text(_nativeHeader,"",13,AtlasUi.Light,height:36);AtlasUi.Place(_nativeStatus.rectTransform,850,14,220,36);
 
@@ -65,20 +67,19 @@ public partial class DiceUI
         AtlasUi.NavButton(railContent,"Сцены",NativeOpenScenes,"scenes");
         AtlasUi.NavButton(railContent,"Токены",()=>NativeOpenTokens(),"user");
         AtlasUi.NavButton(railContent,"Библиотека",()=>NativeOpenLibrary(),"book");
-        AtlasUi.NavButton(railContent,"Мой лист",NativeCharacter,"user");
-        AtlasUi.NavButton(railContent,"Игроки",NativeOpenPeople,"user");
+        AtlasUi.NavButton(railContent,"Игроки",NativeOpenPeople,"users");
         AtlasUi.NavButton(railContent,"Выход",ShowLeaveConfirm,"exit");
 
-        var toolLabels=new[]{"Выбор","+ Токен","Линейка","Области","Отметки","Геометрия","Туман","Карта","Переходы"};
+        var toolLabels=new[]{"Выбор","+ Токен","Линейка","Области","Отметки","Геометрия","Туман","Карта","Смена сцены"};
         for(int i=0;i<toolLabels.Length;i++){int index=i;AtlasUi.Button(_nativeToolRow,toolLabels[i],()=>NativeSelectTool(index),height:40);}
 
         _nativeDrawerContent=AtlasUi.Scroll(_nativeRoot,"ContextPanel",out var drawerScroll,18);
         _nativeDrawer=(RectTransform)drawerScroll.transform;_nativeDrawer.gameObject.SetActive(false);
-        var dice=AtlasUi.Row(_nativeRoot,"DiceTray",62,5);dice.gameObject.AddComponent<Image>().color=AtlasUi.Paper;_bottomPanelGO=dice.gameObject;
+        var dice=AtlasUi.Row(_nativeRoot,"DiceTray",46,4);VttUiSkin.Surface(dice.gameObject.AddComponent<Image>(),AtlasUi.Forest,8,false);var diceLayout=dice.GetComponent<HorizontalLayoutGroup>();diceLayout.padding=new RectOffset(6,6,4,4);diceLayout.childForceExpandWidth=false;_bottomPanelGO=dice.gameObject;
         foreach(DieType type in new[]{DieType.d4,DieType.d6,DieType.d8,DieType.d10,DieType.d12,DieType.d20,DieType.d100}){
-            var captured=type;AtlasUi.DiceButton(dice,type,()=>SpawnDie(captured));
+            var captured=type;AtlasUi.CompactDie(dice,type,()=>SpawnDie(captured));
         }
-        var clearDice=AtlasUi.Button(dice,"Убрать…",ConfirmDiceClear,height:62);AtlasUi.Width(clearDice,92);
+        var clearDice=AtlasUi.Button(dice,"Очистить",ConfirmDiceClear,height:38,dark:true);AtlasUi.Width(clearDice,94);
         var journal=AtlasUi.Scroll(_nativeRoot,"JournalDrawer",out var logScroll,16);_logScroll=logScroll;_logPanelGO=logScroll.gameObject;
         var logHeader=AtlasUi.Row(journal,"Heading",34);AtlasUi.Text(logHeader,"Журнал бросков",22,title:true);
         AtlasUi.Button(logHeader,"×",()=>_logPanelGO.SetActive(false),height:32);
@@ -127,7 +128,7 @@ public partial class DiceUI
 
     private void NativeRebuildContext()
     {
-        AtlasUi.Clear(_nativeContext);_nativeContext.gameObject.SetActive(_nativeTool!=0);
+        _nativeFogToggle=null;_nativeFogLamp=null;AtlasUi.Clear(_nativeContext);_nativeContext.gameObject.SetActive(_nativeTool!=0);
         if(_nativeHost&&_nativeTool!=0)NativePopulateOptions(_nativeContext,_nativeTool);
         if(!_nativeHost)NativeBuildPlayerMenu();
     }
@@ -135,16 +136,16 @@ public partial class DiceUI
     private void NativePopulateOptions(Transform parent,int tool)
     {
         bool dark=!_nativeHost;Color text=dark?AtlasUi.Light:AtlasUi.Muted;
-        var row=dark?AtlasUi.Column(parent,"Options",0,4):AtlasUi.Row(parent,"Options",38,5);
-        void Action(string label,UnityEngine.Events.UnityAction callback)=>AtlasUi.Button(row,label,callback,dark:dark,height:36);
+        var row=dark?AtlasUi.Column(parent,"Options",0,4):AtlasUi.Row(parent,"Options",44,8);
+        void Action(string label,UnityEngine.Events.UnityAction callback)=>AtlasUi.Button(row,label,callback,dark:dark,height:42);
         if(tool==2){AtlasUi.Text(row,"Протяните от начала до цели",13,text,height:36);Action("Завершить · Esc",()=>NativeSelectTool(0));}
         if(tool==3){
             for(int i=1;i<=3;i++){int mode=i;var b=AtlasUi.Button(row,new[]{"Круг","Квадрат","Конус"}[i-1],()=>{_nativeShape=mode;ActivateMeasurement(mode);NativeRebuildContext();},height:36,dark:dark);AtlasUi.Select(b,_nativeShape==mode,dark);}
-            var palette=dark?AtlasUi.Column(parent,"Palette",0,4):AtlasUi.Row(parent,"Palette",52,5);
+            var palette=dark?AtlasUi.Column(parent,"Palette",0,4):AtlasUi.Row(parent,"Palette",46,8);
             AtlasUi.Text(parent,"Задайте область на карте, затем выберите цвет / эффект",12,text,height:26);
             _nativeEffects=NativePalette(palette,true,dark);Action("Завершить",()=>NativeSelectTool(0));
         }
-        if(tool==4){_nativeEffects=NativePalette(row,false,dark);Action("Ластик",()=>{EffectPaintTool.Instance?.Activate(-1);});Action("Очистить мои…",()=>ConfirmAction("Очистить мои отметки?","Удалятся ваши отметки на клетках.",CellMarker.ClearAllMyMarkers));Action("Завершить",()=>NativeSelectTool(0));}
+        if(tool==4){var palette=dark?AtlasUi.Column(parent,"Palette",0,8):AtlasUi.Row(parent,"Palette",46,8);_nativeEffects=NativePalette(palette,false,dark);row.SetAsLastSibling();Action("Ластик",()=>{EffectPaintTool.Instance?.Activate(-1);});Action("Очистить мои…",()=>ConfirmAction("Очистить мои отметки?","Удалятся ваши отметки на клетках.",CellMarker.ClearAllMyMarkers));Action("Завершить",()=>NativeSelectTool(0));}
         if(tool==5){
             Action("Стена",()=>SceneEditor.Instance?.Activate(SceneEditor.Tool.Wall));
             Action("Дверь",()=>SceneEditor.Instance?.Activate(SceneEditor.Tool.Door));
@@ -155,7 +156,7 @@ public partial class DiceUI
             Action("Отменить",()=>SceneEditor.Instance?.Undo());Action("Завершить",()=>NativeSelectTool(0));
         }
         if(tool==6){
-            Action("Включить / выключить",()=>FogManager.Instance?.ToggleEnabled());Action("Раскрыть",()=>FogManager.Instance?.SetManual(1));Action("Закрыть",()=>FogManager.Instance?.SetManual(2));
+            _nativeFogToggle=AtlasUi.Button(row,"Туман",()=>{FogManager.Instance?.ToggleEnabled();NativeRefreshFogStatus();},height:42);var lamp=AtlasUi.Panel(_nativeFogToggle.transform,"StateLamp",AtlasUi.Copper);AtlasUi.Place(lamp,12,15,12,12);_nativeFogLamp=lamp.GetComponent<Image>();_nativeFogLamp.raycastTarget=false;AtlasUi.Fill(_nativeFogToggle.GetComponentInChildren<Text>().rectTransform,32,3,8,3);NativeRefreshFogStatus();Action("Раскрыть",()=>FogManager.Instance?.SetManual(1));Action("Закрыть",()=>FogManager.Instance?.SetManual(2));
             Action("Пауза",()=>FogManager.Instance?.TogglePause());Action("Глазами игроков",()=>FogManager.Instance?.TogglePreview());Action("Источник обзора",()=>FogManager.Instance?.CyclePreviewSource());Action("Отменить",GameMasterUndo.Undo);Action("Завершить",()=>NativeSelectTool(0));
         }
         if(tool==7){
@@ -164,7 +165,15 @@ public partial class DiceUI
             Action("Поворот 90°",()=>MapController.Instance?.Rotate90());Action("Сбросить",()=>MapController.Instance?.ResetMapPosition());
             Action("Скрыть от игроков",()=>HostSceneCurtain.Instance?.ToggleCurtainOnHost());Action("Завершить",()=>NativeSelectTool(0));
         }
-        if(tool==8){Action("Переходы и перенос токенов",()=>DmPanelUI.Instance?.OpenAtlasPage(4));Action("Завершить",()=>NativeSelectTool(0));}
+        if(tool==8){AtlasUi.Text(parent,"Выберите другую сцену или перенесите туда героев. Переходы связывают сцены кампании.",14,text,height:42);Action("Сцены кампании",NativeOpenScenes);Action("Настроить переход / перенос…",()=>DmPanelUI.Instance?.OpenAtlasPage(4));Action("Завершить",()=>NativeSelectTool(0));}
+    }
+
+    private void NativeRefreshFogStatus()
+    {
+        if(_nativeFogToggle==null)return;bool enabled=FogManager.Instance!=null&&FogManager.Instance.Enabled;
+        _nativeFogToggle.GetComponentInChildren<Text>().text=enabled?"Туман включён":"Туман выключен";
+        _nativeFogLamp.color=enabled?new Color(.25f,.70f,.36f):AtlasUi.Muted;
+        AtlasUi.Select(_nativeFogToggle,enabled);
     }
 
     private Button[] NativePalette(Transform parent,bool area,bool dark)
@@ -175,10 +184,12 @@ public partial class DiceUI
             int index=i;var b=AtlasUi.Button(parent,AtlasEffectNames[i],()=>{
                 if(area){var mt=MeasurementTool.Instance;if(mt==null||!mt.IsLocalActive||mt.CurrentMode==MeasurementTool.Mode.Ruler||mt.GetCellsInArea().Count==0)return;mt.ApplyArea(index);_nativeTool=0;NativeRebuildContext();}
                 else EffectPaintTool.Instance?.Activate(index);
-            },height:dark?46:50,dark:dark);
-            Color swatch=CellMarker.TextureColors[i];swatch.a=1;var sw=AtlasUi.Panel(b.transform,"Swatch",swatch);AtlasUi.Place(sw,5,5,dark?91:8,dark?11:40);sw.GetComponent<Image>().raycastTarget=false;
-            b.GetComponentInChildren<Text>().fontSize=dark?13:15;
-            if(dark){var text=b.GetComponentInChildren<Text>().rectTransform;text.offsetMin=new Vector2(7,4);text.offsetMax=new Vector2(-7,-22);}
+            },height:dark?62:46,dark:dark);
+            Color swatch=CellMarker.TextureColors[i];swatch.a=1;var sw=AtlasUi.Panel(b.transform,"Swatch",swatch);
+            AtlasUi.Place(sw,dark?42:12,dark?8:14,18,18);sw.GetComponent<Image>().raycastTarget=false;
+            var caption=b.GetComponentInChildren<Text>();caption.fontSize=dark?13:14;
+            if(dark){caption.alignment=TextAnchor.MiddleCenter;AtlasUi.Fill(caption.rectTransform,5,28,5,4);}
+            else AtlasUi.Fill(caption.rectTransform,38,4,8,4);
             b.interactable=!area;list[i]=b;
         }
         return list;
@@ -188,11 +199,11 @@ public partial class DiceUI
     {
         if(_nativeRoot==null)return;
         _nativeHeader.anchorMin=new Vector2(0,1);_nativeHeader.anchorMax=Vector2.one;_nativeHeader.pivot=new Vector2(.5f,1);_nativeHeader.sizeDelta=new Vector2(0,64);_nativeHeader.anchoredPosition=Vector2.zero;
-        float left=AtlasLeft;_nativeNav.gameObject.SetActive(!_nativeHost&&_nativeMenuOpen);_nativeRail.gameObject.SetActive(_nativeHost);
+        _nativeMenuButton.gameObject.SetActive(!_nativeHost);AtlasUi.Place(_nativeStatus.rectTransform,_nativeHost?740:850,14,220,36);_nativeStatus.gameObject.SetActive(_nativeRoot.rect.width>1260);float left=AtlasLeft;_nativeNav.gameObject.SetActive(!_nativeHost&&_nativeMenuOpen);_nativeRail.gameObject.SetActive(_nativeHost);
         foreach(var side in new[]{_nativeNav,_nativeRail}){side.anchorMin=Vector2.zero;side.anchorMax=new Vector2(0,1);side.offsetMin=Vector2.zero;side.offsetMax=new Vector2(side==_nativeRail?120:256,-64);}
         _nativeInitiative.anchorMin=new Vector2(0,1);_nativeInitiative.anchorMax=Vector2.one;_nativeInitiative.pivot=new Vector2(0,1);_nativeInitiative.offsetMin=new Vector2(left+12,-120);_nativeInitiative.offsetMax=new Vector2(-12,-74);
-        _nativeToolbar.gameObject.SetActive(_nativeHost);_nativeToolbar.anchorMin=new Vector2(0,1);_nativeToolbar.anchorMax=Vector2.one;_nativeToolbar.pivot=new Vector2(0,1);_nativeToolbar.offsetMin=new Vector2(left+12,-177);_nativeToolbar.offsetMax=new Vector2(-12,-128);
-        var dice=(RectTransform)_bottomPanelGO.transform;dice.anchorMin=dice.anchorMax=Vector2.zero;dice.pivot=Vector2.zero;dice.anchoredPosition=new Vector2(left+16,16);dice.sizeDelta=new Vector2(570,64);
+        _nativeToolbar.gameObject.SetActive(_nativeHost);_nativeToolbar.anchorMin=new Vector2(0,1);_nativeToolbar.anchorMax=Vector2.one;_nativeToolbar.pivot=new Vector2(0,1);_nativeToolbar.offsetMin=new Vector2(left+12,-128);_nativeToolbar.offsetMax=new Vector2(-12,-128);
+        var dice=(RectTransform)_bottomPanelGO.transform;dice.anchorMin=dice.anchorMax=Vector2.zero;dice.pivot=Vector2.zero;dice.anchoredPosition=new Vector2(left+16,16);dice.sizeDelta=new Vector2(470,46);
         var log=(RectTransform)_logPanelGO.transform;log.anchorMin=log.anchorMax=new Vector2(1,0);log.pivot=new Vector2(1,0);log.anchoredPosition=new Vector2(-16,64);log.sizeDelta=new Vector2(420,320);
         var dock=(RectTransform)_logTab.transform;dock.anchorMin=dock.anchorMax=new Vector2(1,0);dock.pivot=new Vector2(1,0);dock.anchoredPosition=new Vector2(-16,16);dock.sizeDelta=new Vector2(_nativeHost?410:220,38);
         _movementRequestsButton.gameObject.SetActive(_nativeHost);
@@ -219,7 +230,7 @@ public partial class DiceUI
         _movementRequestsText.text="Перемещения · "+MovementReviewUI.PendingCount;_movementRequestsButton.interactable=MovementReviewUI.PendingCount>0;
         var mt=MeasurementTool.Instance;
         if(_nativeEffects!=null&&_nativeTool==3){bool ready=mt!=null&&mt.IsLocalActive&&mt.CurrentMode!=MeasurementTool.Mode.Ruler&&mt.GetCellsInArea().Count>0;foreach(var b in _nativeEffects)if(b!=null)b.interactable=ready;}
-        NativeUpdateInitiative();if(_nativeSceneList!=null&&_nativeSceneList.gameObject.activeSelf)NativeRefreshScenes();
+        NativeRefreshFogStatus();NativeUpdateInitiative();if(_nativeSceneList!=null&&_nativeSceneList.gameObject.activeSelf)NativeRefreshScenes();
         if(_nativeDrawerKind=="public-library"&&_nativeReferenceList!=null){string key=string.Join("|",PublicReferenceLibrary.AtlasEntries.Select(e=>e.id+e.title+e.body));if(key!=_nativeReferenceKey){_nativeReferenceKey=key;NativePopulateReferences(_nativeReferenceSearch!=null?_nativeReferenceSearch.text:"");}}
         if(_nativeToken!=null&&(!_nativeToken.IsSpawned||!_nativeToken.IsVisibleToLocalPlayer))NativeCloseDrawer();
         else if(_nativeTokenSummary!=null&&_nativeToken!=null)_nativeTokenSummary.text=_nativeToken.GetDisplayedTokenInfo();
@@ -227,11 +238,11 @@ public partial class DiceUI
 
     private void BuildAtlasConfirmation()
     {
-        var modal=AtlasUi.Panel(_nativeRoot,"Confirmation",new Color(.04f,.11f,.08f,.80f));AtlasUi.Fill(modal);_confirmPanel=modal.gameObject;
-        var card=AtlasUi.Column(modal,"Dialog",24,15);card.gameObject.AddComponent<Image>().color=AtlasUi.Paper;
-        card.anchorMin=card.anchorMax=new Vector2(.5f,.5f);card.pivot=new Vector2(.5f,.5f);card.sizeDelta=new Vector2(540,300);
-        _confirmTitle=AtlasUi.Text(card,"Подтверждение",27,title:true,height:50);_confirmBody=AtlasUi.Text(card,"",16,height:100);
-        var actions=AtlasUi.Row(card,"Actions",44);AtlasUi.Button(actions,"Отмена",()=>_confirmPanel.SetActive(false));_confirmAccept=AtlasUi.Button(actions,"Подтвердить",null,true);
+        var modal=AtlasUi.Panel(_nativeRoot,"Confirmation",new Color(.04f,.11f,.08f,.80f));AtlasUi.Fill(modal);_confirmPanel=modal.gameObject;var modalCanvas=modal.gameObject.AddComponent<Canvas>();modalCanvas.overrideSorting=true;modalCanvas.sortingOrder=100;modal.gameObject.AddComponent<GraphicRaycaster>();
+        var card=AtlasUi.Column(modal,"Dialog",28,16);VttUiSkin.Surface(card.gameObject.AddComponent<Image>(),AtlasUi.Paper,12,false);
+        card.anchorMin=card.anchorMax=new Vector2(.5f,.5f);card.pivot=new Vector2(.5f,.5f);card.sizeDelta=new Vector2(520,300);
+        _confirmTitle=AtlasUi.Text(card,"Подтверждение",26,title:true,height:44);_confirmBody=AtlasUi.Text(card,"",16,height:110);
+        var actions=AtlasUi.Row(card,"Actions",40);actions.GetComponent<HorizontalLayoutGroup>().childForceExpandWidth=false;var cancel=AtlasUi.Button(actions,"Отмена",()=>_confirmPanel.SetActive(false),height:40);AtlasUi.Width(cancel,120);var spacer=AtlasUi.Node(actions,"Spacer");spacer.gameObject.AddComponent<LayoutElement>().flexibleWidth=1;_confirmAccept=AtlasUi.Button(actions,"Подтвердить",null,true,height:40);AtlasUi.Width(_confirmAccept,210);
         modal.gameObject.AddComponent<UiModalScope>();_confirmPanel.SetActive(false);
     }
 
@@ -265,8 +276,8 @@ public partial class DiceUI
         var scenes=SceneFileStore.GetCampaignScenes();string key=SceneFileStore.ActiveSceneId+string.Join("|",scenes.Select(s=>s.sceneId+s.title));if(key==_nativeSceneKey)return;_nativeSceneKey=key;
         AtlasUi.Clear(_nativeSceneListContent);AtlasUi.Text(_nativeSceneListContent,"Сцены",27,title:true,height:44);
         var actions=AtlasUi.Row(_nativeSceneListContent,"Actions",38);AtlasUi.Button(actions,"+ Пустая",()=>{SceneFileStore.CreateEmptyScene();_nativeSceneKey=null;});AtlasUi.Button(actions,"Копировать",()=>{SceneFileStore.CreateSceneCopy();_nativeSceneKey=null;});
-        for(int i=0;i<scenes.Length;i++){var s=scenes[i];string id=s.sceneId;AtlasUi.Button(_nativeSceneListContent,s.title,()=>{SceneFileStore.SelectScene(id);_nativeSceneKey=null;},s.sceneId==SceneFileStore.ActiveSceneId,65);}
-        AtlasUi.Button(_nativeSceneListContent,"Переименовать / удалить",()=>DmPanelUI.Instance?.OpenAtlasPage(4));AtlasUi.Button(_nativeSceneListContent,"Перенести токены…",()=>DmPanelUI.Instance?.OpenAtlasPage(4));
+        for(int i=0;i<scenes.Length;i++){var scene=scenes[i];string id=scene.sceneId;var row=AtlasUi.Row(_nativeSceneListContent,"Scene "+id,54,6);row.GetComponent<HorizontalLayoutGroup>().childForceExpandWidth=false;var choose=AtlasUi.Button(row,scene.title,()=>{SceneFileStore.SelectScene(id);_nativeSceneKey=null;},id==SceneFileStore.ActiveSceneId,height:54);choose.GetComponent<LayoutElement>().flexibleWidth=1;var remove=AtlasUi.Button(row,"Удалить сцену",()=>ConfirmAction("Удалить сцену «"+scene.title+"»?",id==SceneFileStore.ActiveSceneId?"Активная сцена будет удалена, загрузится следующая. Переходы в неё тоже будут удалены.":"Сцена и ведущие в неё переходы будут удалены. Текущий стол останется открытым.",()=>{SceneFileStore.DeleteScene(id);_nativeSceneKey=null;}),height:54);AtlasUi.Width(remove,40);var removeText=remove.GetComponentInChildren<Text>();removeText.text=scenes.Length>1?"Удалить сцену":"Последнюю сцену удалить нельзя";removeText.color=Color.clear;var icon=AtlasUi.Node(remove.transform,"TrashIcon");AtlasUi.Place(icon,10,17,20,20);var picture=icon.gameObject.AddComponent<RawImage>();picture.texture=Resources.Load<Texture2D>("Atlas/Icons/trash");picture.color=AtlasUi.Muted;picture.raycastTarget=false;remove.interactable=scenes.Length>1;}
+        AtlasUi.Button(_nativeSceneListContent,"Переименовать сцену…",()=>DmPanelUI.Instance?.OpenAtlasPage(4));AtlasUi.Button(_nativeSceneListContent,"Перенести токены…",()=>DmPanelUI.Instance?.OpenAtlasPage(4));
     }
     private void NativeUpdateInitiative()
     {

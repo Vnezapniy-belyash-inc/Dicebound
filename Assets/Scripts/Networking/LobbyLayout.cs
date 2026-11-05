@@ -19,7 +19,7 @@ public partial class LobbyUI
         var card=AtlasUi.Node(backdrop,"AtlasLobby");_lobbyCard=card;
         card.anchorMin=card.anchorMax=new Vector2(.5f,.5f);card.pivot=new Vector2(.5f,.5f);card.sizeDelta=new Vector2(1480,860);
         var art=AtlasUi.Panel(card,"Illustration",AtlasUi.Raised);AtlasUi.Place(art,0,140,580,720);
-        var texture=Resources.Load<Texture2D>("Atlas/LobbyIllustration");if(texture!=null){var picture=AtlasUi.Node(art,"Artwork");AtlasUi.Fill(picture);var image=picture.gameObject.AddComponent<RawImage>();image.texture=texture;image.raycastTarget=false;}
+        var texture=Resources.Load<Texture2D>("Atlas/LobbyIllustration");if(texture!=null){var picture=AtlasUi.Node(art,"Artwork");AtlasUi.Fill(picture);var image=picture.gameObject.AddComponent<RawImage>();image.texture=texture;image.raycastTarget=false;art.gameObject.AddComponent<RectMask2D>();var fit=picture.gameObject.AddComponent<AspectRatioFitter>();fit.aspectMode=AspectRatioFitter.AspectMode.EnvelopeParent;fit.aspectRatio=(float)texture.width/texture.height;}
         var brand=AtlasUi.Panel(card,"Brand",AtlasUi.Forest);AtlasUi.Place(brand,0,0,580,140);
         var word=AtlasUi.Text(brand,"◈  Dicebound",52,AtlasUi.Light,true,76);AtlasUi.Place(word.rectTransform,30,16,525,80);
         var sub=AtlasUi.Text(brand,"ВИРТУАЛЬНЫЙ СТОЛ ДЛЯ РОЛЕВЫХ ИГР",12,AtlasUi.Light,height:28);AtlasUi.Place(sub.rectTransform,35,98,510,28);
@@ -92,20 +92,21 @@ public partial class LobbyUI
         float factor=Mathf.Max(.01f,_lobbyCanvas.scaleFactor);
         float w=Screen.width/factor,h=Screen.height/factor;
         _lobbyCard.localScale=Vector3.one;_lobbyCard.sizeDelta=new Vector2(w,h);
-        float left=w*.40f,rightX=left+44,rightW=w-left-88,cardW=(rightW-28)/2;
+        float left=w*.40f,available=w-left,rightW=Mathf.Min(900,available-80),rightX=left+(available-rightW)*.5f,cardW=(rightW-24)/2;
         var art=(RectTransform)_lobbyCard.Find("Illustration");var brand=(RectTransform)_lobbyCard.Find("Brand");
-        AtlasUi.Place(brand,0,0,left,h*.16f);AtlasUi.Place(art,0,h*.16f,left,h*.84f);
-        var titles=brand.GetComponentsInChildren<Text>();titles[0].fontSize=Mathf.Clamp(Mathf.RoundToInt(left*.11f),44,80);AtlasUi.Place(titles[0].rectTransform,35,12,left-65,h*.11f);titles[1].fontSize=13;AtlasUi.Place(titles[1].rectTransform,38,h*.115f,left-68,28);
-        var heading=_lobbyCard.Find("StoryHeading").GetComponent<Text>();heading.fontSize=Mathf.Clamp(Mathf.RoundToInt(rightW*.065f),34,62);AtlasUi.Place(heading.rectTransform,rightX,h*.08f,rightW,h*.15f);
-        AtlasUi.Place((RectTransform)_lobbyCard.Find("NameLabel"),rightX,h*.245f,155,45);AtlasUi.Place((RectTransform)nicknameInput.transform,rightX+165,h*.245f,rightW-165,48);nicknameInput.textComponent.fontSize=20;
-        float top=h*.36f,ch=h*.41f;
-        var master=(RectTransform)_lobbyCard.Find("MasterEntry");var player=(RectTransform)_lobbyCard.Find("PlayerEntry");AtlasUi.Place(master,rightX,top,cardW,ch);AtlasUi.Place(player,rightX+cardW+28,top,cardW,ch);
-        foreach(var role in new[]{master,player}){var t=role.GetChild(0).GetComponent<Text>();t.fontSize=36;AtlasUi.Place(t.rectTransform,25,25,cardW-50,65);}
-        AtlasUi.Place((RectTransform)hostButton.transform,24,ch*.37f,cardW-48,54);AtlasUi.Place((RectTransform)_prepareButton.transform,24,ch*.37f+65,cardW-48,54);
-        var hint=master.GetChild(3).GetComponent<Text>();AtlasUi.Place(hint.rectTransform,24,ch-45,cardW-48,42);
-        var codeLabel=player.GetChild(1).GetComponent<Text>();AtlasUi.Place(codeLabel.rectTransform,24,ch*.35f,cardW-48,35);AtlasUi.Place((RectTransform)joinCodeInput.transform,24,ch*.35f+42,cardW-48,50);AtlasUi.Place((RectTransform)joinButton.transform,24,ch*.35f+112,cardW-48,54);
-        foreach(var button in new[]{hostButton,_prepareButton,joinButton})button.GetComponentInChildren<Text>().fontSize=18;joinCodeInput.textComponent.fontSize=20;
-        AtlasUi.Place(statusText.rectTransform,rightX,top+ch+12,rightW,60);
+        float brandHeight=Mathf.Clamp(h*.16f,90,140);AtlasUi.Place(brand,0,0,left,brandHeight);AtlasUi.Place(art,0,brandHeight,left,h-brandHeight);
+        var titles=brand.GetComponentsInChildren<Text>();titles[0].fontSize=Mathf.Clamp(Mathf.RoundToInt(left*.09f),40,64);AtlasUi.Place(titles[0].rectTransform,32,12,left-60,brandHeight-35);titles[1].fontSize=12;AtlasUi.Place(titles[1].rectTransform,34,brandHeight-32,left-60,22);
+        float top=Mathf.Max(32,(h-520)*.5f);
+        var heading=_lobbyCard.Find("StoryHeading").GetComponent<Text>();heading.fontSize=42;AtlasUi.Place(heading.rectTransform,rightX,top,rightW,70);
+        AtlasUi.Place((RectTransform)_lobbyCard.Find("NameLabel"),rightX,top+100,120,40);AtlasUi.Place((RectTransform)nicknameInput.transform,rightX+130,top+100,rightW-130,40);nicknameInput.textComponent.fontSize=17;
+        float cardsTop=top+172,ch=300;
+        var master=(RectTransform)_lobbyCard.Find("MasterEntry");var player=(RectTransform)_lobbyCard.Find("PlayerEntry");AtlasUi.Place(master,rightX,cardsTop,cardW,ch);AtlasUi.Place(player,rightX+cardW+24,cardsTop,cardW,ch);
+        foreach(var role in new[]{master,player}){var title=role.GetChild(0).GetComponent<Text>();title.fontSize=28;AtlasUi.Place(title.rectTransform,22,20,cardW-44,48);}
+        AtlasUi.Place((RectTransform)hostButton.transform,22,104,cardW-44,42);AtlasUi.Place((RectTransform)_prepareButton.transform,22,158,cardW-44,42);
+        var hint=master.GetChild(3).GetComponent<Text>();hint.fontSize=14;AtlasUi.Place(hint.rectTransform,22,230,cardW-44,48);
+        var codeLabel=player.GetChild(1).GetComponent<Text>();codeLabel.fontSize=14;AtlasUi.Place(codeLabel.rectTransform,22,91,cardW-44,26);AtlasUi.Place((RectTransform)joinCodeInput.transform,22,124,cardW-44,40);AtlasUi.Place((RectTransform)joinButton.transform,22,178,cardW-44,42);
+        foreach(var button in new[]{hostButton,_prepareButton,joinButton})button.GetComponentInChildren<Text>().fontSize=16;joinCodeInput.textComponent.fontSize=17;
+        AtlasUi.Place(statusText.rectTransform,rightX,cardsTop+ch+10,rightW,44);
         var settings=_lobbyNavigation[5];AtlasUi.Place((RectTransform)settings.transform,w-430,h-65,185,42);AtlasUi.Place((RectTransform)exitButton.transform,w-225,h-65,185,42);
     }
 

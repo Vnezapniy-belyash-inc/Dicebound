@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Unity.Collections;
 using Unity.Netcode;
@@ -374,8 +374,8 @@ public sealed class FogManager : MonoBehaviour
                 if (revision == _received && revision > 0 && _hasState) _pendingRevisionAck = revision;
                 return;
             }
-            if (width <= 0 || width > 256 || height <= 0 || height > 256
-                || length <= 0 || length > 512 * 1024 || !reader.TryBeginRead(length)) return;
+            if (width <= 0 || width > TabletopLimits.MaxGridDimension || height <= 0 || height > TabletopLimits.MaxGridDimension
+                || length <= 0 || length > TabletopLimits.MaxFogStateBytes || !reader.TryBeginRead(length)) return;
             var payload = new byte[length]; reader.ReadBytesSafe(ref payload, length);
             FogStateCodec.Decode(payload, width * height * 16, out var visible, out var explored);
             if (_width != width || _height != height) Resize(width, height);

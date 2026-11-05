@@ -165,5 +165,5 @@ MonoBehaviour:
   ShowTopMostFoldoutHeaderGroup: 1
   mapPlane: {fileID: 6204075707370949330}
   minScale: 0.1
-  maxScale: 5
+  maxScale: 50
   defaultScale: 1

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Reflection;
 using NUnit.Framework;
@@ -41,4 +41,21 @@ public class DiceboundAtlasPlayerMenuTests
         var drawer=Field<RectTransform>("_nativeDrawer").GetComponent<ScrollRect>();Assert.That(drawer.vertical,Is.True);Assert.That(drawer.horizontal,Is.False);Assert.That(drawer.verticalScrollbar,Is.Not.Null);Assert.That(drawer.viewport.GetComponent<RectMask2D>(),Is.Not.Null);
         var content=Field<RectTransform>("_nativePlayerContent");Assert.That(content.GetComponent<VerticalLayoutGroup>(),Is.Not.Null);Assert.That(content.GetComponent<ContentSizeFitter>().verticalFit,Is.EqualTo(ContentSizeFitter.FitMode.PreferredSize));
     }
+    [Test] public void MasterKeepsMovementRequestsButOmitsPlayerSheetAndMenuToggle()
+    {
+        _type.GetField("_nativeHost",Private).SetValue(_ui,true);_type.GetMethod("NativeLayout",Private).Invoke(_ui,null);
+        Assert.That(Field<Button>("_nativeMenuButton").gameObject.activeSelf,Is.False);
+        Assert.That(Field<RectTransform>("_nativeRail").GetComponentsInChildren<Text>(true).Any(t=>t.text=="Мой лист"),Is.False);
+        Assert.That(Field<Button>("_movementRequestsButton").gameObject.activeSelf,Is.True);
+        _type.GetField("_nativeHost",Private).SetValue(_ui,false);_type.GetMethod("NativeLayout",Private).Invoke(_ui,null);
+        Assert.That(Field<Button>("_nativeMenuButton").gameObject.activeSelf,Is.True);
+    }
+
+    [Test] public void ConfirmationCanRenderAndReceiveClicksAboveMasterWorkspace()
+    {
+        _root.SetActive(true);Field<RectTransform>("_nativeRoot").gameObject.SetActive(true);var confirmation=Field<GameObject>("_confirmPanel");_type.GetMethod("ConfirmAction").Invoke(_ui,new object[]{"Delete scene?","Test",new Action(()=>{})});Canvas.ForceUpdateCanvases();var canvas=confirmation.GetComponent<Canvas>();
+        Assert.That(canvas.overrideSorting,Is.True);Assert.That(canvas.sortingOrder,Is.GreaterThan(30));
+        Assert.That(confirmation.GetComponent<GraphicRaycaster>(),Is.Not.Null);
+    }
+
 }

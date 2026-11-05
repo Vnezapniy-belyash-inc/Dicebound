@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
@@ -136,4 +136,18 @@ public class DiceboundSceneTests
         Assert.That(Get<bool>(Get<Array>(geometry, "edges").GetValue(0), "open"), Is.True);
         Assert.That(Get<float>(Get<Array>(geometry, "obstacles").GetValue(0), "diameter"), Is.EqualTo(0.3f));
     }
+    [TestCase(100,5f)]
+    [TestCase(500,50f)]
+    public void SupportedGridAndScaleRoundTripWithoutChangingDimensions(int dimension,float scale)
+    {
+        var scene=Scene();Set(scene,"gridWidth",dimension);Set(scene,"gridHeight",dimension);Set(scene,"mapScale",scale);Validate(scene);
+        var restored=JsonUtility.FromJson(JsonUtility.ToJson(scene),TypeOf("SceneDefinition"));Validate(restored);
+        Assert.That(Get<int>(restored,"gridWidth"),Is.EqualTo(dimension));Assert.That(Get<float>(restored,"mapScale"),Is.EqualTo(scale));
+    }
+    [Test]
+    public void SceneRejectsGridAndScaleBeyondExpandedLimits()
+    {
+        var scene=Scene();Set(scene,"gridWidth",501);Invalid(scene);Set(scene,"gridWidth",500);Set(scene,"mapScale",50.1f);Invalid(scene);
+    }
+
 }

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.IO;
 using System.Reflection;
@@ -326,6 +326,14 @@ public class DiceboundSceneIntegrationTests
         store.GetMethod("AddSceneTransition").Invoke(null, new object[] { "To empty", emptyId, 1, 1 });
         store.GetMethod("CycleScene").Invoke(null, new object[] { -1 }); yield return null;
         Assert.That(store.GetProperty("ActiveSceneId").GetValue(null), Is.EqualTo(emptyId), "Backward wrap selects last.");
+        store.GetMethod("CreateSceneCopy").Invoke(null,null);yield return null;
+        string discardedId=(string)store.GetProperty("ActiveSceneId").GetValue(null);
+        store.GetMethod("SelectScene").Invoke(null,new object[]{emptyId});yield return null;
+        store.GetMethod("AddSceneTransition").Invoke(null,new object[]{"Discarded scene",discardedId,0,0});
+        store.GetMethod("DeleteScene").Invoke(null,new object[]{discardedId});yield return null;
+        Assert.That(store.GetProperty("ActiveSceneId").GetValue(null),Is.EqualTo(emptyId),"Deleting an inactive scene must not switch the live table.");
+        Assert.That(((Array)store.GetMethod("GetCampaignScenes").Invoke(null,null)).Length,Is.EqualTo(3));
+        Assert.That(((Array)store.GetMethod("GetActiveSceneTransitions").Invoke(null,null)).Length,Is.Zero);
         store.GetMethod("DeleteActiveScene").Invoke(null, null); yield return null;
         Assert.That(store.GetProperty("ActiveSceneId").GetValue(null), Is.EqualTo(originalId));
         Assert.That(((Array)store.GetMethod("GetActiveSceneTransitions").Invoke(null, null)).Length, Is.Zero);

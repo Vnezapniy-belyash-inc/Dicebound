@@ -13,7 +13,7 @@ public partial class CharacterSheetUI
         var scaler=canvas.GetComponent<CanvasScaler>();scaler.uiScaleMode=CanvasScaler.ScaleMode.ScaleWithScreenSize;scaler.referenceResolution=new Vector2(1600,900);scaler.matchWidthOrHeight=.5f;
         var panel=AtlasUi.Panel(canvas.transform,"CharacterSheet",AtlasUi.Paper);_pn=panel.gameObject;
         panel.anchorMin=panel.anchorMax=new Vector2(.5f,.5f);panel.pivot=new Vector2(.5f,.5f);panel.sizeDelta=new Vector2(960,710);
-        var header=AtlasUi.Panel(panel,"CharacterHeader",AtlasUi.Forest);header.anchorMin=new Vector2(0,1);header.anchorMax=Vector2.one;header.pivot=new Vector2(.5f,1);header.sizeDelta=new Vector2(0,64);
+        var header=AtlasUi.Panel(panel,"CharacterHeader",AtlasUi.Forest,true);header.anchorMin=new Vector2(0,1);header.anchorMax=Vector2.one;header.pivot=new Vector2(.5f,1);header.sizeDelta=new Vector2(0,64);
         var title=AtlasUi.Text(header,"Мой персонаж",28,AtlasUi.Light,true,42);AtlasUi.Place(title.rectTransform,22,9,650,44);
         var close=AtlasUi.Button(header,"×",()=>SetSheetVisible(false),dark:true);AtlasUi.Place((RectTransform)close.transform,900,12,40,40);
         var identity=AtlasUi.Row(panel,"Identity",44,10);AtlasUi.Place(identity,20,79,920,44);

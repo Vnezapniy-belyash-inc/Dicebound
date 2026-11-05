@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using Unity.Netcode;
@@ -153,6 +153,8 @@ public partial class DiceUI : MonoBehaviour
         });
         _confirmPanel.transform.SetAsLastSibling();
         _confirmPanel.SetActive(true);
+        var modalCanvas=_confirmPanel.GetComponent<Canvas>();
+        if(modalCanvas!=null){modalCanvas.overrideSorting=true;modalCanvas.sortingOrder=100;}
     }
 
     void SelectDefaultTool()

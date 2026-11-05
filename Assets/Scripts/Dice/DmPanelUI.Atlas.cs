@@ -16,7 +16,7 @@ public partial class DmPanelUI
         _canvas=canvasObject.GetComponent<Canvas>();_canvas.renderMode=RenderMode.ScreenSpaceOverlay;_canvas.sortingOrder=30;
         var scaler=canvasObject.GetComponent<CanvasScaler>();scaler.uiScaleMode=CanvasScaler.ScaleMode.ScaleWithScreenSize;scaler.referenceResolution=new Vector2(1600,900);scaler.matchWidthOrHeight=.5f;
         var panel=AtlasUi.Panel(canvasObject.transform,"MasterWorkspace",AtlasUi.Paper);_panel=panel.gameObject;panel.anchorMin=panel.anchorMax=new Vector2(.5f,.5f);panel.pivot=new Vector2(.5f,.5f);panel.sizeDelta=new Vector2(920,660);_panel.SetActive(false);
-        var header=AtlasUi.Panel(panel,"Header",AtlasUi.Forest);header.anchorMin=new Vector2(0,1);header.anchorMax=Vector2.one;header.pivot=new Vector2(.5f,1);header.sizeDelta=new Vector2(0,62);
+        var header=AtlasUi.Panel(panel,"Header",AtlasUi.Forest,true);header.anchorMin=new Vector2(0,1);header.anchorMax=Vector2.one;header.pivot=new Vector2(.5f,1);header.sizeDelta=new Vector2(0,62);
         var title=AtlasUi.Text(header,"Мастерская кампании",28,AtlasUi.Light,true,42);AtlasUi.Place(title.rectTransform,22,8,700,44);
         var close=AtlasUi.Button(header,"×",Hide,dark:true);AtlasUi.Place((RectTransform)close.transform,858,10,44,40);
         var nav=AtlasUi.Column(panel,"WorkspaceSections",12,6);nav.gameObject.AddComponent<Image>().color=AtlasUi.Raised;
@@ -65,6 +65,34 @@ public partial class DmPanelUI
                 }
             }
         }
+    }
+
+    private readonly InputField[] _atlasAbilities=new InputField[6];
+    private readonly Text[] _atlasAbilityModifiers=new Text[6];
+    private bool _atlasAbilitySync;
+    private void BuildAtlasAbilityFields(Transform parent)
+    {
+        var row=AtlasUi.Row(parent,"AbilityScores",98,6);AtlasUi.Place(row,0,206,350,98);
+        var names=new[]{"СИЛ","ЛОВ","ТЕЛ","ИНТ","МДР","ХАР"};
+        for(int i=0;i<6;i++){
+            int index=i;var card=AtlasUi.Column(row,names[i],5,3);card.gameObject.AddComponent<Image>().color=AtlasUi.Raised;
+            var label=AtlasUi.Text(card,names[i],13,height:20);label.alignment=TextAnchor.MiddleCenter;
+            var input=AtlasUi.Input(card,"10",height:34);input.contentType=InputField.ContentType.IntegerNumber;input.characterLimit=3;input.textComponent.alignment=TextAnchor.MiddleCenter;input.textComponent.fontSize=18;_atlasAbilities[i]=input;
+            _atlasAbilityModifiers[i]=AtlasUi.Text(card,"+0",15,AtlasUi.Muted,height:22);_atlasAbilityModifiers[i].alignment=TextAnchor.MiddleCenter;
+            input.onValueChanged.AddListener(v=>{UpdateAtlasModifier(index);if(!_atlasAbilitySync)_statBlockInputs[7].text=string.Join(",",_atlasAbilities.Select(a=>a.text));});
+        }
+        _statBlockInputs[7].onValueChanged.AddListener(v=>SyncAtlasAbilities());
+    }
+    private void SyncAtlasAbilities()
+    {
+        if(_atlasAbilities[0]==null)return;var values=_statBlockInputs[7].text.Split(',');_atlasAbilitySync=true;
+        for(int i=0;i<6;i++){_atlasAbilities[i].SetTextWithoutNotify(values.Length==6?values[i].Trim():"10");UpdateAtlasModifier(i);}
+        _atlasAbilitySync=false;
+    }
+    private void UpdateAtlasModifier(int index)
+    {
+        if(!int.TryParse(_atlasAbilities[index].text,out int score)||score<1||score>30){_atlasAbilityModifiers[index].text="—";return;}
+        int modifier=Mathf.FloorToInt((score-10)/2f);_atlasAbilityModifiers[index].text=modifier>=0?"+"+modifier:modifier.ToString();
     }
 
 }

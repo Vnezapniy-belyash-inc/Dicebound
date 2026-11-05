@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -7,7 +7,7 @@ public static class SceneArrivalPlacement
 {
     public static Vector2Int[] Plan(SceneDefinition scene, int count, Vector2Int? arrival)
     {
-        if (scene == null || scene.gridWidth < 1 || scene.gridHeight < 1 || scene.gridWidth > 256 || scene.gridHeight > 256 || count < 0)
+        if (scene == null || scene.gridWidth < 1 || scene.gridHeight < 1 || scene.gridWidth > TabletopLimits.MaxGridDimension || scene.gridHeight > TabletopLimits.MaxGridDimension || count < 0)
             throw new ArgumentException("Некорректные параметры сцены или группы.");
         if (arrival.HasValue && (arrival.Value.x < 0 || arrival.Value.y < 0 || arrival.Value.x >= scene.gridWidth || arrival.Value.y >= scene.gridHeight))
             throw new ArgumentException("Точка прибытия находится за пределами целевой сцены.");

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Reflection;
 using NUnit.Framework;
@@ -789,6 +789,39 @@ public class DiceboundLobbyIntegrationTests
             _client.CustomMessagingManager.SendNamedMessage("MapAck", 0, writer);
         }
     }
+
+    private bool _largeFogReceived,_largeFogMatched;
+    private int _largeFogBytes;
+    private bool[] _largeVisible,_largeExplored;
+    [UnityTest]
+    public IEnumerator MaximumGridDenseFogReachesRemoteClient()
+    {
+        yield return new EnterPlayMode();
+        _host=Manager("Large fog host");_scene=new GameObject("Large fog fixture");
+        _scene.AddComponent(RuntimeType("GridManager"));var fog=_scene.AddComponent(RuntimeType("FogManager"));
+        fog.GetType().GetProperty("Autosave").SetValue(fog,false);yield return null;
+        Assert.That(_host.StartHost(),Is.True);_client=Manager("Large fog client");
+        _largeFogReceived=_largeFogMatched=false;_largeFogBytes=0;
+        int count=500*500*16;_largeVisible=new bool[count];_largeExplored=new bool[count];var random=new System.Random(17);
+        for(int i=0;i<count;i++){_largeVisible[i]=random.Next(2)!=0;_largeExplored[i]=random.Next(2)!=0;}
+        Assert.That(_client.StartClient(),Is.True);float deadline=Time.realtimeSinceStartup+10;
+        while(!_client.IsConnectedClient&&Time.realtimeSinceStartup<deadline)yield return null;
+        Assert.That(_client.IsConnectedClient,Is.True);yield return null;
+        _client.CustomMessagingManager.RegisterNamedMessageHandler("FogStateV2",OnLargeFog);
+        var flags=BindingFlags.Instance|BindingFlags.NonPublic;var type=fog.GetType();
+        type.GetField("_visible",flags).SetValue(fog,_largeVisible);type.GetField("_explored",flags).SetValue(fog,_largeExplored);type.GetField("_dirty",flags).SetValue(fog,false);type.GetField("_encodedState",flags).SetValue(fog,null);
+        type.GetMethod("Send",flags).Invoke(fog,new object[]{_client.LocalClientId});
+        deadline=Time.realtimeSinceStartup+20;while(!_largeFogReceived&&Time.realtimeSinceStartup<deadline)yield return null;
+        Assert.That(_largeFogReceived,Is.True,"Maximum-size fog must reach the client through the real reliable transport.");Assert.That(_largeFogMatched,Is.True);Assert.That(_largeFogBytes,Is.GreaterThan(512*1024));Assert.That(_client.IsConnectedClient,Is.True);
+    }
+    private void OnLargeFog(ulong sender,FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out int revision);reader.ReadValueSafe(out int width);reader.ReadValueSafe(out int height);reader.ReadValueSafe(out bool enabled);reader.ReadValueSafe(out int bytes);
+        if(bytes<=512*1024)return;var payload=new byte[bytes];reader.ReadBytesSafe(ref payload,bytes);
+        object[] args={payload,width*height*16,null,null};RuntimeType("FogStateCodec").GetMethod("Decode").Invoke(null,args);
+        _largeFogBytes=bytes;_largeFogMatched=width==500&&height==500&&System.Linq.Enumerable.SequenceEqual(_largeVisible,(bool[])args[2])&&System.Linq.Enumerable.SequenceEqual(_largeExplored,(bool[])args[3]);_largeFogReceived=true;
+    }
+
     private void OnTransferFog(ulong sender, FastBufferReader reader)
     {
         reader.ReadValueSafe(out int revision); reader.ReadValueSafe(out int width); reader.ReadValueSafe(out int height); reader.ReadValueSafe(out bool state);

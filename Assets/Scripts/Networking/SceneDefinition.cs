@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -337,13 +337,13 @@ public static class SceneValidation
             "Некорректный ID сцены.");
         // A grid-only preparation scene is valid. Nonempty image data is decoded by the file store
         // before live application; the existing empty-map network revision clears old client maps.
-        Require(scene.gridWidth > 0 && scene.gridWidth <= 256 && scene.gridHeight > 0 && scene.gridHeight <= 256,
-            "Размер сетки должен быть 1–256 клеток.");
+        Require(scene.gridWidth > 0 && scene.gridWidth <= TabletopLimits.MaxGridDimension && scene.gridHeight > 0 && scene.gridHeight <= TabletopLimits.MaxGridDimension,
+            "Размер сетки должен быть 1–500 клеток.");
         Require(Finite(scene.cellSize) && scene.cellSize >= 0.1f && scene.cellSize <= 10, "Некорректный размер клетки.");
         Require(Finite(scene.gridPosition) && Finite(scene.gridRotation) && Finite(scene.mapPosition) && Finite(scene.mapRotation)
             && scene.gridPosition.sqrMagnitude < 100000000 && scene.mapPosition.sqrMagnitude < 100000000,
             "Некорректное преобразование карты.");
-        Require(Finite(scene.mapScale) && scene.mapScale >= 0.1f && scene.mapScale <= 5, "Некорректный масштаб карты.");
+        Require(Finite(scene.mapScale) && scene.mapScale >= 0.1f && scene.mapScale <= TabletopLimits.MaxMapScale, "Некорректный масштаб карты.");
         Geometry(scene.geometry, scene.gridWidth, scene.gridHeight);
         if (scene.fog != null)
         {
