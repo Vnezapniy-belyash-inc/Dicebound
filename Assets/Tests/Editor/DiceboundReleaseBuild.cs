@@ -12,6 +12,13 @@ public static class DiceboundReleaseBuild
         const string version = "0.5.1";
         const string output = "Builds/0.5.1/Windows-x64/Dicebound.exe";
         PlayerSettings.bundleVersion = version;
+        var icon = AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/Resources/Branding/dicebound-icon.png");
+        if (icon == null) throw new Exception("Dicebound application icon is missing.");
+        foreach (var target in new[] { UnityEditor.Build.NamedBuildTarget.Unknown, UnityEditor.Build.NamedBuildTarget.Standalone })
+        {
+            int count = PlayerSettings.GetIconSizes(target, IconKind.Any).Length;
+            PlayerSettings.SetIcons(target, Enumerable.Repeat(icon, Mathf.Max(1, count)).ToArray(), IconKind.Any);
+        }
         AssetDatabase.SaveAssets();
         Directory.CreateDirectory(Path.GetDirectoryName(output));
         var report = BuildPipeline.BuildPlayer(new BuildPlayerOptions
