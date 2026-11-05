@@ -9,8 +9,8 @@ public static class DiceboundReleaseBuild
 {
     public static void BuildWindows()
     {
-        const string version = "0.5.0";
-        const string output = "Builds/0.5.0/Windows-x64/Dicebound.exe";
+        const string version = "0.5.1";
+        const string output = "Builds/0.5.1/Windows-x64/Dicebound.exe";
         PlayerSettings.bundleVersion = version;
         AssetDatabase.SaveAssets();
         Directory.CreateDirectory(Path.GetDirectoryName(output));
@@ -23,7 +23,7 @@ public static class DiceboundReleaseBuild
         });
         var summary = report.summary;
         Directory.CreateDirectory("Logs");
-        File.WriteAllText("Logs/release-0.5.0-build-result.json", JsonUtility.ToJson(new Result
+        File.WriteAllText("Logs/release-0.5.1-build-result.json", JsonUtility.ToJson(new Result
         {
             version = version, result = summary.result.ToString(),
             errors = summary.totalErrors, warnings = summary.totalWarnings,

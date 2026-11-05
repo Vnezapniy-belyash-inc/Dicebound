@@ -21,8 +21,8 @@ public partial class LobbyUI
         var art=AtlasUi.Panel(card,"Illustration",AtlasUi.Raised);AtlasUi.Place(art,0,140,580,720);
         var texture=Resources.Load<Texture2D>("Atlas/LobbyIllustration");if(texture!=null){var picture=AtlasUi.Node(art,"Artwork");AtlasUi.Fill(picture);var image=picture.gameObject.AddComponent<RawImage>();image.texture=texture;image.raycastTarget=false;art.gameObject.AddComponent<RectMask2D>();var fit=picture.gameObject.AddComponent<AspectRatioFitter>();fit.aspectMode=AspectRatioFitter.AspectMode.EnvelopeParent;fit.aspectRatio=(float)texture.width/texture.height;}
         var brand=AtlasUi.Panel(card,"Brand",AtlasUi.Forest);AtlasUi.Place(brand,0,0,580,140);
-        var word=AtlasUi.Text(brand,"◈  Dicebound",52,AtlasUi.Light,true,76);AtlasUi.Place(word.rectTransform,30,16,525,80);
-        var sub=AtlasUi.Text(brand,"ВИРТУАЛЬНЫЙ СТОЛ ДЛЯ РОЛЕВЫХ ИГР",12,AtlasUi.Light,height:28);AtlasUi.Place(sub.rectTransform,35,98,510,28);
+        var logo=AtlasUi.Node(brand,"Logo");AtlasUi.Place(logo,30,4,520,94);AtlasUi.BrandImage(logo,"Branding/dicebound-logo",0,0,520,94);
+        var sub=AtlasUi.Text(brand,"ВИРТУАЛЬНЫЙ СТОЛ ДЛЯ РОЛЕВЫХ ИГР",12,AtlasUi.Light,height:28);sub.name="BrandSubtitle";AtlasUi.Place(sub.rectTransform,35,98,510,28);
         var heading=AtlasUi.Text(card,"Соберите свою историю",43,title:true,height:100);heading.name="StoryHeading";AtlasUi.Place(heading.rectTransform,630,93,810,112);
         var nameLabel=AtlasUi.Text(card,"Ваше имя",21,title:true,height:40);nameLabel.name="NameLabel";AtlasUi.Place(nameLabel.rectTransform,630,234,175,44);
         nicknameInput=AtlasUi.Input(card,nickname,"Имя игрока",height:48);AtlasUi.Place((RectTransform)nicknameInput.transform,810,230,625,48);
@@ -95,7 +95,7 @@ public partial class LobbyUI
         float left=w*.40f,available=w-left,rightW=Mathf.Min(900,available-80),rightX=left+(available-rightW)*.5f,cardW=(rightW-24)/2;
         var art=(RectTransform)_lobbyCard.Find("Illustration");var brand=(RectTransform)_lobbyCard.Find("Brand");
         float brandHeight=Mathf.Clamp(h*.16f,90,140);AtlasUi.Place(brand,0,0,left,brandHeight);AtlasUi.Place(art,0,brandHeight,left,h-brandHeight);
-        var titles=brand.GetComponentsInChildren<Text>();titles[0].fontSize=Mathf.Clamp(Mathf.RoundToInt(left*.09f),40,64);AtlasUi.Place(titles[0].rectTransform,32,12,left-60,brandHeight-35);titles[1].fontSize=12;AtlasUi.Place(titles[1].rectTransform,34,brandHeight-32,left-60,22);
+        var logo=(RectTransform)brand.Find("Logo");AtlasUi.Place(logo,30,4,left-60,brandHeight-40);var logoImage=(RectTransform)logo.Find("DiceboundBrand");AtlasUi.Place(logoImage,0,0,left-60,brandHeight-40);var subtitle=brand.Find("BrandSubtitle").GetComponent<Text>();subtitle.fontSize=12;AtlasUi.Place(subtitle.rectTransform,34,brandHeight-32,left-60,22);
         float top=Mathf.Max(32,(h-520)*.5f);
         var heading=_lobbyCard.Find("StoryHeading").GetComponent<Text>();heading.fontSize=42;AtlasUi.Place(heading.rectTransform,rightX,top,rightW,70);
         AtlasUi.Place((RectTransform)_lobbyCard.Find("NameLabel"),rightX,top+100,120,40);AtlasUi.Place((RectTransform)nicknameInput.transform,rightX+130,top+100,rightW-130,40);nicknameInput.textComponent.fontSize=17;

@@ -37,7 +37,7 @@ public partial class InitiativeTracker
         if(_content==null)return;AtlasUi.Clear(_content);var shown=GetAtlasEntries();bool master=IsHost&&FogManager.Instance?.Preview!=true;
         _roundText.text="Раунд "+_round+" · Очерёдность ходов";_emptyMessage.SetActive(shown.Length==0);_viewport.SetActive(shown.Length>0);
         foreach(var e in shown){int id=e.id;var row=AtlasUi.Row(_content,"Participant "+id,56);AtlasUi.Text(row,(e.current?"▶ ":"")+e.name,18,title:e.current,height:56);
-            if(master){var score=AtlasUi.Input(row,e.initiative.ToString());score.onEndEdit.AddListener(v=>SetInitiativeById(id,v));if(!string.IsNullOrEmpty(e.tokenId)){string token=e.tokenId;AtlasUi.Button(row,"d20",()=>ArmInitiativeFromJournal(token),height:40);}var linked=TokenController.FindSceneToken(e.tokenId);var hp=AtlasUi.Input(row,(linked!=null?linked.VisibleCurrentHp:_hpById.GetValueOrDefault(id)).ToString());hp.onEndEdit.AddListener(v=>SetHpById(id,v));AtlasUi.Button(row,"×",()=>RemoveEntryById(id),height:40);}
+            if(master){var score=AtlasUi.Input(row,e.initiative.ToString());score.onEndEdit.AddListener(v=>SetInitiativeById(id,v));if(!string.IsNullOrEmpty(e.tokenId)){string token=e.tokenId;AtlasUi.Button(row,"d20",()=>RollTokenInitiative(token),height:40);}var linked=TokenController.FindSceneToken(e.tokenId);var hp=AtlasUi.Input(row,(linked!=null?linked.VisibleCurrentHp:_hpById.GetValueOrDefault(id)).ToString());hp.onEndEdit.AddListener(v=>SetHpById(id,v));AtlasUi.Button(row,"×",()=>RemoveEntryById(id),height:40);}
             else AtlasUi.Text(row,e.initiative.ToString(),19,height:56);
         }
     }

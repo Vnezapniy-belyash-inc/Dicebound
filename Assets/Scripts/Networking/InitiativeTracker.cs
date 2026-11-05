@@ -160,6 +160,23 @@ public partial class InitiativeTracker : NetworkBehaviour
         DiceUI.Instance?.ShowToolNotice("Бросьте d20: следующий результат из журнала пойдёт в инициативу.");
     }
 
+    public void RollTokenInitiative(string tokenId)
+    {
+        if (!IsHost || FogManager.Instance?.Preview == true || string.IsNullOrEmpty(tokenId) || !ContainsToken(tokenId)) return;
+        if (_awaitingInitiativeTokenIds.Count > 0 || !string.IsNullOrEmpty(_awaitingInitiativeTokenId))
+        {
+            DiceUI.Instance?.ShowToolNotice("Дождитесь текущего броска инициативы или отмените его.");
+            return;
+        }
+        ArmInitiativeFromJournal(tokenId);
+        _awaitingInitiativeTokenIds.Enqueue(tokenId);
+        if (NetworkDiceManager.Instance?.RollInitiativeGroup(new[] { tokenId }) != true)
+        {
+            CancelInitiativeFromJournal();
+            DiceUI.Instance?.ShowToolNotice("Не удалось бросить d20: сетевые кости недоступны.");
+        }
+    }
+
     public int AddTokensAndArmInitiative(IEnumerable<TokenController> tokens)
     {
         if (!IsHost || tokens == null) return 0;

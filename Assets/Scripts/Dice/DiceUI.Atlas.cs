@@ -16,7 +16,6 @@ public partial class DiceUI
     private TokenController _nativeToken;
     private TokenController _nativeSelected;
     private Button _nativeInfo;
-    private RectTransform _nativeTokenRing;
     private Text _nativeTokenSummary;
     private bool _nativeBuiltRole, _nativeHost, _nativeMenuOpen=true, _nativeInitCollapsed;
     private bool _nativePreparation;
@@ -51,9 +50,8 @@ public partial class DiceUI
         _nativeContext=AtlasUi.Column(_nativeToolbar,"ToolSettings",10,8);VttUiSkin.Surface(_nativeContext.gameObject.AddComponent<Image>(),AtlasUi.Raised,10,false);_nativeContext.gameObject.SetActive(false);
         _nativeNotice=AtlasUi.Text(_nativeRoot,"",13,AtlasUi.Muted,height:28);
         _nativeInfo=AtlasUi.Button(_nativeRoot,"ⓘ Информация",()=>AtlasInspectToken(_nativeSelected));_nativeInfo.gameObject.SetActive(false);
-        _nativeTokenRing=AtlasUi.Node(_nativeRoot,"SelectedTokenRing");var ring=_nativeTokenRing.gameObject.AddComponent<AtlasGlyph>();ring.key="ring";ring.color=AtlasUi.Copper;ring.raycastTarget=false;_nativeTokenRing.gameObject.SetActive(false);
 
-        var title=AtlasUi.Text(_nativeHeader,"◈  Dicebound",29,AtlasUi.Light,true,42);AtlasUi.Place(title.rectTransform,20,9,245,44);
+        var title=AtlasUi.Text(_nativeHeader,"Dicebound",29,AtlasUi.Light,true,42);AtlasUi.Place(title.rectTransform,70,9,195,44);AtlasUi.BrandImage(_nativeHeader,"Branding/dicebound-icon",20,9,44,44);
         var scene=AtlasUi.Button(_nativeHeader,"Сцена ▾",()=>{if(_nativeHost)NativeOpenScenes();},dark:true);
         AtlasUi.Place((RectTransform)scene.transform,280,12,270,40);_nativeSession=scene.GetComponentInChildren<Text>();
         var people=AtlasUi.Button(_nativeHeader,"Участники",()=>NativeOpenPeople(),dark:true,icon:"users-round");AtlasUi.Place((RectTransform)people.transform,570,12,155,40);
@@ -217,7 +215,7 @@ public partial class DiceUI
         if(_nativeRoot==null||!_nativeRoot.gameObject.activeInHierarchy)return;
         bool host=IsLocalHost();if(!_nativeBuiltRole||host!=_nativeHost){_nativeHost=host;_nativeBuiltRole=true;NativeBuildPlayerMenu();NativeLayout();}
         NativeLayout();
-        if(_nativeInfo!=null){bool show=_nativeSelected!=null&&_nativeSelected.IsSpawned&&_nativeSelected.IsVisibleToLocalPlayer&&_nativeTool==0;_nativeInfo.gameObject.SetActive(show);_nativeTokenRing.gameObject.SetActive(show);if(show&&Camera.main!=null){var p=Camera.main.WorldToScreenPoint(_nativeSelected.transform.position);float scale=Mathf.Max(.01f,_canvas.scaleFactor);AtlasUi.Place(_nativeTokenRing,p.x/scale-40,(Screen.height-p.y)/scale-40,80,80);AtlasUi.Place((RectTransform)_nativeInfo.transform,Mathf.Clamp(p.x/scale+30,AtlasLeft+10,_nativeRoot.rect.width-175),Mathf.Clamp((Screen.height-p.y)/scale-45,140,_nativeRoot.rect.height-100),160,36);}}
+        if(_nativeInfo!=null){bool show=_nativeSelected!=null&&_nativeSelected.IsSpawned&&_nativeSelected.IsVisibleToLocalPlayer&&_nativeTool==0;_nativeInfo.gameObject.SetActive(show);if(show&&Camera.main!=null){var p=Camera.main.WorldToScreenPoint(_nativeSelected.transform.position);float scale=Mathf.Max(.01f,_canvas.scaleFactor);AtlasUi.Place((RectTransform)_nativeInfo.transform,Mathf.Clamp(p.x/scale+30,AtlasLeft+10,_nativeRoot.rect.width-175),Mathf.Clamp((Screen.height-p.y)/scale-45,140,_nativeRoot.rect.height-100),160,36);}}
         if(!GameplayInputGate.IsTextInputFocused&&Keyboard.current?.escapeKey.wasPressedThisFrame==true&&!IsConfirmationOpen&&!GameplayInputGate.IsModalOpen){
             if(_nativeTool!=0){NativeSelectTool(0);GameplayInputGate.MarkToolExit();}
             else if(_nativeDrawer.gameObject.activeSelf)NativeCloseDrawer();
@@ -268,6 +266,7 @@ public partial class DiceUI
     {
         NativeDrawer("Токены","tokens");
         if(_nativeHost){var name=AtlasUi.Input(_nativeDrawerContent,"","Имя нового токена");AtlasUi.Button(_nativeDrawerContent,"+ Создать токен",()=>{TokenManager.Instance?.CreateTokenAsHost(name.text,false);},true);}
+        if(!_nativeHost)AtlasUi.Button(_nativeDrawerContent,"+ Создать мой токен",()=>TokenManager.Instance?.RequestSpawnToken(),true);
         foreach(var t in UnityEngine.Object.FindObjectsByType<TokenController>(FindObjectsInactive.Exclude).Where(t=>t.IsSpawned&&t.IsVisibleToLocalPlayer)){var captured=t;AtlasUi.Button(_nativeDrawerContent,t.TokenName,()=>AtlasInspectToken(captured));}
     }
     private void NativeOpenScenes(){NativeCloseDrawer();_nativePreparation=!_nativePreparation;_nativeSceneKey=null;if(_nativeSceneList==null){var content=AtlasUi.Scroll(_nativeRoot,"ScenesBrowser",out var scroll,16);_nativeSceneList=(RectTransform)scroll.transform;_nativeSceneListContent=content;}_nativeSceneList.gameObject.SetActive(_nativePreparation);NativeRefreshScenes();NativeLayout();}

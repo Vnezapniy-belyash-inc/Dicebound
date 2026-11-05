@@ -16,6 +16,22 @@ public static class AtlasUi
     public static Font Body => _body != null ? _body : _body = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
     public static Font Title => _title != null ? _title : _title = Font.CreateDynamicFontFromOSFont(new[]{"Georgia","Times New Roman"},32);
 
+    public static void BrandImage(Transform parent, string resource, float x, float y, float width, float height)
+    {
+        var texture = Resources.Load<Texture2D>(resource);
+        if (texture == null) return;
+        var node = Node(parent, "DiceboundBrand");
+        Place(node, x, y, width, height);
+        var picture = Node(node, "Image");
+        Fill(picture);
+        var image = picture.gameObject.AddComponent<RawImage>();
+        image.texture = texture;
+        image.raycastTarget = false;
+        var fit = picture.gameObject.AddComponent<AspectRatioFitter>();
+        fit.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
+        fit.aspectRatio = (float)texture.width / texture.height;
+    }
+
     public static RectTransform Node(Transform parent,string name)
     {
         var go=new GameObject(name,typeof(RectTransform)); go.transform.SetParent(parent,false);

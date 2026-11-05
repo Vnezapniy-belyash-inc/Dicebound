@@ -9,7 +9,7 @@ public partial class DisplaySettingsUI
     private void UpdateAtlasSettings()
     {
         if(!IsOpen)return;
-        string key=_section+":"+_pending+":"+_resolutionIndex+":"+_modeIndex;
+        string key=_section+":"+_pending+":"+_resolutionIndex+":"+_modeIndex+":"+SceneFileStore.MovementPolicy;
         if(key!=_atlasSettingsKey){_atlasSettingsKey=key;DrawAtlasSettings();}
         if(_atlasCountdown!=null&&_pending)_atlasCountdown.text="Подтвердите экран · "+Mathf.CeilToInt(_confirmationDeadline-Time.realtimeSinceStartup)+" с";
     }
