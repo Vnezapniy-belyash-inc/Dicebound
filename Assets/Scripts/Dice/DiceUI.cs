@@ -48,6 +48,7 @@ public partial class DiceUI : MonoBehaviour
         if (GetComponent<FogManager>() == null) gameObject.AddComponent<FogManager>();
         BuildUI();
         PlayerColors.Changed += OnPlayerColorsChanged;
+        LocalControls.HintsChanged += OnHintsChanged;
         if (GetComponent<DmPanelUI>() == null)
             gameObject.AddComponent<DmPanelUI>();
         if (DiceManager.Instance != null)
@@ -75,9 +76,15 @@ public partial class DiceUI : MonoBehaviour
     void OnDestroy()
     {
         PlayerColors.Changed-=OnPlayerColorsChanged;
+        LocalControls.HintsChanged -= OnHintsChanged;
         if(DiceManager.Instance!=null)DiceManager.Instance.OnAnyResult-=OnDieResult;
         if(MeasurementTool.Instance!=null&&_atlasDragEnd!=null)MeasurementTool.Instance.OnDragEnd-=_atlasDragEnd;
         if(Instance==this)Instance=null;
+    }
+
+    private void OnHintsChanged()
+    {
+        if (_nativePlayerContent != null) NativeBuildPlayerMenu();
     }
 
     private void OnPlayerColorsChanged()
@@ -118,7 +125,7 @@ public partial class DiceUI : MonoBehaviour
 
     public void HideGamePanels()
     {
-        SelectDefaultTool(); NativeCloseDrawer();_nativeSelected=null;if(_nativeRoot!=null)_nativeRoot.gameObject.SetActive(false);
+        SelectDefaultTool(); NativeCloseDrawer();if(_nativeRoot!=null)_nativeRoot.gameObject.SetActive(false);
         if(_confirmPanel!=null)_confirmPanel.SetActive(false);
     }
 

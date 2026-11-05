@@ -9,7 +9,7 @@ public partial class DisplaySettingsUI
     private void UpdateAtlasSettings()
     {
         if(!IsOpen)return;
-        string key=_section+":"+_pending+":"+_resolutionIndex+":"+_modeIndex+":"+SceneFileStore.MovementPolicy;
+        string key=_section+":"+_pending+":"+_resolutionIndex+":"+_modeIndex+":"+SceneFileStore.MovementPolicy+":"+LocalControls.TokenHover;
         if(key!=_atlasSettingsKey){_atlasSettingsKey=key;DrawAtlasSettings();}
         if(_atlasCountdown!=null&&_pending)_atlasCountdown.text="Подтвердите экран · "+Mathf.CeilToInt(_confirmationDeadline-Time.realtimeSinceStartup)+" с";
     }
@@ -33,9 +33,9 @@ public partial class DisplaySettingsUI
             AtlasUi.Button(_atlasSettingsBody,"Применить экран…",Apply,true);
             var scale=AtlasUi.Row(_atlasSettingsBody,"Scale",42);AtlasUi.Text(scale,"Масштаб UI",17,height:42);AtlasUi.Button(scale,"−",()=>_uiScale.SetScale(LocalUiScale.Value-.1f));AtlasUi.Button(scale,"100%",()=>_uiScale.SetScale(1));AtlasUi.Button(scale,"+",()=>_uiScale.SetScale(LocalUiScale.Value+.1f));
         }else if(_section==1){
-            AtlasUi.Text(_atlasSettingsBody,"ЛКМ — инструмент · ПКМ / Esc — завершить\nWASD — камера · F1 — вид камеры\nЛКМ по токену → Информация",17,height:120);
+            AtlasUi.Text(_atlasSettingsBody,"ЛКМ — инструмент · ПКМ / Esc — завершить\nWASD — камера · F1 — вид камеры\nПКМ по токену — свойства",17,height:120);
             var speed=AtlasUi.Row(_atlasSettingsBody,"CameraSpeed",40);AtlasUi.Text(speed,"Скорость камеры",16,height:40);AtlasUi.Button(speed,"−",()=>LocalControls.SetCameraSpeed(LocalControls.CameraSpeed-.1f));AtlasUi.Button(speed,"+",()=>LocalControls.SetCameraSpeed(LocalControls.CameraSpeed+.1f));
-            AtlasUi.Button(_atlasSettingsBody,"Подсказки токенов: включить / выключить",()=>LocalControls.SetTokenHover(!LocalControls.TokenHover));AtlasUi.Button(_atlasSettingsBody,"Сбросить управление",()=>{LocalControls.SetCameraSpeed(1);LocalControls.SetTokenHover(true);});
+            AtlasUi.Button(_atlasSettingsBody,LocalControls.TokenHover?"Убрать подсказки":"Показать подсказки",()=>LocalControls.SetTokenHover(!LocalControls.TokenHover));AtlasUi.Button(_atlasSettingsBody,"Сбросить управление",()=>{LocalControls.SetCameraSpeed(1);LocalControls.SetTokenHover(true);});
         }else{
             AtlasUi.Text(_atlasSettingsBody,"Правила перемещения",23,title:true,height:44);var names=new[]{"Свободное","Предупреждать","Решает мастер","По клеткам"};for(int i=0;i<4;i++){int value=i;AtlasUi.Button(_atlasSettingsBody,names[i],()=>SceneFileStore.SetMovementPolicy((PlayerMovementPolicy)value),(int)SceneFileStore.MovementPolicy==i);}
             AtlasUi.Button(_atlasSettingsBody,"Автосохранение: включить / выключить",()=>{var fog=FogManager.Instance;if(fog!=null)SceneFileStore.SetCampaignPreferences(!fog.Autosave,fog.SaveWithHistory);});AtlasUi.Button(_atlasSettingsBody,"История тумана в экспорте",()=>{var fog=FogManager.Instance;if(fog!=null)SceneFileStore.SetCampaignPreferences(fog.Autosave,!fog.SaveWithHistory);});

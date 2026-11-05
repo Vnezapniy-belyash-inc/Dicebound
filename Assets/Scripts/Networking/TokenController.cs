@@ -1108,7 +1108,6 @@ public partial class TokenController : NetworkDraggable
         var mouse = Mouse.current;
         if(DiceUI.Instance?.AtlasInterfaceActive==true)
         {
-            if(mouse!=null&&mouse.leftButton.wasPressedThisFrame)DiceUI.Instance.AtlasSelectToken(this);
             if(mouse!=null&&mouse.rightButton.wasPressedThisFrame)DiceUI.Instance.AtlasInspectToken(this);
             return;
         }

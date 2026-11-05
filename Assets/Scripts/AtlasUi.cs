@@ -132,9 +132,9 @@ public static class AtlasUi
     }
     public static Button DiceButton(Transform parent,DieType type,UnityAction action,bool dark=false)
     {
-        var button=Button(parent,type.ToString(),action,height:62,dark:dark);var caption=button.GetComponentInChildren<Text>();caption.fontSize=12;caption.alignment=TextAnchor.LowerCenter;Fill(caption.rectTransform,3,38,3,4);
-        var icon=Node(button.transform,"DieIcon");icon.anchorMin=icon.anchorMax=new Vector2(.5f,1);icon.pivot=new Vector2(.5f,1);icon.sizeDelta=new Vector2(28,28);icon.anchoredPosition=new Vector2(0,-7);
-        var sprite=VttUiSkin.Icon(type==DieType.d100?"fa6-solid--percent":"mdi--dice-"+type+"-outline");if(sprite!=null){var image=icon.gameObject.AddComponent<Image>();image.sprite=sprite;image.color=dark?Light:Ink;image.raycastTarget=false;}else{var glyph=icon.gameObject.AddComponent<AtlasGlyph>();glyph.key="die";glyph.color=dark?Light:Ink;glyph.raycastTarget=false;}return button;
+        var button=Button(parent,type.ToString(),action,height:50,dark:dark);var caption=button.GetComponentInChildren<Text>();caption.fontSize=12;caption.fontStyle=FontStyle.Normal;caption.alignment=TextAnchor.MiddleCenter;caption.horizontalOverflow=HorizontalWrapMode.Overflow;caption.verticalOverflow=VerticalWrapMode.Truncate;Fill(caption.rectTransform,2,30,2,3);
+        var icon=Node(button.transform,"DieIcon");icon.anchorMin=icon.anchorMax=new Vector2(.5f,1);icon.pivot=new Vector2(.5f,1);icon.sizeDelta=new Vector2(22,22);icon.anchoredPosition=new Vector2(0,-5);
+        var sprite=VttUiSkin.Icon(type==DieType.d100?"fa6-solid--percent":"mdi--dice-"+type+"-outline");if(sprite!=null){var image=icon.gameObject.AddComponent<Image>();image.sprite=sprite;image.preserveAspect=true;image.color=dark?Light:Ink;image.raycastTarget=false;}else{var glyph=icon.gameObject.AddComponent<AtlasGlyph>();glyph.key="die";glyph.color=dark?Light:Ink;glyph.raycastTarget=false;}return button;
     }
     public static void Select(Button b,bool active,bool dark=false)
     {

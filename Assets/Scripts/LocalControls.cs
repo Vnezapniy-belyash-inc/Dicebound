@@ -2,6 +2,7 @@ using UnityEngine;
 
 public static class LocalControls
 {
+    public static event System.Action HintsChanged;
     public static float CameraSpeed { get; private set; } = 1;
     public static bool TokenHover { get; private set; } = true;
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
@@ -19,6 +20,8 @@ public static class LocalControls
     }
     public static void SetTokenHover(bool value)
     {
+        bool changed = TokenHover != value;
         TokenHover = value; PlayerPrefs.SetInt("Controls.TokenHover", value ? 1 : 0); PlayerPrefs.Save();
+        if (changed) HintsChanged?.Invoke();
     }
 }

@@ -24,7 +24,7 @@ public sealed class UiOverflowTooltip : MonoBehaviour, IPointerEnterHandler, IPo
     private void OnDisable() { _hovered = _selected = false; }
     private void OnGUI()
     {
-        if ((!_hovered && !_selected) || source == null || !source.isActiveAndEnabled || Time.unscaledTime - _since < 0.35f
+        if (!LocalControls.TokenHover || (!_hovered && !_selected) || source == null || !source.isActiveAndEnabled || Time.unscaledTime - _since < 0.35f
             || !GameplayInputGate.AllowsImGuiOverlays || TokenController.IsMenuOpen || string.IsNullOrEmpty(source.text)) return;
         if (source.preferredWidth <= source.rectTransform.rect.width && source.preferredHeight <= source.rectTransform.rect.height) return;
         float scale = Mathf.Min(LocalUiScale.Value, Mathf.Min(Screen.width / 600f, Screen.height / 460f));
