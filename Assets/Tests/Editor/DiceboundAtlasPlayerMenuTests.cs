@@ -28,6 +28,44 @@ public class DiceboundAtlasPlayerMenuTests
         Assert.That(Field<RectTransform>("_nativeToolbar"),Is.Not.Null);
         Assert.That(Field<RectTransform>("_nativeInitiative"),Is.Not.Null);
     }
+    [Test] public void ReopeningMapToolDoesNotDisablePlaceholderDuringCanvasRebuild()
+    {
+        _root.SetActive(true);Field<RectTransform>("_nativeRoot").gameObject.SetActive(true);
+        _type.GetField("_nativeHost",Private).SetValue(_ui,true);
+        for(int i=0;i<3;i++){
+            _type.GetMethod("NativeSelectTool",Private).Invoke(_ui,new object[]{7});
+            Canvas.ForceUpdateCanvases();
+        }
+    }
+    [TestCase("1.00",false)] [TestCase("",true)] [TestCase(null,true)]
+    public void InputPlaceholderHasCorrectVisibilityBeforeFirstLayout(string value,bool visible)
+    {
+        var widgets=Type.GetType("AtlasUi, Assembly-CSharp",true);
+        var input=(InputField)widgets.GetMethod("Input").Invoke(null,new object[]{Field<RectTransform>("_nativeRoot"),value,"Hint",false,40f});
+        Assert.That(input.placeholder.enabled,Is.EqualTo(visible));
+        Assert.That(input.placeholder.gameObject.activeSelf,Is.True,"InputField controls the Graphic, not the placeholder GameObject.");
+        input.SetTextWithoutNotify("");Assert.That(input.placeholder.enabled,Is.True);
+        input.SetTextWithoutNotify("2.00");Assert.That(input.placeholder.enabled,Is.False);
+    }
+    private sealed class InputLabelLayoutProbe : ICanvasElement
+    {
+        public Transform transform {get;set;}
+        public Action DirtyLabel;
+        public void Rebuild(CanvasUpdate update){if(update==CanvasUpdate.Layout)DirtyLabel();}
+        public void LayoutComplete(){}
+        public void GraphicUpdateComplete(){}
+        public bool IsDestroyed()=>transform==null;
+    }
+    [Test] public void PopulatedInputCanRefreshItsLabelInsideLayoutWithoutRemovingPlaceholder()
+    {
+        _root.SetActive(true);Field<RectTransform>("_nativeRoot").gameObject.SetActive(true);
+        var widgets=Type.GetType("AtlasUi, Assembly-CSharp",true);
+        var input=(InputField)widgets.GetMethod("Input").Invoke(null,new object[]{Field<RectTransform>("_nativeRoot"),"1.00","Масштаб",false,40f});
+        var probe=new InputLabelLayoutProbe{transform=input.transform,DirtyLabel=()=>input.textComponent.SetVerticesDirty()};
+        CanvasUpdateRegistry.RegisterCanvasElementForLayoutRebuild(probe);
+        Canvas.ForceUpdateCanvases();
+        Assert.That(input.placeholder.enabled,Is.False);
+    }
     [TestCase(true)] [TestCase(false)]
     public void RightSectionsReplaceEachOtherAndRepeatedSectionCloses(bool host)
     {
@@ -120,6 +158,64 @@ public class DiceboundAtlasPlayerMenuTests
         _root.SetActive(true);Field<RectTransform>("_nativeRoot").gameObject.SetActive(true);var confirmation=Field<GameObject>("_confirmPanel");_type.GetMethod("ConfirmAction").Invoke(_ui,new object[]{"Delete scene?","Test",new Action(()=>{})});Canvas.ForceUpdateCanvases();var canvas=confirmation.GetComponent<Canvas>();
         Assert.That(canvas.overrideSorting,Is.True);Assert.That(canvas.sortingOrder,Is.GreaterThan(30));
         Assert.That(confirmation.GetComponent<GraphicRaycaster>(),Is.Not.Null);
+    }
+
+    [TestCase(true,780)] [TestCase(true,1200)] [TestCase(false,780)] [TestCase(false,1200)]
+    public void LargeInitiativeStripKeepsEveryEntryClippedAndControlsInside(bool host,int width)
+    {
+        var trackerType=Type.GetType("InitiativeTracker, Assembly-CSharp",true);
+        var singleton=trackerType.GetProperty("Instance");var previous=singleton.GetValue(null);
+        var trackerObject=new GameObject("Large initiative regression");trackerObject.SetActive(false);
+        var tracker=trackerObject.AddComponent(trackerType);
+        try{
+            singleton.SetValue(null,tracker);
+            string entries=string.Join(",",Enumerable.Range(1,128).Select(i=>"{\"id\":"+i+",\"name\":\"Long participant name number "+i+" with extra text\",\"initiative\":"+(129-i)+"}"));
+            trackerType.GetMethod("ParseData",Private).Invoke(tracker,new object[]{"{\"currentIndex\":93,\"round\":12,\"activeParticipantId\":\"94\",\"entries\":["+entries+"]}"});
+            _root.SetActive(true);Field<RectTransform>("_nativeRoot").gameObject.SetActive(true);
+            _type.GetField("_nativeHost",Private).SetValue(_ui,host);
+            var strip=Field<RectTransform>("_nativeInitiative");strip.anchorMin=strip.anchorMax=new Vector2(0,1);strip.pivot=new Vector2(0,1);strip.sizeDelta=new Vector2(width,46);
+            _type.GetMethod("NativeUpdateInitiative",Private).Invoke(_ui,null);
+            Canvas.ForceUpdateCanvases();LayoutRebuilder.ForceRebuildLayoutImmediate(strip);
+            var scroll=Field<ScrollRect>("_nativeInitiativeScroll");
+            Assert.That(scroll.content.childCount,Is.EqualTo(128));
+            Assert.That(scroll.content.rect.width,Is.GreaterThan(scroll.viewport.rect.width));
+            Assert.That(scroll.viewport.GetComponent<RectMask2D>(),Is.Not.Null);
+            var focus=scroll.GetComponent(Type.GetType("AtlasScrollFocus, Assembly-CSharp",true));focus.GetType().GetMethod("LateUpdate",Private).Invoke(focus,null);
+            var bounds=RectTransformUtility.CalculateRelativeRectTransformBounds(scroll.viewport,scroll.content.GetChild(93));
+            Assert.That(bounds.min.x,Is.GreaterThanOrEqualTo(scroll.viewport.rect.xMin-.1f));
+            Assert.That(bounds.max.x,Is.LessThanOrEqualTo(scroll.viewport.rect.xMax+.1f));
+            Assert.That(scroll.content.GetChild(93).GetComponentInChildren<Text>().text,Does.StartWith("▶ "));
+            var row=strip.Find("Initiative");
+            Assert.That(row.Find("NextTurn")!=null,Is.EqualTo(host));
+            foreach(Transform control in row){if(control.name=="InitiativeOrder")continue;
+                var box=RectTransformUtility.CalculateRelativeRectTransformBounds(strip,(RectTransform)control);
+                Assert.That(box.min.x,Is.GreaterThanOrEqualTo(strip.rect.xMin-.1f),control.name);
+                Assert.That(box.max.x,Is.LessThanOrEqualTo(strip.rect.xMax+.1f),control.name);
+            }
+        }finally{singleton.SetValue(null,previous);UnityEngine.Object.DestroyImmediate(trackerObject);}
+    }
+    [Test] public void ClosedInitiativeListRevealsCurrentActorWhenOpened()
+    {
+        var type=Type.GetType("InitiativeTracker, Assembly-CSharp",true);var singleton=type.GetProperty("Instance");var previous=singleton.GetValue(null);
+        var root=new GameObject("Closed initiative list regression");root.SetActive(false);var tracker=root.AddComponent(type);
+        try{
+            singleton.SetValue(null,tracker);
+            string entries=string.Join(",",Enumerable.Range(1,128).Select(i=>"{\"id\":"+i+",\"name\":\"Participant "+i+"\",\"initiative\":"+(129-i)+"}"));
+            type.GetMethod("ParseData",Private).Invoke(tracker,new object[]{"{\"currentIndex\":93,\"round\":12,\"entries\":["+entries+"]}"});
+            type.GetMethod("BuildAtlasInitiative",Private).Invoke(tracker,null);
+            var content=(RectTransform)type.GetField("_content",Private).GetValue(tracker);
+            var scroll=content.GetComponentInParent<ScrollRect>(true);
+            var focus=scroll.GetComponent(Type.GetType("AtlasScrollFocus, Assembly-CSharp",true));
+            Assert.That(focus,Is.Not.Null,"Closed ancestors must not prevent focus setup.");
+            root.SetActive(true);((GameObject)type.GetField("_panel",Private).GetValue(tracker)).SetActive(true);
+            Canvas.ForceUpdateCanvases();LayoutRebuilder.ForceRebuildLayoutImmediate(content);
+            focus.GetType().GetMethod("LateUpdate",Private).Invoke(focus,null);
+            var bounds=RectTransformUtility.CalculateRelativeRectTransformBounds(scroll.viewport,content.GetChild(93));
+            Assert.That(bounds.min.y,Is.GreaterThanOrEqualTo(scroll.viewport.rect.yMin-.1f));
+            Assert.That(bounds.max.y,Is.LessThanOrEqualTo(scroll.viewport.rect.yMax+.1f));
+            Assert.That(content.childCount,Is.EqualTo(128));
+            Assert.That(content.GetChild(93).Find("CurrentTurnAccent"),Is.Not.Null);
+        }finally{singleton.SetValue(null,previous);UnityEngine.Object.DestroyImmediate(root);}
     }
 
 }

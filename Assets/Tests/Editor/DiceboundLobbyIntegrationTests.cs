@@ -551,6 +551,21 @@ public class DiceboundLobbyIntegrationTests
         Assert.That(linked, Is.Not.Null);
         Assert.That(linked.GetType().GetField("publicHp").GetValue(linked), Is.EqualTo(-1));
 
+        tracker.GetType().GetMethod("NextTurn").Invoke(tracker,null);
+        var battle=tracker.GetType().GetMethod("CaptureBattleState").Invoke(tracker,null);
+        var activeId=battle.GetType().GetField("activeParticipantId").GetValue(battle);
+        var last=entries.GetValue(entries.Length-1);int editedId=(int)last.GetType().GetField("id").GetValue(last);
+        tracker.GetType().GetMethod("SetInitiativeById",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(tracker,new object[]{editedId,"999"});
+        deadline=Time.realtimeSinceStartup+10;
+        while(!(bool)tracker.GetType().GetProperty("AllClientsHaveCurrentState").GetValue(tracker)&&Time.realtimeSinceStartup<deadline)yield return null;
+        Assert.That((bool)tracker.GetType().GetProperty("AllClientsHaveCurrentState").GetValue(tracker),Is.True);
+        var updated=JsonUtility.FromJson(_initiativeReceived,stateType);var updatedEntries=(Array)stateType.GetField("entries").GetValue(updated);
+        Assert.That(updatedEntries.Length,Is.EqualTo(41));
+        Assert.That(stateType.GetField("activeParticipantId").GetValue(updated),Is.EqualTo(activeId),"Editing order preserves the current actor.");
+        var first=updatedEntries.GetValue(0);
+        Assert.That(first.GetType().GetField("id").GetValue(first),Is.EqualTo(editedId));
+        Assert.That(first.GetType().GetField("initiative").GetValue(first),Is.EqualTo(999));
+
         tokenType.GetMethod("ServerSetMasterVisibility").Invoke(token, new object[] { false, false });
         deadline = Time.realtimeSinceStartup + 10;
         while ((int)tokenType.GetProperty("VisibleCurrentHp").GetValue(remote) != 137 && Time.realtimeSinceStartup < deadline) yield return null;

@@ -123,7 +123,12 @@ public static class AtlasUi
         var rt=Panel(parent,"Input",new Color(1,.98f,.945f));var edge=Node(rt,"Border");Fill(edge);var border=edge.gameObject.AddComponent<AtlasBorder>();border.radius=4;border.color=new Color(.74f,.66f,.51f);border.raycastTarget=false;edge.gameObject.AddComponent<LayoutElement>().ignoreLayout=true;var f=rt.gameObject.AddComponent<InputField>();Height(f,height);
         var text=Text(rt,value,15,height:height);Fill(text.rectTransform,10,5,10,5);text.alignment=multiline?TextAnchor.UpperLeft:TextAnchor.MiddleLeft;
         f.textComponent=text;f.text=value;f.lineType=multiline?InputField.LineType.MultiLineNewline:InputField.LineType.SingleLine;
-        if(placeholder!=null){var p=Text(rt,placeholder,14,Muted,height:height);Fill(p.rectTransform,10,5,10,5);f.placeholder=p;}
+        if(placeholder!=null){
+            var p=Text(rt,placeholder,14,Muted,height:height);Fill(p.rectTransform,10,5,10,5);
+            // Assigning InputField.placeholder does not refresh its visibility. Initialize
+            // the Graphic now so a later layout/font callback need not disable it mid-rebuild.
+            p.enabled=string.IsNullOrEmpty(f.text);f.placeholder=p;
+        }
         return f;
     }
     public static void Clear(Transform root)

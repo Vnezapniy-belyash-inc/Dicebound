@@ -312,17 +312,42 @@ public partial class DiceUI
         for(int i=0;i<scenes.Length;i++){var scene=scenes[i];string id=scene.sceneId;var row=AtlasUi.Row(_nativeSceneListContent,"Scene "+id,54,6);row.GetComponent<HorizontalLayoutGroup>().childForceExpandWidth=false;var choose=AtlasUi.Button(row,scene.title,()=>{SceneFileStore.SelectScene(id);_nativeSceneKey=null;},id==SceneFileStore.ActiveSceneId,height:54);choose.GetComponent<LayoutElement>().flexibleWidth=1;var remove=AtlasUi.Button(row,"Удалить сцену",()=>ConfirmAction("Удалить сцену «"+scene.title+"»?",id==SceneFileStore.ActiveSceneId?"Активная сцена будет удалена, загрузится следующая. Переходы в неё тоже будут удалены.":"Сцена и ведущие в неё переходы будут удалены. Текущий стол останется открытым.",()=>{SceneFileStore.DeleteScene(id);_nativeSceneKey=null;}),height:54);AtlasUi.Width(remove,40);var removeText=remove.GetComponentInChildren<Text>();removeText.text=scenes.Length>1?"Удалить сцену":"Последнюю сцену удалить нельзя";removeText.color=Color.clear;var icon=AtlasUi.Node(remove.transform,"TrashIcon");AtlasUi.Place(icon,10,17,20,20);var picture=icon.gameObject.AddComponent<RawImage>();picture.texture=Resources.Load<Texture2D>("Atlas/Icons/trash");picture.color=AtlasUi.Muted;picture.raycastTarget=false;remove.interactable=scenes.Length>1;}
         AtlasUi.Button(_nativeSceneListContent,"Переименовать сцену…",()=>DmPanelUI.Instance?.OpenAtlasPage(4));AtlasUi.Button(_nativeSceneListContent,"Перенести токены…",()=>DmPanelUI.Instance?.OpenAtlasPage(4));
     }
+    private ScrollRect _nativeInitiativeScroll;
+    private int _nativeInitiativeCurrent=-1;
     private void NativeUpdateInitiative()
     {
         var tracker=InitiativeTracker.Instance;if(tracker==null)return;var view=tracker.GetAtlasEntries();
-        string key=tracker.AtlasRound+":"+_nativeInitCollapsed+":"+string.Join("|",view.Select(e=>e.id+e.name+e.initiative+e.current));if(key==_nativeInitKey)return;_nativeInitKey=key;
-        AtlasUi.Clear(_nativeInitiative);var row=AtlasUi.Row(_nativeInitiative,"Initiative",42,6);AtlasUi.Fill(row,8,2,8,2);
-        row.GetComponent<HorizontalLayoutGroup>().childForceExpandWidth=false;var round=AtlasUi.Text(row,"Раунд "+tracker.AtlasRound,18,title:true,height:38);AtlasUi.Width(round,105);
-        if(view.Length==0){var empty=AtlasUi.Text(row,"Бой не начат",14,AtlasUi.Muted,height:38);empty.GetComponent<LayoutElement>().flexibleWidth=1;}
-        if(!_nativeInitCollapsed)foreach(var e in view.Take(6)){var captured=e;var chip=AtlasUi.Button(row,e.initiative+"  "+e.name,()=>{var t=TokenController.FindSceneToken(captured.tokenId);if(t!=null)AtlasInspectToken(t);},e.current,height:36);AtlasUi.Width(chip,150);}
-        if(_nativeHost){var next=AtlasUi.Button(row,"Следующий ход →",tracker.NextTurn,true,height:36);AtlasUi.Width(next,180);next.interactable=view.Length>0;var add=AtlasUi.Button(row,"+ / список",tracker.ToggleVisible,height:36);AtlasUi.Width(add,115);}
-        var collapse=AtlasUi.Button(row,_nativeInitCollapsed?"▾":"▴",()=>{_nativeInitCollapsed=!_nativeInitCollapsed;_nativeInitKey=null;},height:36);AtlasUi.Width(collapse,40);
+        bool master=_nativeHost&&FogManager.Instance?.Preview!=true;
+        string key=tracker.AtlasRound+":"+master+":"+_nativeInitCollapsed+":"+string.Join("|",view.Select(e=>e.id+":"+e.name+":"+e.initiative+":"+e.current));if(key==_nativeInitKey)return;_nativeInitKey=key;
+        float previousScroll=_nativeInitiativeScroll!=null?_nativeInitiativeScroll.horizontalNormalizedPosition:0;
+        int current=Array.FindIndex(view,e=>e.current);int currentId=current>=0?view[current].id:-1;
+        bool reveal=_nativeInitiativeScroll==null||currentId!=_nativeInitiativeCurrent;_nativeInitiativeCurrent=currentId;
+        AtlasUi.Clear(_nativeInitiative);_nativeInitiativeScroll=null;
+        var row=AtlasUi.Row(_nativeInitiative,"Initiative",42,6);AtlasUi.Fill(row,8,2,8,2);
+        row.GetComponent<HorizontalLayoutGroup>().childForceExpandWidth=false;var round=AtlasUi.Text(row,"Раунд "+tracker.AtlasRound,18,title:true,height:38);AtlasUi.Width(round,98);
+        if(view.Length==0||_nativeInitCollapsed){
+            var empty=AtlasUi.Text(row,view.Length==0?"Бой не начат":view.Length+" участников",14,AtlasUi.Muted,height:38);var layout=empty.GetComponent<LayoutElement>();layout.minWidth=0;layout.preferredWidth=0;layout.flexibleWidth=1;
+        }else{
+            var root=AtlasUi.Panel(row,"InitiativeOrder",Color.clear,true);root.GetComponent<Image>().canvasRenderer.cullTransparentMesh=false;
+            var slot=root.gameObject.AddComponent<LayoutElement>();slot.minWidth=0;slot.preferredWidth=0;slot.flexibleWidth=1;
+            var scroll=root.gameObject.AddComponent<ScrollRect>();scroll.horizontal=true;scroll.vertical=false;scroll.inertia=false;scroll.movementType=ScrollRect.MovementType.Clamped;scroll.scrollSensitivity=35;_nativeInitiativeScroll=scroll;
+            var viewport=AtlasUi.Panel(root,"Viewport",Color.clear,true);AtlasUi.Fill(viewport,0,0,0,7);viewport.GetComponent<Image>().canvasRenderer.cullTransparentMesh=false;viewport.gameObject.AddComponent<RectMask2D>();
+            var content=AtlasUi.Row(viewport,"AllParticipants",34,6);content.anchorMin=Vector2.zero;content.anchorMax=new Vector2(0,1);content.pivot=new Vector2(0,.5f);content.sizeDelta=Vector2.zero;content.GetComponent<HorizontalLayoutGroup>().childForceExpandWidth=false;
+            content.gameObject.AddComponent<ContentSizeFitter>().horizontalFit=ContentSizeFitter.FitMode.PreferredSize;
+            scroll.viewport=viewport;scroll.content=content;RectTransform active=null;
+            foreach(var e in view){
+                var captured=e;var chip=AtlasUi.Button(content,(e.current?"▶ ":"")+e.initiative+"  "+e.name,()=>{var token=TokenController.FindSceneToken(captured.tokenId);if(token!=null)AtlasInspectToken(token);else tracker.SetVisible(true);},e.current,height:34);
+                chip.name="Participant "+e.id;AtlasUi.Width(chip,150);chip.GetComponentInChildren<Text>().fontSize=13;if(e.current)active=(RectTransform)chip.transform;
+            }
+            var track=AtlasUi.Panel(root,"ScrollTrack",new Color(.79f,.72f,.58f,.25f),true);track.anchorMin=Vector2.zero;track.anchorMax=new Vector2(1,0);track.pivot=Vector2.zero;track.sizeDelta=new Vector2(0,3);
+            var handle=AtlasUi.Panel(track,"Handle",new Color(.66f,.46f,.27f,.65f),true);AtlasUi.Fill(handle);var bar=track.gameObject.AddComponent<Scrollbar>();bar.handleRect=handle;bar.targetGraphic=handle.GetComponent<Image>();bar.direction=Scrollbar.Direction.LeftToRight;scroll.horizontalScrollbar=bar;scroll.horizontalScrollbarVisibility=ScrollRect.ScrollbarVisibility.AutoHide;
+            root.gameObject.AddComponent<AtlasScrollFocus>().Initialize(scroll,active,previousScroll,true,reveal);
+        }
+        if(master){var next=AtlasUi.Button(row,"Следующий ход →",tracker.NextTurn,true,height:36);next.name="NextTurn";AtlasUi.Width(next,170);next.interactable=view.Length>0;}
+        var list=AtlasUi.Button(row,master?"Изменить":"Список",tracker.ToggleVisible,height:36);list.name="InitiativeList";AtlasUi.Width(list,master?105:80);
+        var collapse=AtlasUi.Button(row,_nativeInitCollapsed?"▾":"▴",()=>{_nativeInitCollapsed=!_nativeInitCollapsed;_nativeInitKey=null;},height:36);AtlasUi.Width(collapse,32);
     }
+
     public void AtlasInspectToken(TokenController token)
     {
         if(token==null||!token.IsSpawned||!token.IsVisibleToLocalPlayer)return;
