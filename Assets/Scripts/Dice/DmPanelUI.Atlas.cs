@@ -1,10 +1,11 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using UnityEngine.UI;
 
 public partial class DmPanelUI
 {
+    public bool IsAtlasPageOpen(int page)=>IsOpen&&_page==page;
     public void OpenAtlasPage(int page)
     {
         if(!IsLocalHost||_panel==null)return;

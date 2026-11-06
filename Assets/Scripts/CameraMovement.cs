@@ -137,10 +137,10 @@ public class CameraMovement : MonoBehaviour
         if (k == null) return;
 
         Vector2 input = Vector2.zero;
-        if (k.wKey.isPressed || k.upArrowKey.isPressed)    input.y += 1f;
-        if (k.sKey.isPressed || k.downArrowKey.isPressed)  input.y -= 1f;
-        if (k.dKey.isPressed || k.rightArrowKey.isPressed) input.x += 1f;
-        if (k.aKey.isPressed || k.leftArrowKey.isPressed)  input.x -= 1f;
+        if (k.wKey.isPressed || !TokenController.ArrowKeysControlToken && k.upArrowKey.isPressed)    input.y += 1f;
+        if (k.sKey.isPressed || !TokenController.ArrowKeysControlToken && k.downArrowKey.isPressed)  input.y -= 1f;
+        if (k.dKey.isPressed || !TokenController.ArrowKeysControlToken && k.rightArrowKey.isPressed) input.x += 1f;
+        if (k.aKey.isPressed || !TokenController.ArrowKeysControlToken && k.leftArrowKey.isPressed)  input.x -= 1f;
 
         if (input.sqrMagnitude < 0.0001f) return;
         input.Normalize();

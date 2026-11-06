@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using Unity.Netcode;
@@ -117,6 +117,7 @@ public partial class DiceUI : MonoBehaviour
 
     public void ShowGamePanels()
     {
+        AtlasCloseContext();
         _nativeRoot.gameObject.SetActive(true); _nativeBuiltRole=false; _nativeMenuOpen=true;
         _nativeInitKey=null;  _nativeTool=0;
         _nativeHost=IsLocalHost(); _bottomPanelGO.SetActive(_nativeHost);
@@ -125,7 +126,7 @@ public partial class DiceUI : MonoBehaviour
 
     public void HideGamePanels()
     {
-        SelectDefaultTool(); NativeCloseDrawer();if(_nativeRoot!=null)_nativeRoot.gameObject.SetActive(false);
+        SelectDefaultTool(); AtlasCloseContext();if(_nativeRoot!=null)_nativeRoot.gameObject.SetActive(false);
         if(_confirmPanel!=null)_confirmPanel.SetActive(false);
     }
 

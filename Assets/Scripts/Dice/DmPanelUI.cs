@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -38,7 +38,7 @@ public partial class DmPanelUI : MonoBehaviour
     private Text _initiativeHint;
     private string _playerSignature;
     private float _nextRefresh;
-    private InputField _tokenNameInput;
+    private InputField _tokenNameInput, _tokenCreationAc, _tokenCreationHp;
     private InputField _sceneNameInput;
     private InputField _transitionTitleInput;
     private InputField _transitionXInput;
@@ -128,15 +128,13 @@ public partial class DmPanelUI : MonoBehaviour
     {
         if (!IsLocalHost || _panel == null) return;
         _panel.SetActive(!_panel.activeSelf);
-        if (_panel.activeSelf) { CharacterSheetUI.Instance?.SetSheetVisible(false); Refresh(); }
+        if (_panel.activeSelf) { DiceUI.Instance?.AtlasCloseContext(); CharacterSheetUI.Instance?.SetSheetVisible(false); Refresh(); }
     }
 
     public void ShowTokenCreation()
     {
         if (!IsLocalHost || _panel == null) return;
-        _panel.SetActive(true);
-        CharacterSheetUI.Instance?.SetSheetVisible(false);
-        ShowPage(3);
+        OpenAtlasPage(3);
         _tokenNameInput?.ActivateInputField();
     }
 
@@ -654,7 +652,7 @@ public partial class DmPanelUI : MonoBehaviour
     public void ShowSceneEditor()
     {
         if (!IsLocalHost || _panel == null) return;
-        _panel.SetActive(true); ShowPage(4);
+        OpenAtlasPage(4);
     }
 
     private void BuildScenePage(Transform parent)
@@ -1116,6 +1114,10 @@ public partial class DmPanelUI : MonoBehaviour
         scroll.vertical = true;
         scroll.movementType = ScrollRect.MovementType.Clamped;
         scroll.scrollSensitivity = 28;
+        foreach(RectTransform child in parent){if(child.anchoredPosition.y<=-80)child.anchoredPosition+=Vector2.down*76;}
+        var creationLabels=Label(parent,"КД                         ХП (текущие = максимум)",13,VttUiSkin.Muted,TextAnchor.MiddleLeft,new Vector2(0,1),new Vector2(0,1),new Vector2(350,22),new Vector2(0,-82));
+        _tokenCreationAc=CreateInput(parent,"КД",0,-108,164,36);_tokenCreationAc.text="10";_tokenCreationAc.contentType=InputField.ContentType.IntegerNumber;
+        _tokenCreationHp=CreateInput(parent,"ХП",176,-108,174,36);_tokenCreationHp.text="0";_tokenCreationHp.contentType=InputField.ContentType.IntegerNumber;
         Label(parent, "Массовое удаление", 12, VttUiSkin.Muted, TextAnchor.MiddleLeft,
             new Vector2(0, 1), new Vector2(0, 1), new Vector2(350, 22), new Vector2(0, -458));
         Button(parent, "Добавить выбранные в бой", 350, 30, 0, -425, AddSelectedTokensToInitiative,
@@ -1131,7 +1133,8 @@ public partial class DmPanelUI : MonoBehaviour
     private void CreateNamedToken()
     {
         if (!IsLocalHost) return;
-        var token = TokenManager.Instance?.CreateTokenAsHost(_tokenNameInput.text, _createHiddenToggle.isOn);
+        if(!int.TryParse(_tokenCreationAc.text,out int ac)||!int.TryParse(_tokenCreationHp.text,out int hp)||ac<0||ac>999||hp<0||hp>999999){_tokenNotice.text="КД: 0–999; ХП: 0–999999.";return;}
+        var token = TokenManager.Instance?.CreateTokenWithStatsAsHost(_tokenNameInput.text, _createHiddenToggle.isOn,ac,hp);
         _tokenNotice.text = token == null ? "Не удалось создать токен." :
             $"Создан: {token.TokenName}" + (token.IsHidden ? " · скрыт" : "");
         RefreshTokens(true);

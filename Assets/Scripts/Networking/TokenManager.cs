@@ -155,12 +155,14 @@ public class TokenManager : MonoBehaviour
     }
 
     /// <summary>GM creates a named token with hidden state included before any client sees it.</summary>
-    public TokenController CreateTokenAsHost(string name, bool hidden)
+    public TokenController CreateTokenAsHost(string name, bool hidden) => CreateTokenWithStatsAsHost(name,hidden,10,0);
+
+    public TokenController CreateTokenWithStatsAsHost(string name, bool hidden, int armorClass, int hitPoints)
     {
         var manager = NetworkManager.Singleton;
-        if (manager == null || !manager.IsHost) return null;
+        if (manager == null || !manager.IsHost || armorClass<0 || armorClass>999 || hitPoints<0 || hitPoints>999999) return null;
         return SpawnTokenForClient(GetDefaultSpawnPosition(), manager.LocalClientId,
-            hidden: hidden, requestedName: name);
+            hidden: hidden, requestedName: name, masterData:new MasterTokenData { armorClass=armorClass,currentHp=hitPoints,maxHp=hitPoints });
     }
 
     public TokenController RestoreSceneToken(SceneToken data, GridManager grid,

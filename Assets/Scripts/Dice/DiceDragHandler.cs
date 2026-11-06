@@ -41,7 +41,6 @@ public class DiceDragHandler : MonoBehaviour
     private readonly Dictionary<IDice, Vector3> _dragStartPositions = new();
     private readonly Dictionary<IDice, Vector3> _dragPreviewPositions = new();
     private readonly Dictionary<NetworkDice, int> _diceDragGestures = new();
-    private static int _nextDragGesture;
     private float _nextDiceMoveSend;
     private bool _isDragging;
     private Vector3 _dragOffset;
@@ -347,7 +346,7 @@ public class DiceDragHandler : MonoBehaviour
             {
                 if (d is NetworkDice netDice)
                 {
-                    int gesture = ++_nextDragGesture;
+                    int gesture = NetworkDraggable.NextGesture();
                     if (!netDice.IsReady || !netDice.BeginDrag(gesture)) continue;
                     _diceDragGestures[netDice] = gesture;
                 }
@@ -544,7 +543,7 @@ public class DiceDragHandler : MonoBehaviour
     void StartDraggingToken(TokenController token, Ray ray)
     {
         ClearSelection();
-        _tokenDragSequence = ++_nextDragGesture;
+        _tokenDragSequence = NetworkDraggable.NextGesture();
         if (!token.BeginDrag(_tokenDragSequence)) return;
         _draggedToken = token;
         _tokenStartPos = token.DisplayPosition;

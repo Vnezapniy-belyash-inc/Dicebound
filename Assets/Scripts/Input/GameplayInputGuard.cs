@@ -26,6 +26,9 @@ public sealed class GameplayInputGuard : MonoBehaviour
         var events = EventSystem.current;
         if (events != null)
         {
+            // World arrow keys belong to token movement. Keep text-field UpdateSelected
+            // events and pointer interaction, but never dispatch menu move/submit/cancel.
+            events.sendNavigationEvents = false;
             if (imgui && !_wasImGui) _previousSelection = events.currentSelectedGameObject;
             // IMGUI text fields do not use the EventSystem; an old uGUI selection could still submit behind them.
             if (imgui) events.SetSelectedGameObject(null);

@@ -18,7 +18,7 @@ public sealed class PublicReferenceLibrary : MonoBehaviour
     public static bool IsOpen { get; private set; }
     private bool _atlasOpen;
     public static ReferenceEntry[] AtlasEntries => _instance == null ? Array.Empty<ReferenceEntry>() : (ReferenceEntry[])_instance._entries.Clone();
-    public static void OpenAtlas() { if(_instance!=null){_instance._atlasOpen=true;_instance._nextRequest=0;} DiceUI.Instance?.AtlasOpenPublicLibrary(); }
+    public static void OpenAtlas() { DiceUI.Instance?.AtlasOpenPublicLibrary(); if(_instance!=null){_instance._atlasOpen=true;_instance._nextRequest=0;} }
     public static void CloseAtlas() { if(_instance!=null)_instance._atlasOpen=false; }
     private static bool _available;
     public static bool IsPointerOverButton

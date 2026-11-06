@@ -5,6 +5,8 @@ using UnityEngine;
 [RequireComponent(typeof(NetworkDragTransform))]
 public abstract class NetworkDraggable : NetworkBehaviour
 {
+    private static int _nextGesture;
+    public static int NextGesture() => ++_nextGesture;
     private readonly NetworkDragLease _lease = new();
     private NetworkDragPreview _preview;
     private NetworkDragTransform _dragTransform;

@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.UI;
 
@@ -6,7 +6,7 @@ using UnityEngine.UI;
 public static class AtlasUi
 {
     public static readonly Color Forest = new Color(.075f,.19f,.145f,1);
-    public static readonly Color Paper = new Color(.98f,.95f,.88f,1);
+    public static readonly Color Paper = new Color(251/255f,245/255f,231/255f,1);
     public static readonly Color Raised = new Color(.93f,.88f,.77f,1);
     public static readonly Color Ink = new Color(.10f,.24f,.19f,1);
     public static readonly Color Muted = new Color(.38f,.43f,.33f,1);
@@ -40,7 +40,7 @@ public static class AtlasUi
     public static RectTransform Panel(Transform parent,string name,Color color,bool square=false)
     {
         var rt=Node(parent,name); var image=rt.gameObject.AddComponent<Image>();
-        if(!square)VttUiSkin.Surface(image,color,10,false);else image.color=color; return rt;
+        if(!square)VttUiSkin.Surface(image,color,7,false);else image.color=color; return rt;
     }
     public static void Fill(RectTransform rt,float left=0,float top=0,float right=0,float bottom=0)
     {
@@ -73,6 +73,10 @@ public static class AtlasUi
     public static RectTransform Scroll(Transform parent,string name,out ScrollRect scroll,int padding=14)
     {
         var root=Panel(parent,name,Paper);scroll=root.gameObject.AddComponent<ScrollRect>();
+        if(name=="ContextPanel"||name=="JournalDrawer"){
+            root.gameObject.AddComponent<AtlasGradient>().bottom=.98f;
+            var outline=Node(root,"PanelBorder");Fill(outline);var border=outline.gameObject.AddComponent<AtlasBorder>();border.radius=7;border.color=new Color(.67f,.48f,.27f);border.raycastTarget=false;
+        }
         var viewport=Panel(root,"Viewport",Color.clear);Fill(viewport,4,4,10,4);viewport.gameObject.AddComponent<RectMask2D>();
         var content=Column(viewport,"Content",padding);content.anchorMin=new Vector2(0,1);content.anchorMax=Vector2.one;content.pivot=new Vector2(.5f,1);content.sizeDelta=Vector2.zero;
         content.gameObject.AddComponent<ContentSizeFitter>().verticalFit=ContentSizeFitter.FitMode.PreferredSize;
@@ -91,18 +95,32 @@ public static class AtlasUi
     public static Button Button(Transform parent,string label,UnityAction action,bool primary=false,float height=40,bool dark=false,string icon=null)
     {
         if(label=="×")return CloseButton(parent,action,dark);
-        var rt=Panel(parent,"Button "+label,primary?Forest:dark?new Color(.11f,.25f,.18f):Paper);
+        var rt=Panel(parent,"Button "+label,primary?new Color(.17f,.34f,.28f):dark?Color.white:new Color(1,.98f,.94f));
+        VttUiSkin.Surface(rt.GetComponent<Image>(),rt.GetComponent<Image>().color,5,false);
+        if(!dark)rt.gameObject.AddComponent<AtlasGradient>();
         var b=rt.gameObject.AddComponent<Button>();b.targetGraphic=rt.GetComponent<Image>();Height(b,height);
-        var t=Text(rt,label,16,primary||dark?Light:Ink,height:height);Fill(t.rectTransform,icon==null?12:37,3,10,3);
-        var edge=Node(rt,"Border");Fill(edge);var border=edge.gameObject.AddComponent<AtlasBorder>();border.color=new Color(.60f,.43f,.24f,.45f);border.raycastTarget=false;edge.gameObject.AddComponent<LayoutElement>().ignoreLayout=true;
-        var c=b.colors;c.highlightedColor=new Color(.86f,.83f,.73f);c.selectedColor=new Color(.80f,.79f,.65f);c.pressedColor=new Color(.68f,.71f,.56f);c.disabledColor=new Color(.6f,.6f,.6f,.5f);b.colors=c;
+        var t=Text(rt,label,14,primary||dark?Light:Ink,height:height);Fill(t.rectTransform,icon==null?12:37,3,10,3);
+        var edge=Node(rt,"Border");Fill(edge);var border=edge.gameObject.AddComponent<AtlasBorder>();border.radius=5;border.color=dark?new Color(.52f,.58f,.48f,.35f):new Color(.77f,.70f,.57f,1);border.raycastTarget=false;edge.gameObject.AddComponent<LayoutElement>().ignoreLayout=true;
+        var c=b.colors;c.highlightedColor=new Color(.86f,.83f,.73f);c.selectedColor=new Color(.80f,.79f,.65f);c.pressedColor=new Color(.68f,.71f,.56f);c.disabledColor=new Color(.6f,.6f,.6f,.5f);c.fadeDuration=.14f;
+        if(dark){c.normalColor=new Color(.89f,.87f,.72f,.03f);c.highlightedColor=new Color(.72f,.77f,.64f,.14f);c.selectedColor=c.highlightedColor;c.pressedColor=new Color(.72f,.77f,.64f,.24f);}
+        b.colors=c;
         if(action!=null)b.onClick.AddListener(action);
-        if(icon!=null){var sprite=VttUiSkin.Icon(icon);if(sprite!=null){var ir=Node(rt,"Icon");Place(ir,11,11,18,18);var im=ir.gameObject.AddComponent<Image>();im.sprite=sprite;im.color=dark||primary?Light:Ink;im.raycastTarget=false;}}
+        if(icon!=null){var sprite=ReferenceIcon(icon)??VttUiSkin.Icon(icon);if(sprite!=null){var ir=Node(rt,"Icon");ir.anchorMin=ir.anchorMax=new Vector2(0,.5f);ir.pivot=new Vector2(0,.5f);ir.anchoredPosition=new Vector2(10,0);ir.sizeDelta=new Vector2(19,19);var im=ir.gameObject.AddComponent<Image>();im.sprite=sprite;im.color=dark||primary?Light:Ink;im.raycastTarget=false;}}
         UiOverflowTooltip.Attach(t,b.gameObject);return b;
+    }
+    public static void ToolState(Button button,bool active)
+    {
+        button.targetGraphic.canvasRenderer.cullTransparentMesh=false;
+        button.GetComponent<Image>().color=Color.white;
+        var colors=button.colors;colors.normalColor=active?new Color(.14f,.29f,.23f):Color.clear;
+        colors.highlightedColor=active?new Color(.19f,.36f,.28f):new Color(.90f,.84f,.73f);
+        colors.selectedColor=colors.normalColor;colors.pressedColor=new Color(.77f,.69f,.55f);button.colors=colors;
+        button.GetComponentInChildren<Text>().color=active?Light:Ink;
+        var icon=button.transform.Find("Icon");if(icon!=null)icon.GetComponent<Image>().color=active?Light:Ink;
     }
     public static InputField Input(Transform parent,string value,string placeholder=null,bool multiline=false,float height=40)
     {
-        var rt=Panel(parent,"Input",new Color(1,.985f,.95f));var f=rt.gameObject.AddComponent<InputField>();Height(f,height);
+        var rt=Panel(parent,"Input",new Color(1,.98f,.945f));var edge=Node(rt,"Border");Fill(edge);var border=edge.gameObject.AddComponent<AtlasBorder>();border.radius=4;border.color=new Color(.74f,.66f,.51f);border.raycastTarget=false;edge.gameObject.AddComponent<LayoutElement>().ignoreLayout=true;var f=rt.gameObject.AddComponent<InputField>();Height(f,height);
         var text=Text(rt,value,15,height:height);Fill(text.rectTransform,10,5,10,5);text.alignment=multiline?TextAnchor.UpperLeft:TextAnchor.MiddleLeft;
         f.textComponent=text;f.text=value;f.lineType=multiline?InputField.LineType.MultiLineNewline:InputField.LineType.SingleLine;
         if(placeholder!=null){var p=Text(rt,placeholder,14,Muted,height:height);Fill(p.rectTransform,10,5,10,5);f.placeholder=p;}
@@ -115,15 +133,41 @@ public static class AtlasUi
     }
     public static Button NavButton(Transform parent,string label,UnityAction action,string key)
     {
-        var button=Button(parent,label,action,dark:true,height:76);var text=button.GetComponentInChildren<Text>();text.fontSize=14;text.alignment=TextAnchor.MiddleCenter;Fill(text.rectTransform,2,42,2,3);
-        var icon=Node(button.transform,"Icon");icon.anchorMin=icon.anchorMax=new Vector2(.5f,1);icon.pivot=new Vector2(.5f,1);icon.sizeDelta=new Vector2(30,30);icon.anchoredPosition=new Vector2(0,-8);var texture=Resources.Load<Texture2D>("Atlas/Icons/"+key);if(texture!=null){texture.filterMode=FilterMode.Bilinear;var picture=icon.gameObject.AddComponent<RawImage>();picture.texture=texture;picture.color=Light;picture.raycastTarget=false;}else{var glyph=icon.gameObject.AddComponent<AtlasGlyph>();glyph.key=key;glyph.color=Light;glyph.raycastTarget=false;}return button;
+        var button=Button(parent,label,action,dark:true,height:72);
+        button.transform.Find("Border").gameObject.SetActive(false);
+        button.targetGraphic.canvasRenderer.cullTransparentMesh=false;var colors=button.colors;colors.normalColor=Color.clear;button.colors=colors;
+        var text=button.GetComponentInChildren<Text>();text.fontSize=12;text.alignment=TextAnchor.MiddleCenter;Fill(text.rectTransform,2,38,2,4);
+        var icon=Node(button.transform,"Icon");icon.anchorMin=icon.anchorMax=new Vector2(.5f,1);icon.pivot=new Vector2(.5f,1);icon.sizeDelta=new Vector2(22,22);icon.anchoredPosition=new Vector2(0,-8);
+        var picture=icon.gameObject.AddComponent<Image>();picture.sprite=ReferenceIcon(key);picture.color=Light;picture.raycastTarget=false;
+        return button;
+    }
+    private static readonly System.Collections.Generic.Dictionary<string,Sprite> ReferenceIcons=new System.Collections.Generic.Dictionary<string,Sprite>();
+    public static Sprite ReferenceIcon(string key)
+    {
+        key=key=="table"?"home":key=="user"?"tokens":key=="users"||key=="users-round"?"players":key=="book"?"library":key=="fa-solid--tools"?"menu":key;
+        if(ReferenceIcons.TryGetValue(key,out var cached)&&cached!=null)return cached;
+        var texture=Resources.Load<Texture2D>("Atlas/ReferenceIcons/"+key)??Resources.Load<Texture2D>("Atlas/Icons/"+key);if(texture==null)return null;
+        return ReferenceIcons[key]=Sprite.Create(texture,new Rect(0,0,texture.width,texture.height),new Vector2(.5f,.5f),100);
+    }
+    public static void Divider(Transform parent,string name="Divider")
+    {
+        var line=Panel(parent,name,new Color(.80f,.71f,.54f),true);Height(line,1);line.GetComponent<Image>().raycastTarget=false;
+    }
+    public static void Heading(Transform parent,string title,UnityAction close)
+    {
+        var heading=Row(parent,"Heading",43);Text(heading,title,25,title:true,height:43);CloseButton(heading,close);Divider(parent,"HeadingDivider");
     }
     public static Button CloseButton(Transform parent,UnityAction close,bool dark=false)
     {
         var rt=Node(parent,"Close");var image=rt.gameObject.AddComponent<Image>();image.color=Color.white;
-        var b=rt.gameObject.AddComponent<Button>();b.targetGraphic=image;Height(b,36);Width(b,36);
+        // Transparent normal state must remain raycastable after CanvasRenderer culling.
+        image.canvasRenderer.cullTransparentMesh=false;
+        rt.sizeDelta=new Vector2(34,34);
+        var row=parent.GetComponent<HorizontalLayoutGroup>();
+        if(row!=null){row.childForceExpandWidth=false;row.childForceExpandHeight=false;row.childAlignment=TextAnchor.MiddleLeft;foreach(Transform child in parent){if(child==rt)continue;var el=child.GetComponent<LayoutElement>();if(el!=null&&el.preferredWidth<0)el.flexibleWidth=1;}}
+        var b=rt.gameObject.AddComponent<Button>();b.targetGraphic=image;Height(b,34);Width(b,34);
         var caption=Text(rt,"×",26,dark?Light:Muted,height:36);caption.alignment=TextAnchor.MiddleCenter;Fill(caption.rectTransform);
-        var colors=b.colors;colors.normalColor=Color.clear;colors.highlightedColor=new Color(1,1,1,.10f);colors.selectedColor=new Color(1,1,1,.10f);colors.pressedColor=new Color(1,1,1,.18f);b.colors=colors;if(close!=null)b.onClick.AddListener(close);return b;
+        var colors=b.colors;colors.normalColor=Color.clear;colors.highlightedColor=dark?new Color(1,1,1,.14f):new Color(.65f,.42f,.22f,.14f);colors.selectedColor=colors.highlightedColor;colors.pressedColor=new Color(.65f,.42f,.22f,.25f);colors.fadeDuration=.14f;b.colors=colors;if(close!=null)b.onClick.AddListener(close);return b;
     }
     public static Button CompactDie(Transform parent,DieType type,UnityAction action)
     {
@@ -138,7 +182,10 @@ public static class AtlasUi
     }
     public static void Select(Button b,bool active,bool dark=false)
     {
-        if(b==null)return;b.GetComponent<Image>().color=active?Copper:dark?new Color(.11f,.25f,.18f):Paper;
+        if(b==null)return;
+        b.GetComponent<Image>().color=dark?Color.white:active?new Color(.17f,.34f,.28f):Paper;
+        if(dark){var colors=b.colors;colors.normalColor=active?new Color(.26f,.38f,.28f,.85f):new Color(.89f,.87f,.72f,.03f);b.colors=colors;}
+
         var t=b.GetComponentInChildren<Text>();if(t!=null)t.color=active||dark?Light:Ink;
     }
 }

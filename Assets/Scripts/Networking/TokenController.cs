@@ -694,6 +694,7 @@ public partial class TokenController : NetworkDraggable
         UpdateDragState();
         UpdateMovementRequest();
         UpdateTokenPointer();
+        UpdateKeyboardMovement();
         if (_showMenu && Keyboard.current?.escapeKey.wasPressedThisFrame == true) CloseMenu();
         if (_showMenu && (SceneEditor.IsEditing || FogManager.IsManualEditing || !IsVisibleToLocalPlayer || !GameplayInputGate.AllowsImGuiOverlays)) CloseMenu();
     }
@@ -1103,6 +1104,7 @@ public partial class TokenController : NetworkDraggable
 
         if (!GameplayInputGate.AllowsWorldPointerInput) return;
         _isHovered = true;
+        if (Mouse.current?.leftButton.wasPressedThisFrame == true && CanStartLocalDrag) _keyboardToken = this;
         if (!_wasHovered) _hoverSince = Time.unscaledTime;
 
         var mouse = Mouse.current;

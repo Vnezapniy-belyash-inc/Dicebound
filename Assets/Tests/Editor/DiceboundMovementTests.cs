@@ -6,6 +6,34 @@ public class DiceboundMovementTests
 {
     private static Type Runtime(string name) => Type.GetType(name + ", Assembly-CSharp", true);
 
+    [TestCase(0,0,0,1,0,1)]
+    [TestCase(0,0,0,-1,0,-1)]
+    [TestCase(0,0,1,0,1,0)]
+    [TestCase(0,0,-1,0,-1,0)]
+    [TestCase(180,0,0,1,0,-1)]
+    [TestCase(180,0,0,-1,0,1)]
+    [TestCase(180,0,1,0,-1,0)]
+    [TestCase(180,0,-1,0,1,0)]
+    [TestCase(90,0,0,1,1,0)]
+    [TestCase(90,0,1,0,0,-1)]
+    [TestCase(0,90,0,1,-1,0)]
+    [TestCase(0,90,1,0,0,1)]
+    [TestCase(90,90,0,1,0,1)]
+    [TestCase(90,90,1,0,1,0)]
+    public void ArrowDirectionsFollowScreenForRotatedCameraAndGrid(int yaw,int gridYaw,int x,int y,int expectedX,int expectedY)
+    {
+        var go=new GameObject("Arrow projection regression",typeof(Camera));
+        try{
+            var camera=go.GetComponent<Camera>();camera.pixelRect=new Rect(0,0,800,600);camera.orthographicSize=10;
+            foreach(bool orthographic in new[]{false,true})foreach(float pitch in new[]{60f,90f}){
+                camera.orthographic=orthographic;go.transform.rotation=Quaternion.Euler(pitch,yaw,0);
+                go.transform.position=-go.transform.forward*10;
+                var result=Runtime("TokenController").GetMethod("ScreenDirectionToGridStep").Invoke(null,new object[]{camera,Quaternion.Euler(0,gridYaw,0),Vector3.zero,new Vector2Int(x,y)});
+                Assert.That(result,Is.EqualTo(new Vector2Int(expectedX,expectedY)),"Camera projection: "+orthographic+" pitch: "+pitch);
+            }
+        }finally{UnityEngine.Object.DestroyImmediate(go);}
+    }
+
     [TestCase(100, 3, 4, 3)]
     [TestCase(-100, 3, 2, 3)]
     [TestCase(3, 100, 3, 4)]

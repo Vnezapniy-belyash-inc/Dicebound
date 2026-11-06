@@ -6,6 +6,7 @@ using Unity.Collections;
 using Unity.Netcode;
 using Unity.Netcode.Transports.UTP;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.TestTools;
 using System.Threading.Tasks;
 using System.IO;
@@ -830,6 +831,147 @@ public class DiceboundLobbyIntegrationTests
         RuntimeType("FogStateCodec").GetMethod("Decode").Invoke(null, arguments);
         Assert.That(((bool[])arguments[2]).Length, Is.EqualTo(width * height * 16));
         _fogEnabled = state; _fogChanges++;
+    }
+
+    [UnityTest]
+    public IEnumerator AutomaticNamesAndArrowStepsReachServerWithoutRepeatingOrCrossingWalls()
+    {
+        UnityEditor.SceneManagement.EditorSceneManager.NewScene(UnityEditor.SceneManagement.NewSceneSetup.EmptyScene,
+            UnityEditor.SceneManagement.NewSceneMode.Single);
+        yield return new EnterPlayMode();
+        _host=Manager("Keyboard host");_scene=new GameObject("Keyboard test scene");
+        var grid=_scene.AddComponent(RuntimeType("GridManager"));
+        grid.GetType().GetField("createWalls").SetValue(grid,false);
+        var tokens=_scene.AddComponent(RuntimeType("TokenManager"));
+        _scene.AddComponent(RuntimeType("PlayerRegistry"));
+        var prefab=UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Token.prefab");
+        tokens.GetType().GetField("tokenPrefab").SetValue(tokens,prefab.GetComponent<NetworkObject>());
+        _host.AddNetworkPrefab(prefab);yield return null;Assert.That(_host.StartHost(),Is.True);
+        _client=Manager("Keyboard client");_client.AddNetworkPrefab(prefab);Assert.That(_client.StartClient(),Is.True);
+        float deadline=Time.realtimeSinceStartup+10;
+        while(!_client.IsConnectedClient&&Time.realtimeSinceStartup<deadline)yield return null;
+        Assert.That(_client.IsConnectedClient,Is.True);
+        _client.CustomMessagingManager.RegisterNamedMessageHandler("SpawnTokenAck",(sender,reader)=>{});
+        using(var writer=new FastBufferWriter(128,Allocator.Temp)){
+            writer.WriteValueSafe(new FixedString64Bytes("Анна"));
+            _client.CustomMessagingManager.SendNamedMessage("PlayerRegister",0,writer);
+        }
+        var registry=RuntimeType("PlayerRegistry").GetProperty("Instance").GetValue(null);
+        deadline=Time.realtimeSinceStartup+5;
+        while(!(bool)registry.GetType().GetMethod("IsRegisteredPlayer").Invoke(registry,new object[]{_client.LocalClientId})&&Time.realtimeSinceStartup<deadline)yield return null;
+        Assert.That((bool)registry.GetType().GetMethod("IsRegisteredPlayer").Invoke(registry,new object[]{_client.LocalClientId}),Is.True);
+        var tokenType=RuntimeType("TokenController");
+        using(var writer=new FastBufferWriter(132,Allocator.Temp)){
+            writer.WriteValueSafe(77);
+            _client.CustomMessagingManager.SendNamedMessage("SpawnToken",0,writer);
+        }
+        Component server=null;
+        deadline=Time.realtimeSinceStartup+5;
+        while(server==null&&Time.realtimeSinceStartup<deadline){
+            foreach(var item in UnityEngine.Object.FindObjectsByType(tokenType,FindObjectsInactive.Exclude))
+                if((bool)tokenType.GetProperty("IsServer").GetValue(item))server=(Component)item;
+            yield return null;
+        }
+        Assert.That(server,Is.Not.Null);Assert.That(tokenType.GetProperty("TokenName").GetValue(server),Is.EqualTo("Анна"));
+        ulong objectId=server.GetComponent<NetworkObject>().NetworkObjectId;
+        deadline=Time.realtimeSinceStartup+5;
+        while(!_client.SpawnManager.SpawnedObjects.ContainsKey(objectId)&&Time.realtimeSinceStartup<deadline)yield return null;
+        Assert.That(_client.SpawnManager.SpawnedObjects.ContainsKey(objectId),Is.True);
+        var remote=_client.SpawnManager.SpawnedObjects[objectId].GetComponent(tokenType);
+        var master=tokens.GetType().GetMethod("CreateTokenWithStatsAsHost").Invoke(tokens,new object[]{"Страж",false,18,37});
+        var data=tokenType.GetMethod("CaptureMasterData").Invoke(master,null);
+        Assert.That(data.GetType().GetField("armorClass").GetValue(data),Is.EqualTo(18));
+        Assert.That(data.GetType().GetField("currentHp").GetValue(data),Is.EqualTo(37));
+        Assert.That(data.GetType().GetField("maxHp").GetValue(data),Is.EqualTo(37));
+        Assert.That(data.GetType().GetField("hideHp").GetValue(data),Is.True);
+        Assert.That(tokens.GetType().GetMethod("CreateTokenWithStatsAsHost").Invoke(tokens,new object[]{"Bad",false,-1,37}),Is.Null);
+        // Repeat delivery must return the same token, not create another one.
+        using(var writer=new FastBufferWriter(132,Allocator.Temp)){
+            writer.WriteValueSafe(77);
+            _client.CustomMessagingManager.SendNamedMessage("SpawnToken",0,writer);
+        }
+        using(var writer=new FastBufferWriter(132,Allocator.Temp)){
+            writer.WriteValueSafe(78);
+            _client.CustomMessagingManager.SendNamedMessage("SpawnToken",0,writer);
+        }
+        Component named=null;deadline=Time.realtimeSinceStartup+5;
+        while(named==null&&Time.realtimeSinceStartup<deadline){
+            foreach(var item in UnityEngine.Object.FindObjectsByType(tokenType,FindObjectsInactive.Exclude))
+                if((bool)tokenType.GetProperty("IsServer").GetValue(item)&&(string)tokenType.GetProperty("TokenName").GetValue(item)=="Анна 2")named=(Component)item;
+            yield return null;
+        }
+        Assert.That(named,Is.Not.Null,"The next one-click token uses the nickname with a numeric suffix.");
+        Assert.That(tokenType.GetProperty("IsHero").GetValue(server),Is.True);
+        Assert.That(tokenType.GetProperty("IsHero").GetValue(named),Is.False,"Only the player's first token is a hero.");
+        var geometry=_scene.AddComponent(RuntimeType("SceneEditor"));yield return null;
+        var model=geometry.GetType().GetProperty("Model").GetValue(geometry);
+        model.GetType().GetMethod("SetEdge").Invoke(model,new object[]{6,3,true,false,false,false});
+        var position=(Vector3)grid.GetType().GetMethod("GetCellCenter").Invoke(grid,new object[]{3,3,.1f});
+        tokenType.GetMethod("RestorePosition").Invoke(server,new object[]{position});
+        deadline=Time.realtimeSinceStartup+5;
+        while(((Vector3)tokenType.GetProperty("CommittedPosition").GetValue(remote)-position).sqrMagnitude>.001f&&Time.realtimeSinceStartup<deadline)yield return null;
+        Assert.That(((Vector3)tokenType.GetProperty("CommittedPosition").GetValue(remote)-position).sqrMagnitude,Is.LessThan(.001f));
+        tokenType.GetField("_keyboardToken",BindingFlags.NonPublic|BindingFlags.Static).SetValue(null,remote);
+        var cameraObject=new GameObject("Keyboard screen direction camera",typeof(Camera));cameraObject.transform.SetParent(_scene.transform);
+        cameraObject.tag="MainCamera";cameraObject.transform.position=new Vector3(0,20,0);cameraObject.transform.rotation=Quaternion.Euler(90,180,0);
+        var eventsObject=new GameObject("Arrow navigation regression",typeof(EventSystem),typeof(UnityEngine.InputSystem.UI.InputSystemUIInputModule));eventsObject.transform.SetParent(_scene.transform);
+        var events=eventsObject.GetComponent<EventSystem>();
+        var firstButton=new GameObject("Arrow focus A",typeof(RectTransform),typeof(UnityEngine.UI.Button));firstButton.transform.SetParent(_scene.transform);
+        var secondButton=new GameObject("Arrow focus B",typeof(RectTransform),typeof(UnityEngine.UI.Button));secondButton.transform.SetParent(_scene.transform);
+        var navigation=new UnityEngine.UI.Navigation();navigation.mode=UnityEngine.UI.Navigation.Mode.Explicit;navigation.selectOnLeft=secondButton.GetComponent<UnityEngine.UI.Button>();
+        firstButton.GetComponent<UnityEngine.UI.Button>().navigation=navigation;
+        yield return null;
+        events.SetSelectedGameObject(firstButton);
+        var input=UnityEngine.InputSystem.InputSystem.AddDevice<UnityEngine.InputSystem.Keyboard>();
+        var settings=UnityEngine.InputSystem.InputSystem.settings;
+        var testSettings=UnityEngine.Object.Instantiate(settings);
+        testSettings.backgroundBehavior=UnityEngine.InputSystem.InputSettings.BackgroundBehavior.IgnoreFocus;
+        testSettings.editorInputBehaviorInPlayMode=UnityEngine.InputSystem.InputSettings.EditorInputBehaviorInPlayMode.AllDeviceInputAlwaysGoesToGameView;
+        UnityEngine.InputSystem.InputSystem.settings=testSettings;
+        try{
+            input.MakeCurrent();
+            // The production camera faces yaw 180: screen-left is positive grid X.
+            UnityEngine.InputSystem.InputSystem.QueueStateEvent(input,new UnityEngine.InputSystem.LowLevel.KeyboardState(UnityEngine.InputSystem.Key.LeftArrow));
+            deadline=Time.realtimeSinceStartup+5;
+            while((Vector2Int)grid.GetType().GetMethod("GetGridPosition").Invoke(grid,new object[]{server.transform.position})!=new Vector2Int(4,3)&&Time.realtimeSinceStartup<deadline)yield return null;
+            Assert.That(grid.GetType().GetMethod("GetGridPosition").Invoke(grid,new object[]{server.transform.position}),Is.EqualTo(new Vector2Int(4,3)));
+            for(int i=0;i<20;i++)yield return null;
+            Assert.That(grid.GetType().GetMethod("GetGridPosition").Invoke(grid,new object[]{server.transform.position}),Is.EqualTo(new Vector2Int(4,3)),"Holding does not repeat.");
+            Assert.That(events.sendNavigationEvents,Is.False);
+            Assert.That(events.currentSelectedGameObject,Is.SameAs(firstButton),"The arrow moves the token without moving UI focus.");
+            var indicatorType=RuntimeType("TokenKeyboardIndicator");
+            Assert.That(server.GetComponent(indicatorType),Is.Null,"Selection is a client-only visual.");
+            var indicator=remote.GetComponent(indicatorType);Assert.That(indicator,Is.Not.Null);
+            var ringField=indicatorType.GetField("_ring",BindingFlags.Instance|BindingFlags.NonPublic);
+            var ring=(LineRenderer)ringField.GetValue(indicator);
+            Assert.That(ring.enabled,Is.True);
+            Assert.That(ring.transform.IsChildOf(remote.transform),Is.False,"Drag previews must not duplicate the rim.");
+            Assert.That(ring.GetComponent<Collider>(),Is.Null);
+            ulong namedId=named.GetComponent<NetworkObject>().NetworkObjectId;
+            Assert.That(_client.SpawnManager.SpawnedObjects.ContainsKey(namedId),Is.True);
+            var other=_client.SpawnManager.SpawnedObjects[namedId].GetComponent(tokenType);
+            tokenType.GetField("_keyboardToken",BindingFlags.NonPublic|BindingFlags.Static).SetValue(null,other);
+            yield return null;yield return null;
+            Assert.That(ring.enabled,Is.False,"Changing selection removes the old marker.");
+            var otherIndicator=other.GetComponent(indicatorType);Assert.That(otherIndicator,Is.Not.Null);
+            Assert.That(((LineRenderer)ringField.GetValue(otherIndicator)).enabled,Is.True);
+            tokenType.GetField("_keyboardToken",BindingFlags.NonPublic|BindingFlags.Static).SetValue(null,remote);
+            yield return null;yield return null;
+            Assert.That(ring.enabled,Is.True);
+            UnityEngine.InputSystem.InputSystem.QueueStateEvent(input,new UnityEngine.InputSystem.LowLevel.KeyboardState());yield return null;yield return null;
+            UnityEngine.InputSystem.InputSystem.QueueStateEvent(input,new UnityEngine.InputSystem.LowLevel.KeyboardState(UnityEngine.InputSystem.Key.LeftArrow));
+            deadline=Time.realtimeSinceStartup+5;
+            while((Vector2Int)grid.GetType().GetMethod("GetGridPosition").Invoke(grid,new object[]{server.transform.position})!=new Vector2Int(5,3)&&Time.realtimeSinceStartup<deadline)yield return null;
+            Assert.That(grid.GetType().GetMethod("GetGridPosition").Invoke(grid,new object[]{server.transform.position}),Is.EqualTo(new Vector2Int(5,3)));
+            for(int i=0;i<20;i++)yield return null;
+            UnityEngine.InputSystem.InputSystem.QueueStateEvent(input,new UnityEngine.InputSystem.LowLevel.KeyboardState());yield return null;yield return null;
+            UnityEngine.InputSystem.InputSystem.QueueStateEvent(input,new UnityEngine.InputSystem.LowLevel.KeyboardState(UnityEngine.InputSystem.Key.LeftArrow));
+            for(int i=0;i<40;i++)yield return null;
+            Assert.That(grid.GetType().GetMethod("GetGridPosition").Invoke(grid,new object[]{server.transform.position}),Is.EqualTo(new Vector2Int(5,3)),"The server rejects a step through a wall.");
+            Assert.That(tokenType.GetProperty("TokenName").GetValue(server),Is.EqualTo("Анна"));
+        }finally{
+            UnityEngine.InputSystem.InputSystem.RemoveDevice(input);UnityEngine.InputSystem.InputSystem.settings=settings;UnityEngine.Object.Destroy(testSettings);
+        }
     }
 
     [UnityTearDown]

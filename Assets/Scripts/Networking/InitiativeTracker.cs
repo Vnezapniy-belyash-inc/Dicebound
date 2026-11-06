@@ -315,6 +315,7 @@ public partial class InitiativeTracker : NetworkBehaviour
 
     public void SetVisible(bool visible)
     {
+        if(visible){DiceUI.Instance?.AtlasCloseContext();DmPanelUI.Instance?.Hide();CharacterSheetUI.Instance?.SetSheetVisible(false);}
         _userVisible = visible;
         if (_panel != null) _panel.SetActive(visible && GameNetworkManager.Instance != null
             && GameNetworkManager.Instance.IsConnected);
