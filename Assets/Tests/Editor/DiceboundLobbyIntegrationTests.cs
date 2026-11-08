@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Reflection;
 using NUnit.Framework;
@@ -60,6 +60,67 @@ public class DiceboundLobbyIntegrationTests
     }
 
     [UnityTest]
+    public IEnumerator ClientPhysicalThrowReachesHostAndCommitsTheSameFinalPose()
+    {
+        UnityEditor.SceneManagement.EditorSceneManager.NewScene(UnityEditor.SceneManagement.NewSceneSetup.EmptyScene,
+            UnityEditor.SceneManagement.NewSceneMode.Single);
+        yield return new EnterPlayMode();
+        var prefab = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>("Assets/NetworkDice.prefab");
+        _host = Manager("Dice host");
+        _host.AddNetworkPrefab(prefab);
+        Assert.That(_host.StartHost(), Is.True);
+        _client = Manager("Dice thrower");
+        _client.AddNetworkPrefab(prefab);
+        Assert.That(_client.StartClient(), Is.True);
+        float deadline = Time.realtimeSinceStartup + 5f;
+        while (!_client.IsConnectedClient && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(_client.IsConnectedClient, Is.True);
+
+        _scene = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        _scene.transform.SetPositionAndRotation(new Vector3(0f, -.5f, 0f), Quaternion.identity);
+        _scene.transform.localScale = new Vector3(60f, 1f, 60f);
+        var release = new Vector3(0f, 1.5f, 0f);
+        var serverObject = UnityEngine.Object.Instantiate(prefab, release, Quaternion.identity).GetComponent<NetworkObject>();
+        serverObject.Spawn();
+        var diceType = RuntimeType("NetworkDice");
+        var serverDie = serverObject.GetComponent(diceType);
+        diceType.GetMethod("Init").Invoke(serverDie, new[] { Enum.Parse(RuntimeType("DieType"), "d6") });
+        // The loopback managers share one physics scene. Only the thrower should collide with this floor.
+        serverDie.GetComponent<MeshCollider>().enabled = false;
+        deadline = Time.realtimeSinceStartup + 5f;
+        while (!_client.SpawnManager.SpawnedObjects.ContainsKey(serverObject.NetworkObjectId)
+            && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(_client.SpawnManager.SpawnedObjects.TryGetValue(serverObject.NetworkObjectId, out var clientObject), Is.True);
+        var clientDie = clientObject.GetComponent(diceType);
+        Assert.That((bool)diceType.GetProperty("IsReady").GetValue(clientDie), Is.True);
+
+        const int gesture = 1;
+        Assert.That((bool)diceType.GetMethod("BeginDrag").Invoke(clientDie, new object[] { gesture }), Is.True);
+        diceType.GetMethod("ThrowDrag").Invoke(clientDie, new object[] { gesture, release, new Vector3(2f, 2f, 0f), Vector3.forward * 4f });
+        var displayPosition = diceType.GetProperty("DisplayPosition");
+        deadline = Time.realtimeSinceStartup + 2f;
+        while (serverDie.transform.position.x < .15f && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(serverDie.transform.position.x, Is.GreaterThanOrEqualTo(.15f));
+        Assert.That(((Vector3)displayPosition.GetValue(clientDie)).x, Is.GreaterThan(.15f));
+        Assert.That((bool)diceType.GetProperty("HasResult").GetValue(serverDie), Is.False);
+        Assert.That((bool)diceType.GetMethod("BeginDrag").Invoke(serverDie, new object[] { 2 }), Is.False);
+
+        deadline = Time.realtimeSinceStartup + 12f;
+        while (!(bool)diceType.GetProperty("HasResult").GetValue(serverDie)
+            && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That((bool)diceType.GetProperty("HasResult").GetValue(serverDie), Is.True);
+        Assert.That((int)diceType.GetProperty("Result").GetValue(serverDie), Is.InRange(1, 6));
+
+        var preview = clientDie.GetComponent(RuntimeType("NetworkDragPreview"));
+        var active = preview.GetType().GetProperty("IsActive");
+        deadline = Time.realtimeSinceStartup + 3f;
+        while ((bool)active.GetValue(preview) && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That((bool)active.GetValue(preview), Is.False);
+        Assert.That(Vector3.Distance(clientDie.transform.position, serverDie.transform.position), Is.LessThan(.002f));
+        Assert.That(Quaternion.Angle(clientDie.transform.rotation, serverDie.transform.rotation), Is.LessThan(.1f));
+    }
+
+    [UnityTest]
     public IEnumerator ServerRepliesToConnectedClientHeartbeat()
     {
         UnityEditor.SceneManagement.EditorSceneManager.NewScene(UnityEditor.SceneManagement.NewSceneSetup.EmptyScene, UnityEditor.SceneManagement.NewSceneMode.Single);
@@ -87,6 +148,85 @@ public class DiceboundLobbyIntegrationTests
         deadline = Time.realtimeSinceStartup + 5f;
         while (_heartbeatReceived < 0 && Time.realtimeSinceStartup < deadline) yield return null;
         Assert.That(_heartbeatReceived, Is.EqualTo(42));
+    }
+
+    private readonly System.Collections.Generic.List<string> _chatLines = new();
+    private byte[] _chatImage;
+
+    [UnityTest]
+    public IEnumerator LobbyChatSendsHistoryAndImageThroughTheClientConnection()
+    {
+        UnityEditor.SceneManagement.EditorSceneManager.NewScene(UnityEditor.SceneManagement.NewSceneSetup.EmptyScene,
+            UnityEditor.SceneManagement.NewSceneMode.Single);
+        yield return new EnterPlayMode();
+        _host = Manager("Chat host");
+        var game = _host.gameObject.AddComponent(RuntimeType("GameNetworkManager"));
+        _registry = _host.gameObject.AddComponent(RuntimeType("PlayerRegistry"));
+        yield return null;
+        Assert.That(_host.StartHost(), Is.True);
+        const BindingFlags instance = BindingFlags.Instance | BindingFlags.NonPublic;
+        var register = _registry.GetType().GetMethod("RegisterPlayerOnServer", instance);
+        register.Invoke(_registry, new object[] { _host.LocalClientId, "Ведущий" });
+
+        var chat = game.GetType().GetProperty("Chat", instance).GetValue(game);
+        chat.GetType().GetMethod("Subscribe", instance).Invoke(chat, null);
+        chat.GetType().GetMethod("Post", instance).Invoke(chat, new object[] { "До подключения", null });
+
+        _client = Manager("Chat client");
+        Assert.That(_client.StartClient(), Is.True);
+        float deadline = Time.realtimeSinceStartup + 10f;
+        while (!_client.IsConnectedClient && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(_client.IsConnectedClient, Is.True);
+        register.Invoke(_registry, new object[] { _client.LocalClientId, "Игрок" });
+
+        yield return null;
+        Assert.That(_client, Is.Not.Null);
+        Assert.That(_client.CustomMessagingManager, Is.Not.Null);
+        _chatLines.Clear();
+        _chatImage = null;
+        _client.CustomMessagingManager.RegisterNamedMessageHandler("LobbyChat.Entry.v1", (sender, reader) =>
+        {
+            Assert.That(sender, Is.EqualTo(NetworkManager.ServerClientId));
+            reader.ReadValueSafe(out ulong author);
+            reader.ReadValueSafe(out long timestamp);
+            string nickname = System.Text.Encoding.UTF8.GetString(ReadChatBlob(ref reader));
+            string text = System.Text.Encoding.UTF8.GetString(ReadChatBlob(ref reader));
+            _chatImage = ReadChatBlob(ref reader);
+            _chatLines.Add(nickname + " " + text);
+        });
+
+        using (var subscribe = new FastBufferWriter(1, Allocator.Temp))
+            _client.CustomMessagingManager.SendNamedMessage("LobbyChat.Subscribe.v1", NetworkManager.ServerClientId,
+                subscribe, NetworkDelivery.ReliableFragmentedSequenced);
+        deadline = Time.realtimeSinceStartup + 5f;
+        while (_chatLines.Count == 0 && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(_chatLines, Is.EqualTo(new[] { "Ведущий До подключения" }));
+
+        byte[] image = new byte[4 + 256 * 256 * 4];
+        image[1] = image[3] = 1;
+        image[image.Length - 1] = 255;
+        byte[] message = System.Text.Encoding.UTF8.GetBytes("Привет!");
+        using (var post = new FastBufferWriter(8 + message.Length + image.Length, Allocator.Temp))
+        {
+            post.WriteValueSafe(message.Length);
+            post.WriteBytesSafe(message);
+            post.WriteValueSafe(image.Length);
+            post.WriteBytesSafe(image);
+            _client.CustomMessagingManager.SendNamedMessage("LobbyChat.Post.v1", NetworkManager.ServerClientId,
+                post, NetworkDelivery.ReliableFragmentedSequenced);
+        }
+        deadline = Time.realtimeSinceStartup + 10f;
+        while (_chatLines.Count < 2 && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(_chatLines, Is.EqualTo(new[] { "Ведущий До подключения", "Игрок Привет!" }));
+        Assert.That(_chatImage, Is.EqualTo(image));
+    }
+
+    private static byte[] ReadChatBlob(ref FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out int size);
+        var bytes = new byte[size];
+        if (size > 0) reader.ReadBytesSafe(ref bytes, size);
+        return bytes;
     }
 
     private IEnumerator RegisterRemote(string nickname)

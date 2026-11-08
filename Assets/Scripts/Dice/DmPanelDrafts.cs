@@ -28,7 +28,6 @@ public partial class DmPanelUI
     }
     private void RequestNewReference() => GuardLibraryDraft(true, ClearReferenceInputs);
     private void RequestNewStatBlock() => GuardLibraryDraft(false, ClearStatBlockInputs);
-    private void RequestCharacterImport() => GuardLibraryDraft(false, ImportCharacterDataToStatBlock);
     private void RequestReferenceImport() => GuardLibraryDraft(true, SceneFileStore.ImportReferenceLibraryDialog);
     private void ReloadSelectedStatBlock() => GuardLibraryDraft(false, () =>
     {

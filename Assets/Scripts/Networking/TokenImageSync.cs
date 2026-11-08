@@ -304,7 +304,7 @@ public class TokenImageSync : MonoBehaviour
         if (!ValidPortrait(jpgData))
         {
             Debug.LogError("[TokenImageSync] Portrait exceeds the 2 MB network limit");
-            DiceUI.Instance?.ShowToolNotice("Изображение токена слишком большое (максимум 2 МБ).");
+            DiceUI.Instance?.ShowToolNotice("Изображение токена слишком большое (максимум 2 МБ).", TableNoticeKind.Warning);
             return;
         }
         if (Instance._outboundUploads.TryGetValue(networkObjectId, out UploadState previous))
@@ -349,7 +349,7 @@ public class TokenImageSync : MonoBehaviour
             RestorePreviousImage(netId, upload);
             ImageTransferUI.Finish($"portrait-upload-{netId}", "Не удалось отправить изображение токена");
             Debug.LogError($"[TokenImageSync] Upload failed for token {netId} after {MaxRetries} retries");
-            DiceUI.Instance?.ShowToolNotice("Не удалось отправить изображение токена.");
+            DiceUI.Instance?.ShowToolNotice("Не удалось отправить изображение токена.", TableNoticeKind.Error);
         }
     }
 
@@ -514,7 +514,7 @@ public class TokenImageSync : MonoBehaviour
         {
             ImageTransferUI.Finish($"portrait-send-{clientId}-{netId}", "Не удалось отправить токен");
             Debug.LogError($"[TokenImageSync] Client {clientId} did not apply portrait for token {netId}");
-            DiceUI.Instance?.ShowToolNotice($"Игрок {clientId} не получил изображение токена.");
+            DiceUI.Instance?.ShowToolNotice($"Игрок {clientId} не получил изображение токена.", TableNoticeKind.Error);
         }
     }
 

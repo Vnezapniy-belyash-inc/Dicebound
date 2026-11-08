@@ -5,9 +5,6 @@ using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.InputSystem;
-#if UNITY_EDITOR
-using UnityEditor;
-#endif
 
 /// <summary>
 /// Сетевой токен. Права: IsSpawner — свои; IsHost — любые (картинка, удаление, копирование).
@@ -29,7 +26,6 @@ public partial class TokenController : NetworkDraggable
     private TokenAppearance _appearance;
     private Bounds _labelBounds;
     private GridManager _labelGrid;
-    private GUIStyle _labelStyle;
     private bool _isHovered;
     private bool _hasInitialServerState;
     private ulong _initialCreator;
@@ -705,7 +701,7 @@ public partial class TokenController : NetworkDraggable
         if (!IsVisibleToLocalPlayer || (!IsSpawner && !IsHost) || jpgData == null || jpgData.Length == 0) return;
         if (jpgData.Length > TokenImageSync.MaxPortraitBytes)
         {
-            DiceUI.Instance?.ShowToolNotice("Изображение токена слишком большое (максимум 2 МБ).");
+            DiceUI.Instance?.ShowToolNotice("Изображение токена слишком большое (максимум 2 МБ).", TableNoticeKind.Warning);
             return;
         }
 
@@ -852,6 +848,7 @@ public partial class TokenController : NetworkDraggable
 
     public override void OnNetworkDespawn()
     {
+        HideTokenLabel();
         if (IsServer) InitiativeTracker.Instance?.RemoveToken(SceneId);
         _netColor.OnValueChanged -= OnColorChanged;
         _netHidden.OnValueChanged -= OnHiddenChanged;
@@ -869,6 +866,8 @@ public partial class TokenController : NetworkDraggable
 
     public override void OnDestroy()
     {
+        if (_labelPlate != null) Destroy(_labelPlate.gameObject);
+        if (_conditionTooltip != null) Destroy(_conditionTooltip.gameObject);
         CloseMenu();
         _appearance?.Dispose();
         if (_bodyMaterial != null) Destroy(_bodyMaterial);
@@ -914,7 +913,7 @@ public partial class TokenController : NetworkDraggable
         {
             _renamePending = false;
             _renameStatus = "Имя не изменено. Проверьте имя и назначение токена у мастера.";
-            DiceUI.Instance?.ShowToolNotice(_renameStatus);
+            DiceUI.Instance?.ShowToolNotice(_renameStatus, TableNoticeKind.Warning);
             return;
         }
         RequestRenameServerRpc(new FixedString128Bytes(TokenNameRegistry.Normalize(name)));
@@ -938,7 +937,7 @@ public partial class TokenController : NetworkDraggable
             _renameStatus = "Имя сохранено: " + _nameInput;
         }
         else _renameStatus = "Нет прав на переименование. Попросите мастера назначить вам токен.";
-        DiceUI.Instance?.ShowToolNotice(_renameStatus);
+        DiceUI.Instance?.ShowToolNotice(_renameStatus, accepted ? TableNoticeKind.Success : TableNoticeKind.Warning);
     }
 
     public bool ServerRename(ulong sender, string name)
@@ -1199,23 +1198,17 @@ public partial class TokenController : NetworkDraggable
 
     private static void PickTokenImageFile(Action<string> onPicked)
     {
-#if UNITY_EDITOR
-        string p = EditorUtility.OpenFilePanel("Выберите изображение", "", "png,jpg,jpeg,bmp,tga");
-        onPicked(string.IsNullOrEmpty(p) ? null : p);
-#else
         SimpleFileBrowser.FileBrowser.ShowLoadDialog(
             (paths) => onPicked(paths.Length > 0 ? paths[0] : null),
             () => onPicked(null),
             SimpleFileBrowser.FileBrowser.PickMode.Files,
-            false, null, null, "Выберите изображение", "Выбрать");
-#endif
+            false, null, null, "Выберите изображение токена", "Выбрать", showImagePreview: true);
     }
 
     private void OnGUI()
     {
         if (!GameplayInputGate.AllowsImGuiOverlays) return;
         if (!IsSpawned || !IsVisibleToLocalPlayer) return;
-        DrawTokenLabel();
         Matrix4x4 previousMatrix = GUI.matrix;
         GUI.matrix = previousMatrix * Matrix4x4.Scale(new Vector3(MenuScale, MenuScale, 1));
         try { DrawTokenMenus(); }
@@ -1302,7 +1295,7 @@ public partial class TokenController : NetworkDraggable
                 {
                     _renamePending = false;
                     _renameStatus = "Нет ответа от мастера. Попробуйте ещё раз.";
-                    DiceUI.Instance?.ShowToolNotice(_renameStatus);
+                    DiceUI.Instance?.ShowToolNotice(_renameStatus, TableNoticeKind.Error);
                 }
                 if (!string.IsNullOrEmpty(_renameStatus))
                 {
@@ -1524,7 +1517,7 @@ public partial class TokenController : NetworkDraggable
             || current < 0 || maximum < 0 || current > maximum
             || current > 999999 || maximum > 999999 || armorClass < 0 || armorClass > 999)
         {
-            DiceUI.Instance?.ShowToolNotice("Проверьте ХП, максимум ХП и КД.");
+            DiceUI.Instance?.ShowToolNotice("Проверьте ХП, максимум ХП и КД.", TableNoticeKind.Warning);
             return;
         }
         if (_masterData.currentHp != current || _masterData.maxHp != maximum || _masterData.armorClass != armorClass)
@@ -1551,12 +1544,12 @@ public partial class TokenController : NetworkDraggable
         string id = _masterStatBlockInput.Trim();
         if (id.Length > 64 || id.Contains("|") || id.Contains(","))
         {
-            DiceUI.Instance?.ShowToolNotice("Некорректный ID статблока.");
+            DiceUI.Instance?.ShowToolNotice("Некорректный ID статблока.", TableNoticeKind.Warning);
             return;
         }
         if (!string.IsNullOrEmpty(id) && !SceneFileStore.HasStatBlock(id))
         {
-            DiceUI.Instance?.ShowToolNotice("Такого статблока нет в каталоге кампании.");
+            DiceUI.Instance?.ShowToolNotice("Такого статблока нет в каталоге кампании.", TableNoticeKind.Warning);
             return;
         }
         if (_masterData.statBlockId == id) return;
@@ -1647,77 +1640,4 @@ public partial class TokenController : NetworkDraggable
         _visionEditing = false;
     }
 
-    private void DrawTokenLabel()
-    {
-        var camera = Camera.main;
-        if (camera == null) return;
-        if (!TokenLabelLayout.Project(camera, DisplayTransform, _labelBounds, Screen.height,
-            out Rect label)) return;
-        if (_labelGrid == null) _labelGrid = FindAnyObjectByType<GridManager>();
-        if (_labelGrid != null)
-        {
-            Vector2 min = new(float.PositiveInfinity, float.PositiveInfinity);
-            Vector2 max = new(float.NegativeInfinity, float.NegativeInfinity);
-            for (int i = 0; i < 4; i++)
-            {
-                Vector3 point = camera.WorldToScreenPoint(_labelGrid.GetTokenFootprintCorner(DisplayPosition, i));
-                if (point.z <= 0) return;
-                Vector2 screen = new(point.x, Screen.height - point.y);
-                min = Vector2.Min(min, screen);
-                max = Vector2.Max(max, screen);
-            }
-            label = TokenLabelLayout.PlaceInsideCell(label, Rect.MinMaxRect(min.x, min.y, max.x, max.y));
-        }
-        if (!label.Overlaps(new Rect(0, 0, Screen.width, Screen.height))) return;
-        _labelStyle ??= new GUIStyle(VttUiSkin.ImGuiPanel)
-        {
-            wordWrap = false,
-            richText = false,
-            clipping = TextClipping.Overflow,
-            padding = new RectOffset(4, 4, 0, 0),
-            fontSize = TokenLabelLayout.DesignFontSize
-        };
-        // Scale the whole plate, including font, padding and rounded borders, uniformly.
-        Matrix4x4 previousMatrix = GUI.matrix;
-        float scale = label.width / TokenLabelLayout.DesignWidth;
-        GUI.matrix = previousMatrix * Matrix4x4.TRS(new Vector3(label.x, label.y, 0),
-            Quaternion.identity, new Vector3(scale, scale, 1));
-        Color previousColor = GUI.color;
-        if (IsHidden) GUI.color = new Color(previousColor.r, previousColor.g, previousColor.b, previousColor.a * 0.35f);
-        _labelStyle.alignment = TextAnchor.MiddleCenter;
-        _labelStyle.normal.textColor = VttUiSkin.Text;
-        string labelName = TokenName;
-        while (labelName.Length > 1 && _labelStyle.CalcSize(new GUIContent(labelName)).x > TokenLabelLayout.DesignWidth - 8)
-            labelName = labelName.Substring(0, labelName.Length - (labelName.Length >= 2 && char.IsLowSurrogate(labelName[^1]) && char.IsHighSurrogate(labelName[^2]) ? 2 : 1));
-        if (labelName.Length < TokenName.Length && labelName.Length > 1) labelName = labelName.TrimEnd() + "…";
-        GUI.Label(new Rect(0, 0, TokenLabelLayout.DesignWidth, TokenLabelLayout.DesignHeight), labelName, _labelStyle);
-        string hoveredCondition = null;
-        var conditions = VisibleConditionIds;
-        int icons = Mathf.Min(7, conditions.Length);
-        for (int i = 0; i < icons; i++)
-            if (TokenConditionIcons.Draw(new Rect(i * 20, -22, 18, 18), conditions[i]))
-                hoveredCondition = TokenConditionCatalog.DisplayName(conditions[i]);
-        if (conditions.Length > 7)
-        {
-            var overflow = new Rect(140, -22, 26, 20);
-            GUI.Label(overflow, "+" + (conditions.Length - 7), _labelStyle);
-            if (overflow.Contains(Event.current.mousePosition))
-                hoveredCondition = string.Join(", ", Array.ConvertAll(conditions, TokenConditionCatalog.DisplayName));
-        }
-        GUI.color = previousColor;
-        GUI.matrix = previousMatrix;
-        if (hoveredCondition != null && !DisplaySettingsUI.IsOpen && Mouse.current != null)
-        {
-            var tipStyle = new GUIStyle(GUI.skin.label) { wordWrap = true, richText = false, fontSize = 14 };
-            float width = Mathf.Min(280, tipStyle.CalcSize(new GUIContent(hoveredCondition)).x + 20);
-            float height = tipStyle.CalcHeight(new GUIContent(hoveredCondition), width - 16) + 16;
-            var pointer = Mouse.current.position.ReadValue();
-            float x = pointer.x + 18; if (x + width > Screen.width - 4) x = pointer.x - width - 18;
-            var rect = new Rect(Mathf.Clamp(x, 4, Mathf.Max(4, Screen.width - width - 4)),
-                Mathf.Clamp(Screen.height - pointer.y + 18, 4, Mathf.Max(4, Screen.height - height - 4)), width, height);
-            GUI.Box(rect, "", VttUiSkin.ImGuiPanel);
-            GUI.Label(new Rect(rect.x + 8, rect.y + 8, width - 16, height - 16), hoveredCondition, tipStyle);
-        }
-    }
 }
-

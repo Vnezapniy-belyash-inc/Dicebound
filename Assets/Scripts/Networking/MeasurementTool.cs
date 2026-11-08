@@ -712,7 +712,7 @@ public class MeasurementTool : NetworkBehaviour
         if (cells.Count == 0) return;
         if (cells.Count > MaxAreaCells)
         {
-            DiceUI.Instance?.ShowToolNotice("Слишком большая область (максимум 2000 клеток).");
+            DiceUI.Instance?.ShowToolNotice("Слишком большая область (максимум 2000 клеток).", TableNoticeKind.Warning);
             return;
         }
 

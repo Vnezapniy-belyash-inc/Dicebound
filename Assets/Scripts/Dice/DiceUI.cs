@@ -20,17 +20,13 @@ public partial class DiceUI : MonoBehaviour
     public InputField ScaleInput => _scaleInput;
     public float ToolsPanelPixelWidth => _nativeRoot!=null&&_nativeRoot.gameObject.activeInHierarchy?AtlasLeft*_canvas.scaleFactor:0;
     public float SessionHeaderPixelHeight => _nativeHeader!=null&&_nativeRoot.gameObject.activeInHierarchy?_nativeHeader.rect.height*_canvas.scaleFactor:0;
-    private GameObject _topBarGO,_bottomPanelGO,_logPanelGO,_logTab,_confirmPanel;
-    private Text _logText,_movementRequestsText,_confirmTitle,_confirmBody;
+    private GameObject _topBarGO,_bottomPanelGO,_logPanelGO,_confirmPanel;
+    private Text _movementRequestsText,_confirmTitle,_confirmBody;
     private Button _movementRequestsButton,_confirmAccept;
-    private ScrollRect _logScroll;
     private GridManager _gridManager;
-    private readonly List<string> _logEntries=new();
     private readonly List<DieResult> _lastResults=new();
     private bool _trackingRoll,_subscribedToMT;
     private int _rollingCount;
-    private string _toolNoticeText;
-    private float _toolNoticeUntil;
     private Action _atlasDragEnd;
     public bool IsConfirmationOpen => _confirmPanel!=null&&_confirmPanel.activeInHierarchy;
     void Awake()
@@ -75,6 +71,7 @@ public partial class DiceUI : MonoBehaviour
 
     void OnDestroy()
     {
+        DisconnectSessionFeed();
         PlayerColors.Changed-=OnPlayerColorsChanged;
         LocalControls.HintsChanged -= OnHintsChanged;
         if(DiceManager.Instance!=null)DiceManager.Instance.OnAnyResult-=OnDieResult;
@@ -122,15 +119,17 @@ public partial class DiceUI : MonoBehaviour
         _nativeInitKey=null;  _nativeTool=0;
         _nativeHost=IsLocalHost(); _bottomPanelGO.SetActive(_nativeHost);
         _logPanelGO.SetActive(false);_confirmPanel.SetActive(false);UpdateAtlasNativeUi();
+        ConnectSessionFeed();
     }
 
     public void HideGamePanels()
     {
+        DisconnectSessionFeed();
         SelectDefaultTool(); AtlasCloseContext();if(_nativeRoot!=null)_nativeRoot.gameObject.SetActive(false);
         if(_confirmPanel!=null)_confirmPanel.SetActive(false);
     }
 
-    void ShowLeaveConfirm()
+    internal void ShowLeaveConfirm()
     {
         bool host = IsLocalHost();
         bool unsaved = host && SceneFileStore.HasUnsavedChanges();
@@ -176,11 +175,6 @@ public partial class DiceUI : MonoBehaviour
         MeasurementTool.Instance?.Activate(mode);
     }
 
-    public void ShowToolNotice(string message)
-    {
-        _toolNoticeText=message;_toolNoticeUntil=Time.unscaledTime+4;
-    }
-
     void ShowTextureMenu()
     {
         _nativeTool=3;_nativeMenuOpen=true;NativeRebuildContext();NativeLayout();
@@ -218,7 +212,7 @@ public partial class DiceUI : MonoBehaviour
         int active = DiceManager.Instance.ActiveDice.Count;
         if (active == 0)
         {
-            ShowToolNotice("Нет кубиков.");
+            ShowToolNotice("Нет кубиков.", TableNoticeKind.Warning);
             return;
         }
         _lastResults.Clear();
@@ -260,7 +254,6 @@ public partial class DiceUI : MonoBehaviour
         _rollingCount = 0;
         // Логи НЕ чистим!
         UpdateResultText();
-        UpdateLogText();
     }
 
     void ConfirmDiceClear()
@@ -295,14 +288,12 @@ public partial class DiceUI : MonoBehaviour
     {
         DieType type = ParseDieType(dieTypeName);
 
-        string who = !string.IsNullOrEmpty(ownerNickname)
-            ? ownerNickname
-            : $"P{throwerId}";
+        string who = !string.IsNullOrEmpty(ownerNickname) ? ownerNickname
+            : PlayerColors.GetNickname(throwerId) ?? $"P{throwerId}";
         string logLine = $"{System.DateTime.Now:HH:mm:ss}  [{who}] {DieTypeName(type)}={result}";
-        _logEntries.Insert(0, logLine);
-        if (_logEntries.Count > 500) _logEntries.RemoveAt(_logEntries.Count - 1);
-        UpdateLogText();
+        AddFeedRow(DateTime.UtcNow.Ticks, logLine, true);
         JournalResultRecorded?.Invoke(DieTypeName(type), result, throwerId);
+        ShowRollNotice(who, $"{DieTypeName(type)} = {result}", throwerId);
         Debug.Log($"[Dice] Remote: {who} rolled {dieTypeName}: {result}");
     }
 
@@ -319,15 +310,6 @@ public partial class DiceUI : MonoBehaviour
             "d20" => DieType.d20,
             _ => DieType.d20,
         };
-    }
-
-    void UpdateLogText()
-    {
-        if (_logText == null) return;
-        _logText.text = _logEntries.Count == 0
-            ? "Бросков пока нет. Результаты появятся здесь."
-            : string.Join("\n", _logEntries);
-        if (_logScroll != null) _logScroll.verticalNormalizedPosition = 1f;
     }
 
     void OpenTexturePicker()
@@ -350,12 +332,13 @@ public partial class DiceUI : MonoBehaviour
         int total = 0;
         foreach (var result in _lastResults) total += result.value;
         string logLine = $"{System.DateTime.Now:HH:mm:ss}  [{_lastResults.Count}] {string.Join(" + ", _lastResults.ConvertAll(r => $"{DieTypeName(r.type)}={r.value}"))} = {total}";
-        _logEntries.Insert(0, logLine);
-        if (_logEntries.Count > 500) _logEntries.RemoveAt(_logEntries.Count - 1);
-        UpdateLogText();
+        AddFeedRow(DateTime.UtcNow.Ticks, logLine, true);
         foreach (var result in _lastResults)
             JournalResultRecorded?.Invoke(DieTypeName(result.type), result.value,
                 NetworkManager.Singleton != null ? NetworkManager.Singleton.LocalClientId : 0);
+        string roll = _lastResults.Count == 1 ? $"{DieTypeName(_lastResults[0].type)} = {total}"
+            : $"{_lastResults.Count} куб. · сумма {total}";
+        ShowToolNotice("Бросок · " + roll, TableNoticeKind.Roll);
     }
 
     static string DieTypeName(DieType t) => t switch

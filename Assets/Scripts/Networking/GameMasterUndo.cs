@@ -22,15 +22,15 @@ public static class GameMasterUndo
         if (Unity.Netcode.NetworkManager.Singleton?.IsHost != true || _actions.Count == 0) return;
         var action = _actions[_actions.Count - 1]; _actions.RemoveAt(_actions.Count - 1);
         IsRestoring = true;
-        try { action.Restore(); if (action.Repeat != null) _redo.Push(action); else _redo.Clear(); DiceUI.Instance?.ShowToolNotice("Отменено: " + action.Label); }
-        catch (Exception ex) { Debug.LogWarning("[Undo] " + ex.Message); DiceUI.Instance?.ShowToolNotice("Не удалось отменить: " + ex.Message); }
+        try { action.Restore(); if (action.Repeat != null) _redo.Push(action); else _redo.Clear(); DiceUI.Instance?.ShowToolNotice("Отменено: " + action.Label, TableNoticeKind.Success); }
+        catch (Exception ex) { Debug.LogWarning("[Undo] " + ex.Message); DiceUI.Instance?.ShowToolNotice("Не удалось отменить: " + ex.Message, TableNoticeKind.Error); }
         finally { IsRestoring = false; }
     }
     public static void Redo()
     {
         if (Unity.Netcode.NetworkManager.Singleton?.IsHost != true || _redo.Count == 0) return;
         var action = _redo.Pop(); IsRestoring = true;
-        try { action.Repeat(); _actions.Add(action); DiceUI.Instance?.ShowToolNotice("Повторено: " + action.Label); }
+        try { action.Repeat(); _actions.Add(action); DiceUI.Instance?.ShowToolNotice("Повторено: " + action.Label, TableNoticeKind.Success); }
         catch (Exception ex) { Debug.LogWarning("[Redo] " + ex.Message); _redo.Clear(); }
         finally { IsRestoring = false; }
     }

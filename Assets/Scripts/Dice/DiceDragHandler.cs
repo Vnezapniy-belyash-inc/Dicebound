@@ -660,7 +660,7 @@ public class DiceDragHandler : MonoBehaviour
         if (_draggedToken != null && !_draggedToken.IsLocalDragActive(_tokenDragSequence))
         {
             _draggedToken = null;
-            DiceUI.Instance?.ShowToolNotice("Токен занят другим участником или захват завершён.");
+            DiceUI.Instance?.ShowToolNotice("Токен занят другим участником или захват завершён.", TableNoticeKind.Warning);
         }
         Vector3 previousCenter = GetDragSelectionCenter();
         bool removed = false;
@@ -680,7 +680,7 @@ public class DiceDragHandler : MonoBehaviour
         if (!removed) return;
         if (_selected.Count == 0) _isDragging = false;
         else _dragOffset += GetDragSelectionCenter() - previousCenter;
-        DiceUI.Instance?.ShowToolNotice("Часть кубиков занята другим участником или захват завершён.");
+        DiceUI.Instance?.ShowToolNotice("Часть кубиков занята другим участником или захват завершён.", TableNoticeKind.Warning);
     }
 
     private void OnDisable() => CancelActiveDrag();

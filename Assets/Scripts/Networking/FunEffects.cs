@@ -11,6 +11,11 @@ public class FunEffects : MonoBehaviour
 {
     private const string RequestMessage = "FunRequestV2", ShowMessage = "FunShowV2";
     private const ulong MapTarget = ulong.MaxValue;
+    private const float WheelInnerRatio = .31f;
+    private const float StampMaxWidth = 560f;
+    private const float StampMaxHeight = 240f;
+    private const float StampHorizontalPadding = 44f;
+    private const float StampVerticalPadding = 24f;
     private static readonly string[] Labels = { "Помидор", "Яйцо", "Штамп" };
     private static readonly UTF8Encoding TextEncoding = new(false, true);
     public static FunEffects Instance { get; private set; }
@@ -30,6 +35,8 @@ public class FunEffects : MonoBehaviour
     private readonly Dictionary<ulong, float> _nextRequest = new();
     private readonly List<Reaction> _reactions = new();
     private Texture2D[] _wheelTextures;
+    private GUIStyle _wheelLabel, _stampTitle, _stampHint, _stampField, _stampPrimary, _stampSecondary;
+    private float WheelRadius => Mathf.Min(150 * LocalUiScale.Value, Mathf.Min(Screen.width, Screen.height) * .48f);
     private int _mapEpoch = int.MinValue;
     private sealed class Reaction
     {
@@ -38,7 +45,10 @@ public class FunEffects : MonoBehaviour
         public Vector3 Point, LocalPoint;
         public Color Color;
         public float Started;
-        public string Text, WrappedText;
+        public string Text;
+        public GUIContent StampContent;
+        public GUIStyle StampStyle;
+        public Vector2 StampLayoutSize;
     }
 
     public static void EnsureInstance()
@@ -93,7 +103,7 @@ public class FunEffects : MonoBehaviour
             { CancelWheel(); return; }
             Vector2 pointer = ToGui(mouse.position.ReadValue());
             if ((pointer - _openingPointer).sqrMagnitude > 64) _moved = true;
-            _selected = _moved ? SelectSector(pointer - _wheelCenter, 42 * LocalUiScale.Value, 160 * LocalUiScale.Value) : -1;
+            _selected = _moved ? SelectSector(pointer - _wheelCenter, WheelRadius * WheelInnerRatio) : -1;
             if (!keyboard.tKey.isPressed)
             {
                 int chosen = _selected;
@@ -113,16 +123,16 @@ public class FunEffects : MonoBehaviour
             && !(MeasurementTool.Instance != null && MeasurementTool.Instance.IsLocalActive)
             && !(EffectPaintTool.Instance != null && EffectPaintTool.Instance.IsActive) && PickTarget(mouse.position.ReadValue()))
         {
-            float radius = 150 * LocalUiScale.Value;
+            float radius = WheelRadius;
             _openingPointer = ToGui(mouse.position.ReadValue());
             _wheelCenter = new Vector2(Mathf.Clamp(_openingPointer.x, radius, Mathf.Max(radius, Screen.width - radius)),
                 Mathf.Clamp(_openingPointer.y, radius, Mathf.Max(radius, Screen.height - radius)));
             _open = true; _moved = false; _selected = -1;
         }
     }
-    public static int SelectSector(Vector2 delta, float innerRadius, float outerRadius)
+    public static int SelectSector(Vector2 delta, float innerRadius)
     {
-        if (delta.magnitude <= innerRadius || delta.magnitude > outerRadius) return -1;
+        if (delta.sqrMagnitude <= innerRadius * innerRadius) return -1;
         float sectorSize = 360f / Labels.Length;
         float degrees = Mathf.Repeat(Mathf.Atan2(delta.x, -delta.y) * Mathf.Rad2Deg + sectorSize / 2, 360);
         return Mathf.Min(Labels.Length - 1, Mathf.FloorToInt(degrees / sectorSize));
@@ -286,34 +296,80 @@ public class FunEffects : MonoBehaviour
     {
         GUI.depth = -800;
         Color previousColor = GUI.color;
-        GUI.color = new Color(0, 0, 0, .65f);
-        GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), Texture2D.whiteTexture);
         GUI.color = Color.white;
-        float scale = Mathf.Max(.25f, Mathf.Min(LocalUiScale.Value, Screen.width / 620f, Screen.height / 260f));
-        var rect = new Rect((Screen.width - 560 * scale) / 2, (Screen.height - 220 * scale) / 2, 560 * scale, 220 * scale);
-        GUI.Box(rect, "", VttUiSkin.ImGuiPanel);
-        var label = new GUIStyle(GUI.skin.label) { fontSize = Mathf.RoundToInt(16 * scale), richText = false, wordWrap = true };
-        label.normal.textColor = Color.white;
-        GUI.Label(new Rect(rect.x + 20 * scale, rect.y + 16 * scale, rect.width - 40 * scale, 28 * scale), "Текст штампа", label);
+        Color dim = AtlasUi.Forest;
+        dim.a = .65f;
+        FillGuiRect(new Rect(0, 0, Screen.width, Screen.height), dim);
+        float scale = Mathf.Min(LocalUiScale.Value, Screen.width / 500f, Screen.height / 235f);
+        var rect = new Rect((Screen.width - 460 * scale) / 2, (Screen.height - 195 * scale) / 2, 460 * scale, 195 * scale);
+        Rect Place(float x, float y, float width, float height) =>
+            new Rect(rect.x + x * scale, rect.y + y * scale, width * scale, height * scale);
+
+        FillGuiRect(Place(0, 5, 460, 195), AtlasUi.Forest);
+        FillGuiRect(rect, AtlasUi.Copper);
+        FillGuiRect(Place(1, 1, 458, 193), AtlasUi.Paper);
+        FillGuiRect(Place(1, 1, 458, 49), AtlasUi.Forest);
+
+        _stampTitle ??= MakeGuiLabel(AtlasUi.Light, TextAnchor.MiddleLeft, AtlasUi.Title);
+        _stampHint ??= MakeGuiLabel(AtlasUi.Muted, TextAnchor.MiddleRight, AtlasUi.Body);
+        _stampTitle.fontSize = Mathf.Max(1, Mathf.RoundToInt(24 * scale));
+        _stampHint.fontSize = Mathf.Max(1, Mathf.RoundToInt(13 * scale));
+        GUI.Label(Place(20, 1, 420, 49), "Текст штампа", _stampTitle);
         Event e = Event.current;
         bool confirmKey = e.type == EventType.KeyDown && (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter);
         bool cancelKey = e.type == EventType.KeyDown && e.keyCode == KeyCode.Escape;
         // Handle Enter before the field consumes the event; it confirms rather than inserting a newline.
         if (confirmKey || cancelKey) e.Use();
+        if (_stampField == null)
+            _stampField = MakeGuiLabel(AtlasUi.Ink, TextAnchor.MiddleLeft, AtlasUi.Body);
+        _stampField.fontSize = Mathf.Max(1, Mathf.RoundToInt(18 * scale));
+        int inset = Mathf.RoundToInt(12 * scale);
+        if (_stampField.padding.left != inset)
+            _stampField.padding = new RectOffset(inset, inset, 0, 0);
+        FillGuiRect(Place(20, 65, 420, 42), AtlasUi.Copper);
+        FillGuiRect(Place(21, 66, 418, 40), Color.Lerp(AtlasUi.Paper, Color.white, .6f));
         GUI.SetNextControlName("CustomStampText");
-        var fieldStyle = new GUIStyle(GUI.skin.textField) { fontSize = Mathf.RoundToInt(18 * scale), richText = false };
-        _stampInput = GUI.TextField(new Rect(rect.x + 20 * scale, rect.y + 54 * scale, rect.width - 40 * scale, 40 * scale), _stampInput, StampText.MaxLength, fieldStyle);
+        Color cursorColor = GUI.skin.settings.cursorColor;
+        GUI.skin.settings.cursorColor = AtlasUi.Ink;
+        _stampInput = GUI.TextField(Place(21, 66, 418, 40), _stampInput, StampText.MaxLength, _stampField);
+        GUI.skin.settings.cursorColor = cursorColor;
         if (_focusStampInput && e.type == EventType.Repaint) { GUI.FocusControl("CustomStampText"); _focusStampInput = false; }
-        GUI.Label(new Rect(rect.x + 20 * scale, rect.y + 106 * scale, rect.width - 40 * scale, 48 * scale),
-            $"{_stampInput.Length}/{StampText.MaxLength} · длинная надпись переносится на две строки", label);
+        GUI.Label(Place(20, 109, 420, 25), $"{_stampInput.Length}/{StampText.MaxLength}", _stampHint);
+
+        _stampPrimary ??= MakeGuiLabel(AtlasUi.Light, TextAnchor.MiddleCenter, AtlasUi.Body);
+        _stampSecondary ??= MakeGuiLabel(AtlasUi.Ink, TextAnchor.MiddleCenter, AtlasUi.Body);
+        _stampPrimary.fontSize = _stampSecondary.fontSize = Mathf.Max(1, Mathf.RoundToInt(15 * scale));
         bool enabled = GUI.enabled;
         GUI.enabled = enabled && StampText.Normalize(_stampInput) != null;
-        bool confirm = GUI.Button(new Rect(rect.x + 20 * scale, rect.yMax - 54 * scale, 250 * scale, 36 * scale), "Подтвердить · Enter", VttUiSkin.ImGuiButton);
+        bool confirm = DrawStampButton(Place(234, 143, 206, 36), "Поставить · Enter", AtlasUi.Forest, _stampPrimary);
         GUI.enabled = enabled;
-        bool cancel = GUI.Button(new Rect(rect.xMax - 270 * scale, rect.yMax - 54 * scale, 250 * scale, 36 * scale), "Отмена · Esc", VttUiSkin.ImGuiButton);
+        bool cancel = DrawStampButton(Place(20, 143, 202, 36), "Отмена · Esc", AtlasUi.Raised, _stampSecondary);
         if (cancel || cancelKey) { CancelInput(); GUI.FocusControl(null); }
         else if (confirm || confirmKey) { ConfirmStampInput(); if (!_editingStamp) GUI.FocusControl(null); }
         GUI.color = previousColor;
+    }
+
+    private static GUIStyle MakeGuiLabel(Color color, TextAnchor alignment, Font font)
+    {
+        var style = new GUIStyle { alignment = alignment, font = font, clipping = TextClipping.Clip };
+        style.normal.textColor = style.hover.textColor = style.active.textColor = style.focused.textColor = color;
+        return style;
+    }
+
+    private static void FillGuiRect(Rect rect, Color color)
+    {
+        Color previous = GUI.color;
+        GUI.color = color;
+        GUI.DrawTexture(rect, Texture2D.whiteTexture);
+        GUI.color = previous;
+    }
+
+    private static bool DrawStampButton(Rect rect, string text, Color color, GUIStyle style)
+    {
+        if (!GUI.enabled) color = Color.Lerp(color, AtlasUi.Muted, .72f);
+        else if (rect.Contains(Event.current.mousePosition)) color = Color.Lerp(color, AtlasUi.Copper, .28f);
+        FillGuiRect(rect, color);
+        return GUI.Button(rect, text, style);
     }
     private void DrawReaction(Reaction r)
     {
@@ -330,8 +386,16 @@ public class FunEffects : MonoBehaviour
         float worldWidth = grid != null ? grid.cellSize : 1;
         float size = Mathf.Max(4, Vector3.Distance(projected, camera.WorldToScreenPoint(world + camera.transform.right * worldWidth))) * .75f;
         if (token != null && token.TryGetScreenRect(camera, out var tokenRect)) size = tokenRect.width * .7f;
-        if (r.Type >= 2) size = Mathf.Max(30, size) * 1.5f;
-        Vector2 stampSize = r.Type == 2 ? GetStampLayout(r, size, out _) : Vector2.zero;
+        float stampScale = 1;
+        Vector2 stampSize = Vector2.zero;
+        if (r.Type >= 2)
+        {
+            size = Mathf.Max(30, size) * 1.5f;
+            if (r.StampStyle == null) PrepareStampText(r);
+            stampScale = Mathf.Min(size / 200f,
+                Mathf.Min(Screen.width * .74f / r.StampLayoutSize.x, Screen.height * .74f / r.StampLayoutSize.y));
+            stampSize = r.StampLayoutSize * stampScale;
+        }
         float age = Time.unscaledTime - r.Started;
         float flight = r.Type < 2 ? .8f : .65f;
         Color previousColor = GUI.color; Matrix4x4 previousMatrix = GUI.matrix;
@@ -359,7 +423,7 @@ public class FunEffects : MonoBehaviour
             else
             {
                 float impact = Mathf.Clamp01((age - flight) / .12f);
-                DrawStamp(r, end, size * Mathf.Lerp(1.16f, 1, impact), alpha * Mathf.Lerp(.3f, 1, impact));
+                DrawStamp(r, end, stampScale * Mathf.Lerp(1.16f, 1, impact), alpha * Mathf.Lerp(.3f, 1, impact));
                 if (age - flight < .25f) DrawFlyingStamp(r, end, size, stampSize, (age - flight) / .25f, true);
             }
         }
@@ -392,48 +456,54 @@ public class FunEffects : MonoBehaviour
         Block(new Rect(center.x - width * .46f, center.y + plateHeight * .34f, width * .92f, plateHeight * .16f), r.Color);
         GUI.matrix = previousMatrix; GUI.color = previousColor;
     }
-    private static Vector2 GetStampLayout(Reaction r, float size, out GUIStyle style)
+    private static void PrepareStampText(Reaction reaction)
     {
-        style = new GUIStyle(GUI.skin.label) {
-            fontSize = 100, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter,
-            richText = false, wordWrap = false, padding = new RectOffset(0, 0, 0, 0)
-        };
-        style.normal.textColor = Color.white;
-        if (r.WrappedText == null)
+        var style = MakeGuiLabel(Color.white, TextAnchor.MiddleCenter, AtlasUi.Body);
+        style.fontStyle = FontStyle.Bold;
+        var measure = new GUIContent();
+        float Measure(string text)
         {
-            var measureStyle = style;
-            r.WrappedText = StampText.Wrap(r.Text, text => measureStyle.CalcSize(new GUIContent(text)).x, 1200);
+            measure.text = text;
+            return style.CalcSize(measure).x;
         }
-        style.fontSize = Mathf.Max(1, Mathf.RoundToInt(size * .32f));
-        float padding = Mathf.Max(6, size * .15f);
-        float maxWidth = Mathf.Max(40, Mathf.Min(size * 5, Screen.width * .8f));
-        float natural = 0;
-        foreach (string line in r.WrappedText.Split('\n')) natural = Mathf.Max(natural, style.CalcSize(new GUIContent(line)).x);
-        if (natural + 2 * padding > maxWidth)
-            style.fontSize = Mathf.Max(1, Mathf.FloorToInt(style.fontSize * Mathf.Max(1, maxWidth - 2 * padding) / natural));
-        float width = 0;
-        foreach (string line in r.WrappedText.Split('\n')) width = Mathf.Max(width, style.CalcSize(new GUIContent(line)).x);
-        int lines = r.WrappedText.Contains("\n") ? 2 : 1;
-        return new Vector2(Mathf.Max(Mathf.Min(size * 2, maxWidth), width + 2 * padding), style.lineHeight * lines + 2 * padding);
+
+        const float textWidth = StampMaxWidth - 2 * StampHorizontalPadding;
+        const float textHeight = StampMaxHeight - 2 * StampVerticalPadding;
+        string wrapped;
+        int lines;
+        style.fontSize = 88;
+        while (true)
+        {
+            wrapped = StampText.Wrap(reaction.Text, Measure, textWidth, out lines);
+            if (lines * style.lineHeight <= textHeight || style.fontSize <= 4) break;
+            style.fontSize -= 4;
+        }
+
+        float widestLine = 0;
+        foreach (string line in wrapped.Split('\n'))
+            widestLine = Mathf.Max(widestLine, Measure(line));
+        float height = lines * style.lineHeight + 2 * StampVerticalPadding;
+        float width = Mathf.Max(330f, widestLine + 2 * StampHorizontalPadding, height * 2);
+        reaction.StampLayoutSize = new Vector2(width, Mathf.Max(height, width / 3.6f));
+        reaction.StampStyle = style;
+        reaction.StampContent = new GUIContent(wrapped);
     }
-    private static void DrawStamp(Reaction r, Vector2 point, float size, float alpha)
+    private static void DrawStamp(Reaction r, Vector2 point, float scale, float alpha)
     {
-        Vector2 dimensions = GetStampLayout(r, size, out var style);
-        var rect = new Rect(point - dimensions / 2, dimensions);
-        float border = Mathf.Max(4, size * .07f);
+        var rect = new Rect(point - r.StampLayoutSize / 2, r.StampLayoutSize);
+        const float border = 13;
         GUI.color = new Color(r.Color.r, r.Color.g, r.Color.b, alpha);
         Matrix4x4 previous = GUI.matrix;
+        GUIUtility.ScaleAroundPivot(Vector2.one * scale, point);
         GUIUtility.RotateAroundPivot(-10, point);
         var ink = Texture2D.whiteTexture;
         GUI.DrawTexture(new Rect(rect.x, rect.y, rect.width, border), ink);
         GUI.DrawTexture(new Rect(rect.x, rect.yMax - border, rect.width, border), ink);
         GUI.DrawTexture(new Rect(rect.x, rect.y, border, rect.height), ink);
         GUI.DrawTexture(new Rect(rect.xMax - border, rect.y, border, rect.height), ink);
-        // Extra ink weight complements the bold font without interpreting user text as markup.
-        float spread = Mathf.Max(.5f, size * .0075f);
-        GUI.Label(new Rect(rect.x - spread, rect.y, rect.width, rect.height), r.WrappedText, style);
-        GUI.Label(new Rect(rect.x + spread, rect.y, rect.width, rect.height), r.WrappedText, style);
-        GUI.Label(rect, r.WrappedText, style);
+        var textRect = new Rect(rect.x + StampHorizontalPadding, rect.y + StampVerticalPadding,
+            rect.width - 2 * StampHorizontalPadding, rect.height - 2 * StampVerticalPadding);
+        GUI.Label(textRect, r.StampContent, r.StampStyle);
         GUI.matrix = previous;
     }
     private void DrawWheel()
@@ -444,29 +514,44 @@ public class FunEffects : MonoBehaviour
             _wheelTextures = new Texture2D[Labels.Length + 1];
             for (int selection = -1; selection < Labels.Length; selection++)
             {
-                var texture = new Texture2D(256, 256, TextureFormat.RGBA32, false);
+                var texture = new Texture2D(256, 256, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp };
                 var pixels = new Color32[256 * 256];
                 for (int y = 0; y < 256; y++) for (int x = 0; x < 256; x++)
                 {
                     var p = new Vector2(x - 127.5f, 127.5f - y);
-                    int sector = SelectSector(p, 36, 124);
-                    pixels[y * 256 + x] = p.magnitude > 124 ? Color.clear : sector == selection && selection >= 0
-                        ? new Color(.18f, .48f, .62f, .98f) : new Color(.055f, .075f, .1f, .96f);
+                    const float inner = 128 * WheelInnerRatio;
+                    float distance = p.magnitude;
+                    if (distance >= 127) continue;
+                    int sector = SelectSector(p, inner);
+                    Color color;
+                    if (distance >= 125) color = AtlasUi.Forest;
+                    else if (distance >= 121 || Mathf.Abs(distance - inner) < 1.25f) color = AtlasUi.Copper;
+                    else if (sector < 0) color = selection < 0 ? AtlasUi.Copper : AtlasUi.Forest;
+                    else if (sector != SelectSector(p + Vector2.right * 1.5f, inner)
+                        || sector != SelectSector(p + Vector2.up * 1.5f, inner)) color = AtlasUi.Copper;
+                    else color = sector == selection ? AtlasUi.Forest : AtlasUi.Paper;
+                    pixels[y * 256 + x] = color;
                 }
                 texture.SetPixels32(pixels); texture.Apply(false, true); _wheelTextures[selection + 1] = texture;
             }
         }
-        float radius = 150 * LocalUiScale.Value;
+        float radius = WheelRadius;
+        Color previous = GUI.color;
+        GUI.color = Color.white;
         GUI.DrawTexture(new Rect(_wheelCenter.x - radius, _wheelCenter.y - radius, radius * 2, radius * 2), _wheelTextures[_selected + 1]);
-        var style = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, fontSize = Mathf.RoundToInt(13 * LocalUiScale.Value), fontStyle = FontStyle.Bold };
-        style.normal.textColor = Color.white;
+        _wheelLabel ??= MakeGuiLabel(AtlasUi.Ink, TextAnchor.MiddleCenter, AtlasUi.Body);
+        _wheelLabel.fontSize = Mathf.Max(1, Mathf.RoundToInt(radius * .105f));
+        _wheelLabel.fontStyle = FontStyle.Bold;
         for (int i = 0; i < Labels.Length; i++)
         {
             float angle = i * (360f / Labels.Length) * Mathf.Deg2Rad;
             Vector2 center = _wheelCenter + new Vector2(Mathf.Sin(angle), -Mathf.Cos(angle)) * radius * .65f;
-            GUI.Label(new Rect(center.x - radius * .43f, center.y - 18, radius * .86f, 36), Labels[i], style);
+            _wheelLabel.normal.textColor = i == _selected ? AtlasUi.Light : AtlasUi.Ink;
+            GUI.Label(new Rect(center.x - radius * .43f, center.y - radius * .12f, radius * .86f, radius * .24f), Labels[i], _wheelLabel);
         }
-        GUI.Label(new Rect(_wheelCenter.x - radius * .3f, _wheelCenter.y - 20, radius * .6f, 40), "Отмена", style);
+        _wheelLabel.normal.textColor = _selected < 0 ? Color.white : AtlasUi.Light;
+        GUI.Label(new Rect(_wheelCenter.x - radius * .3f, _wheelCenter.y - radius * .12f, radius * .6f, radius * .24f), "Отмена", _wheelLabel);
+        GUI.color = previous;
     }
     private void OnDestroy()
     {

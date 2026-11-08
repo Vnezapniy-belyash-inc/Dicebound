@@ -94,7 +94,8 @@ public partial class TokenController
     }
 
     [Rpc(SendTo.SpecifiedInParams)]
-    private void MovementNoticeRpc(string message, RpcParams rpcParams = default) => DiceUI.Instance?.ShowToolNotice(message);
+    private void MovementNoticeRpc(string message, RpcParams rpcParams = default) =>
+        DiceUI.Instance?.ShowToolNotice(message, TableNoticeKind.Warning);
 
     [Rpc(SendTo.SpecifiedInParams)]
     private void MovementPromptRpc(int request, bool approval, RpcParams rpcParams = default) =>

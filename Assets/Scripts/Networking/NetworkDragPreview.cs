@@ -25,9 +25,12 @@ public sealed class NetworkDragPreview : MonoBehaviour
     private Quaternion _rotation;
     private float _deadline;
     private NetworkDragTransform _networkTransform;
+    private Rigidbody _throwBody;
+    private MeshCollider _throwSourceCollider;
     public int Gesture { get; private set; }
     public bool IsActive => _visual != null;
     public bool IsDragging => IsActive && !_awaitingCommit;
+    public bool IsPredictingStep { get; private set; }
     public Vector3 Position => IsActive ? _visual.position : transform.position;
     public Transform DisplayTransform => IsActive ? _visual : transform;
 
@@ -55,6 +58,17 @@ public sealed class NetworkDragPreview : MonoBehaviour
         _visual.SetPositionAndRotation(position, _rotation);
         _visual.localScale = transform.lossyScale;
         CloneBranch(transform, _visual);
+        return true;
+    }
+
+    public bool PredictStep(int gesture, Vector3 position)
+    {
+        if (IsActive ? !IsPredictingStep : !Begin(gesture)) return false;
+        IsPredictingStep = true;
+        Gesture = gesture;
+        _hasCommit = false;
+        _visual.SetPositionAndRotation(position, _rotation);
+        WaitForFinish(gesture);
         return true;
     }
 
@@ -165,9 +179,39 @@ public sealed class NetworkDragPreview : MonoBehaviour
         _deadline = Time.unscaledTime + 5f;
     }
 
+    public Rigidbody BeginPhysicalThrow(Vector3 position, Rigidbody source, MeshCollider sourceCollider)
+    {
+        _visual.position = position;
+        var collider = _visual.gameObject.AddComponent<MeshCollider>();
+        collider.sharedMesh = sourceCollider.sharedMesh;
+        collider.convex = true;
+        collider.sharedMaterial = sourceCollider.sharedMaterial;
+        _throwSourceCollider = sourceCollider;
+        sourceCollider.enabled = false;
+
+        _throwBody = _visual.gameObject.AddComponent<Rigidbody>();
+        _throwBody.mass = source.mass;
+        _throwBody.linearDamping = source.linearDamping;
+        _throwBody.angularDamping = source.angularDamping;
+        _throwBody.useGravity = source.useGravity;
+        _throwBody.interpolation = RigidbodyInterpolation.Interpolate;
+        _throwBody.collisionDetectionMode = source.collisionDetectionMode;
+        _deadline = float.PositiveInfinity;
+        return _throwBody;
+    }
+
+    public void CompletePhysicalThrow(int gesture, int tick, Vector3 position)
+    {
+        if (_throwBody == null || Gesture != gesture) return;
+        _hasCommit = true;
+        _commitTick = tick;
+        _commitPosition = position;
+        _deadline = Time.unscaledTime + 5f;
+    }
+
     public void Complete(int gesture, int tick, Vector3 position, Quaternion rotation, bool isServer)
     {
-        if (!IsActive || Gesture != gesture) return;
+        if (!IsActive || Gesture != gesture || _throwBody != null) return;
         _awaitingCommit = true;
         _hasCommit = true;
         _commitTick = tick;
@@ -181,7 +225,8 @@ public sealed class NetworkDragPreview : MonoBehaviour
     private void LateUpdate()
     {
         if (!IsActive) return;
-        if (_hasCommit && _networkTransform != null && _networkTransform.HasCommit(_commitTick, _commitPosition))
+        bool committed = _hasCommit && _networkTransform != null && _networkTransform.HasCommit(_commitTick, _commitPosition);
+        if (committed)
         {
             Stop();
             return;
@@ -213,6 +258,10 @@ public sealed class NetworkDragPreview : MonoBehaviour
         _visual = null;
         _awaitingCommit = false;
         _hasCommit = false;
+        IsPredictingStep = false;
+        if (_throwSourceCollider != null) _throwSourceCollider.enabled = true;
+        _throwSourceCollider = null;
+        _throwBody = null;
     }
 
     private void OnDisable() => Stop();

@@ -11,6 +11,7 @@ public class GameNetworkManager : MonoBehaviour
     public static GameNetworkManager Instance { get; private set; }
 
     private NetworkManager _networkManager;
+    internal LobbyChat Chat { get; private set; }
 
     private void Awake()
     {
@@ -18,6 +19,7 @@ public class GameNetworkManager : MonoBehaviour
         Instance = this;
         DontDestroyOnLoad(gameObject);
         _networkManager = GetComponent<NetworkManager>();
+        if (_networkManager != null) Chat = new LobbyChat(_networkManager);
 #if !UNITY_EDITOR
         Application.wantsToQuit += PreserveOnQuit;
 #endif
@@ -29,6 +31,7 @@ public class GameNetworkManager : MonoBehaviour
         Application.wantsToQuit -= PreserveOnQuit;
 #endif
         UnregisterHeartbeatHandlers();
+        Chat?.Dispose();
         if (Instance == this) Instance = null;
     }
 

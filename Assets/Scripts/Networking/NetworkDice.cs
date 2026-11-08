@@ -1,10 +1,11 @@
 using System;
+using System.Collections.Generic;
 using Unity.Netcode;
 using Unity.Netcode.Components;
 using UnityEngine;
 
 /// <summary>
-/// Сетевой кубик. Создатель отвечает за удаление, сервер — за перетаскивание и физику.
+/// Сетевой кубик. Сервер выдаёт право броска, бросающий считает его физику.
 /// Тип: InitClientRpc + NetworkVariable для late-join.
 /// </summary>
 [RequireComponent(typeof(Rigidbody))]
@@ -14,6 +15,28 @@ using UnityEngine;
 [RequireComponent(typeof(MeshCollider))]
 public class NetworkDice : NetworkDraggable, IDice
 {
+    private const float MaxLaunchSpeed = 30f;
+    private const float MaxLaunchSpin = 20f;
+    private const float ThrowSendInterval = 1f / 30f;
+    private const float ThrowPlaybackDelay = .1f;
+    private const float ThrowPacketTimeout = 3f;
+    private const float MaxThrowDuration = 30f;
+
+    private readonly struct ThrowPose
+    {
+        public readonly float Time;
+        public readonly Vector3 Position;
+        public readonly Quaternion Rotation;
+        public readonly bool Final;
+
+        public ThrowPose(float time, Vector3 position, Quaternion rotation, bool final)
+        {
+            Time = time;
+            Position = position;
+            Rotation = rotation;
+            Final = final;
+        }
+    }
     // IDice
     public Rigidbody Rigidbody => _rb;
     public DieType DieType { get; private set; }
@@ -60,6 +83,15 @@ public class NetworkDice : NetworkDraggable, IDice
     private bool _didInit;
     public bool IsReady => IsSpawned && _didInit;
     private ulong _lastThrower;
+    private Rigidbody _localThrowBody;
+    private int _localThrowGesture, _remoteThrowGesture;
+    private float _localThrowStart, _nextThrowSend;
+    private ulong _remoteThrowClient = NetworkDragLease.NoController;
+    private float _remoteThrowStart, _lastThrowPacket, _playbackStart, _latestPoseTime;
+    private bool _receivedFinalPose;
+    private ThrowPose _playedPose;
+    private readonly Queue<ThrowPose> _throwPoses = new();
+    private bool HasRemoteThrow => _remoteThrowClient != NetworkDragLease.NoController;
 
     public void StartRoll()
     {
@@ -127,6 +159,16 @@ public class NetworkDice : NetworkDraggable, IDice
         _netDieType.OnValueChanged += (oldVal, newVal) => TryInitializeMeshFromNetworkType(newVal);
 
         StartCoroutine(DeferredMeshInit());
+    }
+
+    public override void OnNetworkDespawn()
+    {
+        _localThrowGesture = 0;
+        _localThrowBody = null;
+        _remoteThrowClient = NetworkDragLease.NoController;
+        _throwPoses.Clear();
+        IsRolling = false;
+        base.OnNetworkDespawn();
     }
 
     private System.Collections.IEnumerator DeferredMeshInit()
@@ -264,11 +306,30 @@ public class NetworkDice : NetworkDraggable, IDice
         }
     }
 
-    protected override bool CanStartServerDrag => _didInit && _rb != null;
+    protected override bool CanStartLocalDrag => _localThrowBody == null;
+    protected override bool CanStartServerDrag => _didInit && _rb != null && !HasRemoteThrow;
+
+    public void ThrowDrag(int gesture, Vector3 position, Vector3 velocity, Vector3 spin)
+    {
+        if (!IsSpawned || !IsLocalDragActive(gesture) || !ValidDragVector(position)
+            || !ValidDragVector(velocity) || !ValidDragVector(spin)) return;
+        velocity = Vector3.ClampMagnitude(velocity, MaxLaunchSpeed);
+        spin = Vector3.ClampMagnitude(spin, MaxLaunchSpin);
+        FinishDrag(gesture, position, velocity, spin, cancel: false);
+        if (IsServer) return;
+
+        _localThrowBody = DragPreview.BeginPhysicalThrow(position, _rb, GetComponent<MeshCollider>());
+        _localThrowBody.linearVelocity = velocity;
+        _localThrowBody.angularVelocity = spin;
+        _localThrowGesture = gesture;
+        _localThrowStart = _nextThrowSend = Time.unscaledTime;
+        StartRoll();
+    }
 
     protected override void OnServerDragStarted()
     {
         IsRolling = false;
+        _rb.interpolation = RigidbodyInterpolation.None;
         if (!_rb.isKinematic)
         {
             _rb.linearVelocity = Vector3.zero;
@@ -289,8 +350,21 @@ public class NetworkDice : NetworkDraggable, IDice
         }
         _lastThrower = FinishingDragClient;
         StartRoll();
-        _rb.linearVelocity = Vector3.ClampMagnitude(velocity, 30f);
-        _rb.angularVelocity = Vector3.ClampMagnitude(spin, 20f);
+        if (FinishingDragClient != NetworkManager.LocalClientId)
+        {
+            _rb.isKinematic = true;
+            _remoteThrowClient = FinishingDragClient;
+            _remoteThrowGesture = FinishingDragGesture;
+            _remoteThrowStart = _lastThrowPacket = Time.unscaledTime;
+            _latestPoseTime = -1f;
+            _receivedFinalPose = false;
+            _throwPoses.Clear();
+            _playedPose = new ThrowPose(0f, transform.position, transform.rotation, false);
+            return;
+        }
+        _rb.interpolation = RigidbodyInterpolation.Interpolate;
+        _rb.linearVelocity = Vector3.ClampMagnitude(velocity, MaxLaunchSpeed);
+        _rb.angularVelocity = Vector3.ClampMagnitude(spin, MaxLaunchSpin);
     }
 
     protected override void OnServerDragAborted()
@@ -314,13 +388,14 @@ public class NetworkDice : NetworkDraggable, IDice
 
     private void RollOnServer(ulong clientId)
     {
-        if (!_didInit) return;
+        if (!_didInit || HasRemoteThrow) return;
         UpdateDragState();
         if (DragLease.IsHeld && DragLease.Controller != clientId) return;
         if (DragLease.IsHeld) AbortServerDrag();
         _lastThrower = clientId;
 
         _rb.isKinematic = false;
+        _rb.interpolation = RigidbodyInterpolation.Interpolate;
         _rb.linearVelocity = Vector3.zero;
         _rb.angularVelocity = Vector3.zero;
         IsRolling = true;
@@ -340,22 +415,146 @@ public class NetworkDice : NetworkDraggable, IDice
     {
         UpdateDragState();
 
-        if (!IsServer || !_didInit || !IsRolling || HasResult) return;
-
-        bool isSettled = _rb.linearVelocity.magnitude < stopThreshold
-                      && _rb.angularVelocity.magnitude < stopThreshold;
-
-        if (isSettled)
+        if (!IsSpawned || !_didInit) return;
+        if (!IsServer)
         {
-            _settleTimer += Time.deltaTime;
-            if (_settleTimer >= settleTime)
-                DetermineResult();
+            UpdateLocalThrow();
+            return;
         }
-        else
+        if (HasRemoteThrow)
         {
-            _settleTimer = 0f;
+            UpdateRemoteThrow();
+            return;
+        }
+        if (!IsRolling || HasResult) return;
+
+        if (IsSettled(_rb)) DetermineResult();
+    }
+
+    private bool IsSettled(Rigidbody body)
+    {
+        bool stopped = body.linearVelocity.sqrMagnitude < stopThreshold * stopThreshold
+            && body.angularVelocity.sqrMagnitude < stopThreshold * stopThreshold;
+        _settleTimer = stopped ? _settleTimer + Time.deltaTime : 0f;
+        return _settleTimer >= settleTime;
+    }
+
+    private void UpdateLocalThrow()
+    {
+        if (_localThrowGesture == 0) return;
+        if (_localThrowBody == null || !DragPreview.IsActive || DragPreview.Gesture != _localThrowGesture)
+        {
+            _localThrowGesture = 0;
+            _localThrowBody = null;
+            IsRolling = false;
+            return;
+        }
+
+        float now = Time.unscaledTime;
+        float elapsed = now - _localThrowStart;
+        if (elapsed > MaxThrowDuration + ThrowPacketTimeout)
+        {
+            DragPreview.Stop();
+            _localThrowGesture = 0;
+            _localThrowBody = null;
+            IsRolling = false;
+            return;
+        }
+        if (!IsRolling) return;
+
+        if (IsSettled(_localThrowBody) || elapsed >= MaxThrowDuration)
+        {
+            Vector3 position = _localThrowBody.position;
+            Quaternion rotation = _localThrowBody.rotation;
+            _localThrowBody.isKinematic = true;
+            _localThrowBody.interpolation = RigidbodyInterpolation.None;
+            _localThrowBody.transform.SetPositionAndRotation(position, rotation);
+            IsRolling = false;
+            FinishPhysicalThrowRpc(_localThrowGesture, elapsed, position, rotation);
+        }
+        else if (now >= _nextThrowSend)
+        {
+            _nextThrowSend = Mathf.Max(now, _nextThrowSend + ThrowSendInterval);
+            PhysicalThrowPoseRpc(_localThrowGesture, elapsed, _localThrowBody.transform.position,
+                _localThrowBody.transform.rotation);
         }
     }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone, Delivery = RpcDelivery.Unreliable)]
+    private void PhysicalThrowPoseRpc(int gesture, float elapsed, Vector3 position, Quaternion rotation,
+        RpcParams rpcParams = default) =>
+        ReceiveThrowPose(rpcParams.Receive.SenderClientId, gesture, new ThrowPose(elapsed, position, rotation, false));
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void FinishPhysicalThrowRpc(int gesture, float elapsed, Vector3 position, Quaternion rotation,
+        RpcParams rpcParams = default) =>
+        ReceiveThrowPose(rpcParams.Receive.SenderClientId, gesture, new ThrowPose(elapsed, position, rotation, true));
+
+    private void ReceiveThrowPose(ulong sender, int gesture, ThrowPose pose)
+    {
+        float now = Time.unscaledTime;
+        if (!HasRemoteThrow || sender != _remoteThrowClient || gesture != _remoteThrowGesture || _receivedFinalPose
+            || !float.IsFinite(pose.Time) || pose.Time < 0f || pose.Time <= _latestPoseTime
+            || pose.Time > now - _remoteThrowStart + ThrowPacketTimeout
+            || !ValidDragVector(pose.Position)) return;
+        Quaternion rotation = pose.Rotation;
+        if (!(Mathf.Abs(Quaternion.Dot(rotation, rotation) - 1f) < .01f)) return;
+        if (!pose.Final && (_throwPoses.Count >= 32 || pose.Time - _latestPoseTime < ThrowSendInterval * .5f)) return;
+
+        if (_latestPoseTime < 0f) _playbackStart = now - pose.Time + ThrowPlaybackDelay;
+        _lastThrowPacket = now;
+        _latestPoseTime = pose.Time;
+        _receivedFinalPose = pose.Final;
+        _throwPoses.Enqueue(pose);
+    }
+
+    private void UpdateRemoteThrow()
+    {
+        float now = Time.unscaledTime;
+        if (!_receivedFinalPose && (!NetworkManager.ConnectedClients.ContainsKey(_remoteThrowClient)
+            || now - _lastThrowPacket > ThrowPacketTimeout
+            || now - _remoteThrowStart > MaxThrowDuration + ThrowPacketTimeout))
+        {
+            ulong client = _remoteThrowClient;
+            int gesture = _remoteThrowGesture;
+            _remoteThrowClient = NetworkDragLease.NoController;
+            _throwPoses.Clear();
+            _rb.isKinematic = false;
+            _rb.interpolation = RigidbodyInterpolation.Interpolate;
+            if (NetworkManager.ConnectedClients.ContainsKey(client))
+                RejectFinishRpc(gesture, RpcTarget.Single(client, RpcTargetUse.Temp));
+            return;
+        }
+
+        if (_latestPoseTime < 0f) return;
+        float time = now - _playbackStart;
+        while (_throwPoses.Count > 0 && _throwPoses.Peek().Time <= time)
+            _playedPose = _throwPoses.Dequeue();
+
+        if (_throwPoses.TryPeek(out ThrowPose next))
+        {
+            float blend = Mathf.InverseLerp(_playedPose.Time, next.Time, time);
+            transform.SetPositionAndRotation(Vector3.Lerp(_playedPose.Position, next.Position, blend),
+                Quaternion.Slerp(_playedPose.Rotation, next.Rotation, blend));
+            return;
+        }
+
+        transform.SetPositionAndRotation(_playedPose.Position, _playedPose.Rotation);
+        if (!_playedPose.Final) return;
+
+        ulong thrower = _remoteThrowClient;
+        _remoteThrowClient = NetworkDragLease.NoController;
+        var networkTransform = GetComponent<NetworkDragTransform>();
+        networkTransform.Teleport(transform.position, transform.rotation, transform.localScale);
+        if (NetworkManager.ConnectedClients.ContainsKey(thrower))
+            CompletePhysicalThrowRpc(_remoteThrowGesture, NetworkManager.NetworkTickSystem.ServerTime.Tick,
+                transform.position, RpcTarget.Single(thrower, RpcTargetUse.Temp));
+        DetermineResult();
+    }
+
+    [Rpc(SendTo.SpecifiedInParams)]
+    private void CompletePhysicalThrowRpc(int gesture, int tick, Vector3 position, RpcParams rpcParams = default) =>
+        DragPreview.CompletePhysicalThrow(gesture, tick, position);
 
     private void LateUpdate() =>
         DiceLabelSetup.UpdateBackFaceVisibility(_faceRenderers, _faces, DisplayTransform, _cam);

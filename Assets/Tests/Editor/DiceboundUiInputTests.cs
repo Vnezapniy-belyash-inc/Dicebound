@@ -13,35 +13,6 @@ public class DiceboundUiInputTests
     private static Type Runtime(string name) => Type.GetType(name + ", Assembly-CSharp", true);
     private static bool Gate(string property) => (bool)Runtime("GameplayInputGate").GetProperty(property).GetValue(null);
 
-    [Test]
-    public void CharacterImportRoundTripsTextAndRejectsInvalidFilesWithoutChangingSheet()
-    {
-        var root = new GameObject("Character import regression");
-        try
-        {
-            var data = Runtime("CharacterData");
-            var source = root.AddComponent(data);
-            var destinationObject = new GameObject("Destination"); destinationObject.transform.SetParent(root.transform);
-            var destination = destinationObject.AddComponent(data);
-            data.GetField("characterName").SetValue(source, "Алиса: хранительница северных ворот");
-            data.GetField("note1").SetValue(source, "Первая строка\nВторая: меч и щит");
-            data.GetField("strength").SetValue(source, 17);
-            string json = (string)Runtime("LssJsonConverter").GetMethod("ExportToLss").Invoke(null, new object[] { source });
-            var import = Runtime("CharacterSheetUI").GetMethod("ImportCharacterJson");
-            import.Invoke(null, new object[] { json, destination });
-            Assert.That(data.GetField("characterName").GetValue(destination), Is.EqualTo(data.GetField("characterName").GetValue(source)));
-            Assert.That(data.GetField("note1").GetValue(destination), Is.EqualTo(data.GetField("note1").GetValue(source)));
-            Assert.That(data.GetField("strength").GetValue(destination), Is.EqualTo(17));
-            string before = JsonUtility.ToJson(destination);
-            foreach (string invalid in new[] { "{", "{}", "{\"data\":\"{}\"}" })
-            {
-                Assert.Throws<TargetInvocationException>(() => import.Invoke(null, new object[] { invalid, destination }));
-                Assert.That(JsonUtility.ToJson(destination), Is.EqualTo(before));
-            }
-        }
-        finally { UnityEngine.Object.DestroyImmediate(root); }
-    }
-
     [UnityTearDown]
     public IEnumerator ExitRuntime() { if (Application.isPlaying) yield return new ExitPlayMode(); }
 

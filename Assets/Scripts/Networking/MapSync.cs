@@ -200,7 +200,7 @@ public class MapSync : NetworkBehaviour
         if (_retryCount >= MaxRetries)
         {
             Debug.LogError($"[MapSync] Map version {_incomingVersion} failed after {MaxRetries} retries");
-            DiceUI.Instance?.ShowToolNotice("Не удалось загрузить карту. Переподключитесь к сессии.");
+            DiceUI.Instance?.ShowToolNotice("Не удалось загрузить карту. Переподключитесь к сессии.", TableNoticeKind.Error);
             _receivingMap = false;
             _incomingChunks.Clear();
             _contiguousReceived = 0;
@@ -305,7 +305,7 @@ public class MapSync : NetworkBehaviour
         if (version == _mapVersion && generation == SendGeneration(clientId))
         {
             Debug.LogError($"[MapSync] Client {clientId} did not apply map version {version}");
-            DiceUI.Instance?.ShowToolNotice($"Игрок {clientId} не получил карту.");
+            DiceUI.Instance?.ShowToolNotice($"Игрок {clientId} не получил карту.", TableNoticeKind.Error);
             ImageTransferUI.Finish($"map-send-{clientId}", "Не удалось отправить карту");
         }
     }
@@ -676,7 +676,7 @@ internal static class NetworkTransferBudget
     private static int _totalBytes;
     private static readonly Dictionary<ulong, (double Time, double Credit)> Credits = new();
     private static double _globalTime, _globalCredit;
-    private const double BytesPerSecond = 128 * 1024;
+    private const double BytesPerSecond = 256 * 1024;
     private const double GlobalBytesPerSecond = 512 * 1024;
     private const double Burst = 6 * 1024;
 

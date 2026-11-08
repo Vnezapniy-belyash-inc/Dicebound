@@ -7,18 +7,19 @@ public class DiceboundFunTests
 {
     private static Type Runtime(string name) => Type.GetType(name + ", Assembly-CSharp", true);
 
-    [TestCase(0)] [TestCase(1)] [TestCase(2)]
-    public void WheelSelectsEachSector(int sector)
+    [TestCase(0, 100f)] [TestCase(1, 100f)] [TestCase(2, 100f)]
+    [TestCase(0, 450f)] [TestCase(1, 450f)] [TestCase(2, 450f)]
+    public void WheelSelectsEachSectorByDirection(int sector, float distance)
     {
         float angle = sector * 120 * Mathf.Deg2Rad;
-        var direction = new Vector2(Mathf.Sin(angle), -Mathf.Cos(angle)) * 100;
-        Assert.That(Runtime("FunEffects").GetMethod("SelectSector").Invoke(null, new object[] { direction, 42f, 160f }), Is.EqualTo(sector));
+        var direction = new Vector2(Mathf.Sin(angle), -Mathf.Cos(angle)) * distance;
+        Assert.That(Runtime("FunEffects").GetMethod("SelectSector").Invoke(null, new object[] { direction, 42f }), Is.EqualTo(sector));
     }
 
-    [TestCase(0f)] [TestCase(42f)] [TestCase(161f)]
-    public void CenterAndOutsideCancelWheel(float distance)
+    [TestCase(0f)] [TestCase(42f)]
+    public void CenterCancelsWheel(float distance)
     {
-        Assert.That(Runtime("FunEffects").GetMethod("SelectSector").Invoke(null, new object[] { new Vector2(0, -distance), 42f, 160f }), Is.EqualTo(-1));
+        Assert.That(Runtime("FunEffects").GetMethod("SelectSector").Invoke(null, new object[] { new Vector2(0, -distance), 42f }), Is.EqualTo(-1));
     }
 
     [TestCase("tomato")] [TestCase("egg")] [TestCase("tomato-splat")] [TestCase("egg-splat")]

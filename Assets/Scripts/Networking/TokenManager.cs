@@ -219,7 +219,7 @@ public class TokenManager : MonoBehaviour
             if (!_pendingRequests.ContainsKey(requestId)) yield break;
         }
         _pendingRequests.Remove(requestId);
-        DiceUI.Instance?.ShowToolNotice("Не удалось создать токен. Попробуйте ещё раз.");
+        DiceUI.Instance?.ShowToolNotice("Не удалось создать токен. Попробуйте ещё раз.", TableNoticeKind.Error);
     }
 
     private void OnSpawnTokenAck(ulong senderId, FastBufferReader reader)
@@ -230,7 +230,7 @@ public class TokenManager : MonoBehaviour
         reader.ReadValueSafe(out bool success);
         reader.ReadValueSafe(out ulong netId);
         if (!_pendingRequests.Remove(requestId)) return;
-        if (!success) DiceUI.Instance?.ShowToolNotice("Сервер не смог создать токен.");
+        if (!success) DiceUI.Instance?.ShowToolNotice("Сервер не смог создать токен.", TableNoticeKind.Error);
         else LateJoinSync.RequestObjectRecovery(netId);
     }
 

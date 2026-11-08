@@ -246,7 +246,7 @@ public class NetworkDiceManager : MonoBehaviour
 
             if ((i + 1) % 4 == 0) yield return null;
         }
-        if (failed > 0) DiceUI.Instance?.ShowToolNotice($"Не удалось запустить {failed} автоматических бросков d20.");
+        if (failed > 0) DiceUI.Instance?.ShowToolNotice($"Не удалось запустить {failed} автоматических бросков d20.", TableNoticeKind.Error);
     }
 
     private IEnumerator SendSpawnRequestRoutine(int requestId, DieType type, Vector3 pos)
@@ -273,7 +273,7 @@ public class NetworkDiceManager : MonoBehaviour
             if (!_pendingRequests.Contains(requestId)) yield break;
         }
         _pendingRequests.Remove(requestId);
-        DiceUI.Instance?.ShowToolNotice("Не удалось создать кубик. Попробуйте ещё раз.");
+        DiceUI.Instance?.ShowToolNotice("Не удалось создать кубик. Попробуйте ещё раз.", TableNoticeKind.Error);
     }
 
     private void OnSpawnDiceAck(ulong senderId, FastBufferReader reader)
@@ -284,7 +284,7 @@ public class NetworkDiceManager : MonoBehaviour
         reader.ReadValueSafe(out bool success);
         reader.ReadValueSafe(out ulong netId);
         if (!_pendingRequests.Remove(requestId)) return;
-        if (!success) DiceUI.Instance?.ShowToolNotice("Сервер не смог создать кубик.");
+        if (!success) DiceUI.Instance?.ShowToolNotice("Сервер не смог создать кубик.", TableNoticeKind.Error);
         else LateJoinSync.RequestObjectRecovery(netId);
     }
 

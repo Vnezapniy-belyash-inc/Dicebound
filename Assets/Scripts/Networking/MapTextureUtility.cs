@@ -15,6 +15,9 @@ public static class MapTextureUtility
         var input = source.GetRawTextureData<byte>();
         var output = result.GetRawTextureData<Color32>();
         int channels = source.format == TextureFormat.RGB24 ? 3 : 4;
+        // LoadImage decodes PNG into ARGB32 and JPEG into RGB24.
+        int redChannel = source.format == TextureFormat.ARGB32 ? 1 : 0;
+        int alphaChannel = redChannel == 1 ? 0 : 3;
         for (int y = 0; y < height; y++)
         {
             float sy = Mathf.Clamp((y + 0.5f) * sourceHeight / height - 0.5f, 0, sourceHeight - 1);
@@ -28,7 +31,8 @@ public static class MapTextureUtility
                 int a = (y0 * sourceWidth + x0) * channels, b = (y0 * sourceWidth + x1) * channels;
                 int c = (y1 * sourceWidth + x0) * channels, d = (y1 * sourceWidth + x1) * channels;
                 byte Blend(int channel) => (byte)Mathf.RoundToInt(Mathf.Lerp(Mathf.Lerp(input[a + channel], input[b + channel], fx), Mathf.Lerp(input[c + channel], input[d + channel], fx), fy));
-                output[y * width + x] = new Color32(Blend(0), Blend(1), Blend(2), channels == 4 ? Blend(3) : (byte)255);
+                output[y * width + x] = new Color32(Blend(redChannel), Blend(redChannel + 1),
+                    Blend(redChannel + 2), channels == 4 ? Blend(alphaChannel) : (byte)255);
             }
         }
         result.Apply(false);

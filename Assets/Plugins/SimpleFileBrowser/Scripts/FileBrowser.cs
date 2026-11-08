@@ -16,8 +16,20 @@ using UnityEngine.InputSystem;
 
 namespace SimpleFileBrowser
 {
-	public class FileBrowser : MonoBehaviour, IListViewAdapter
+	public partial class FileBrowser : MonoBehaviour, IListViewAdapter
 	{
+		public static event Action<Image, int, bool> StyleSurface;
+		public static event Action<TMP_Text, bool> StyleText;
+		public static event Action<Image, string, Color> StyleIcon;
+
+		internal static void ApplySurfaceStyle( Image image, int radius, bool outline = false )
+		{
+			StyleSurface?.Invoke( image, radius, outline );
+		}
+
+		internal static void ApplyTextStyle( TMP_Text text, bool heading = false ) => StyleText?.Invoke( text, heading );
+		internal static void ApplyIconStyle( Image image, string key, Color tint ) => StyleIcon?.Invoke( image, key, tint );
+
 		public enum Permission { Denied = 0, Granted = 1, ShouldAsk = 2 };
 		public enum PickMode { Files = 0, Folders = 1, FilesAndFolders = 2 };
 
@@ -263,7 +275,7 @@ namespace SimpleFileBrowser
 			}
 		}
 
-		private string m_allFilesFilterText = "All Files (.*)";
+		private string m_allFilesFilterText = "Все файлы";
 		public static string AllFilesFilterText
 		{
 			get { return Instance.m_allFilesFilterText; }
@@ -1062,6 +1074,7 @@ namespace SimpleFileBrowser
 				AddQuickLink( quickLink.icon, quickLink.name, quickLinkPath );
 			}
 
+			AddQuickLink( m_skin.FolderIcon, "Загрузки", GetDownloadsPath() );
 			quickLinks = null;
 #endif
 
@@ -1245,16 +1258,22 @@ namespace SimpleFileBrowser
 
 			titleBackground.color = m_skin.TitleBackgroundColor;
 			m_skin.ApplyTo( titleText, m_skin.TitleTextColor );
+			ApplyTextStyle( titleText, true );
 
 			backButton.image.color = m_skin.HeaderButtonsColor;
 			forwardButton.image.color = m_skin.HeaderButtonsColor;
 			upButton.image.color = m_skin.HeaderButtonsColor;
 			moreOptionsButton.image.color = m_skin.HeaderButtonsColor;
+			RefreshPreviewSkin();
 
 			backButton.image.sprite = m_skin.HeaderBackButton;
 			forwardButton.image.sprite = m_skin.HeaderForwardButton;
 			upButton.image.sprite = m_skin.HeaderUpButton;
 			moreOptionsButton.image.sprite = m_skin.HeaderContextMenuButton;
+			StyleNavigationButton( backButton, "arrow-left" );
+			StyleNavigationButton( forwardButton, "arrow-right" );
+			StyleNavigationButton( upButton, "arrow-up" );
+			StyleNavigationButton( moreOptionsButton, "menu" );
 
 			if( resizeCursorHandler )
 			{
@@ -1277,6 +1296,19 @@ namespace SimpleFileBrowser
 			m_skin.ApplyTo( quickLinksScrollRect.verticalScrollbar );
 			m_skin.ApplyTo( filesScrollRect.verticalScrollbar );
 			m_skin.ApplyTo( filtersDropdown.template.GetComponent<ScrollRect>().verticalScrollbar );
+
+			ApplySurfaceStyle( window.GetComponent<Image>(), 12, true );
+			ApplySurfaceStyle( titleBackground, 7 );
+			ApplySurfaceStyle( middleView, 8, true );
+			ApplySurfaceStyle( pathInputField.image, 6, true );
+			ApplySurfaceStyle( searchInputField.image, 6, true );
+			ApplySurfaceStyle( filenameInputField.image, 6, true );
+			ApplySurfaceStyle( filtersDropdown.image, 6, true );
+			ApplySurfaceStyle( filtersDropdown.template.GetComponent<Image>(), 7, true );
+			foreach( var button in allButtons )
+				ApplySurfaceStyle( button.image, 6, true );
+			submitButton.image.color = m_skin.FileSelectedBackgroundColor;
+			m_skin.ApplyTo( submitButton.GetComponentInChildren<TMP_Text>(), m_skin.FileSelectedTextColor );
 
 			for( int i = 0; i < allQuickLinks.Count; i++ )
 			{
@@ -2001,6 +2033,7 @@ namespace SimpleFileBrowser
 			Result = null;
 
 			gameObject.SetActive( true );
+			ConfigureImagePreview();
 
 			CurrentPath = GetInitialPath( initialPath );
 
@@ -2012,6 +2045,7 @@ namespace SimpleFileBrowser
 		public void Hide()
 		{
 			IsOpen = false;
+			ClearImagePreview();
 
 			currentPathIndex = -1;
 			pathsFollowed.Clear();
@@ -2110,6 +2144,7 @@ namespace SimpleFileBrowser
 			}
 
 			listView.UpdateList();
+			RefreshImagePreviewSelection();
 
 			// Prevent the case where all the content stays offscreen after changing the search string
 			EnsureScrollViewIsWithinBounds();
@@ -2127,6 +2162,8 @@ namespace SimpleFileBrowser
 					return false;
 
 				string extension = item.Extension;
+				if( showImagePreview && !IsImageFile( item.Name ) )
+					return false;
 				if( excludedExtensionsSet.Contains( extension ) )
 					return false;
 				else if( !allExtensionsHaveSingleSuffix )
@@ -2484,13 +2521,7 @@ namespace SimpleFileBrowser
 			float windowWidth = size.x;
 			float quickLinksWidth = Mathf.Min( middleViewQuickLinksOriginalSize.x, windowWidth * quickLinksMaxWidthPercentage );
 
-			if( middleViewQuickLinks.sizeDelta.x != quickLinksWidth )
-			{
-				middleViewQuickLinks.sizeDelta = new Vector2( quickLinksWidth, middleViewQuickLinksOriginalSize.y );
-				middleViewFiles.anchoredPosition = new Vector2( quickLinksWidth, 0f );
-				middleViewFiles.sizeDelta = new Vector2( -quickLinksWidth, middleViewQuickLinksOriginalSize.y );
-				middleViewSeparator.rectTransform.anchoredPosition = new Vector2( quickLinksWidth, 0f );
-			}
+			LayoutFileColumns( windowWidth, quickLinksWidth );
 
 #if !UNITY_EDITOR && UNITY_ANDROID
 			// Responsive layout doesn't affect any other visible UI elements on Storage Access Framework
@@ -2582,6 +2613,7 @@ namespace SimpleFileBrowser
 
 		private void UpdateFilenameInputFieldWithSelection()
 		{
+			RefreshImagePreviewSelection();
 			// Refresh filenameInputField as follows:
 			// 0 files selected: *blank*
 			// 1 file selected: file.Name
@@ -2877,14 +2909,14 @@ namespace SimpleFileBrowser
 		public static bool ShowLoadDialog( OnSuccess onSuccess, OnCancel onCancel,
 										   PickMode pickMode, bool allowMultiSelection = false,
 										   string initialPath = null, string initialFilename = null,
-										   string title = "Load", string loadButtonText = "Select" )
+										   string title = "Load", string loadButtonText = "Select", bool showImagePreview = false )
 		{
-			return ShowDialogInternal( onSuccess, onCancel, pickMode, allowMultiSelection, false, initialPath, initialFilename, title, loadButtonText );
+			return ShowDialogInternal( onSuccess, onCancel, pickMode, allowMultiSelection, false, initialPath, initialFilename, title, loadButtonText, showImagePreview );
 		}
 
 		private static bool ShowDialogInternal( OnSuccess onSuccess, OnCancel onCancel,
 												PickMode pickMode, bool allowMultiSelection, bool acceptNonExistingFilename,
-												string initialPath, string initialFilename, string title, string submitButtonText )
+												string initialPath, string initialFilename, string title, string submitButtonText, bool showImagePreview = false )
 		{
 			// Instead of ignoring this dialog request, let's just override the currently visible dialog's properties
 			//if( Instance.gameObject.activeSelf )
@@ -2896,6 +2928,7 @@ namespace SimpleFileBrowser
 			Instance.onSuccess = onSuccess;
 			Instance.onCancel = onCancel;
 
+			Instance.showImagePreview = showImagePreview;
 			Instance.PickerMode = pickMode;
 			Instance.AllowMultiSelection = allowMultiSelection;
 			Instance.Title = title;

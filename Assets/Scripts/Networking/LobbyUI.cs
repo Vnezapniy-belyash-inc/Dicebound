@@ -23,6 +23,7 @@ public partial class LobbyUI : MonoBehaviour
     private bool _isConnecting;
     private bool _ignoreDisconnect;
     private bool _hasSessionClientId;
+    private bool _waitingForInitialScene;
     private ulong _sessionClientId;
     private Button _prepareButton;
 
@@ -45,6 +46,8 @@ public partial class LobbyUI : MonoBehaviour
         lobbyPanel.SetActive(true);
         statusText.text = "";
 
+        HostSceneCurtain.EnsureInstance();
+        HostSceneCurtain.Instance.LocalSyncCompleted += OpenInitialSceneWhenReady;
         InvokeRepeating(nameof(TrySubscribeDisconnect), 0.2f, 0.5f);
         if (!string.IsNullOrEmpty(_pendingReconnectCode))
         {
@@ -106,6 +109,7 @@ public partial class LobbyUI : MonoBehaviour
     void TrySubscribeDisconnect()
     {
         if (NetworkManager.Singleton == null) return;
+        NetworkManager.Singleton.OnClientDisconnectCallback -= OnDisconnected;
         NetworkManager.Singleton.OnClientDisconnectCallback += OnDisconnected;
         CancelInvoke(nameof(TrySubscribeDisconnect));
     }
@@ -113,6 +117,8 @@ public partial class LobbyUI : MonoBehaviour
     private void OnDestroy()
     {
         CancelInvoke(nameof(TrySubscribeDisconnect));
+        if (HostSceneCurtain.Instance != null)
+            HostSceneCurtain.Instance.LocalSyncCompleted -= OpenInitialSceneWhenReady;
         if (NetworkManager.Singleton != null)
             NetworkManager.Singleton.OnClientDisconnectCallback -= OnDisconnected;
     }
@@ -123,10 +129,15 @@ public partial class LobbyUI : MonoBehaviour
         if (_hasSessionClientId && clientId != _sessionClientId)
             return;
         _ignoreDisconnect = true;
+        _waitingForInitialScene = false;
+        DiceUI.Instance?.HideGamePanels();
         var manager = GameNetworkManager.Instance;
         if (manager != null && !manager.LastStartedAsHost && !manager.ShutdownRequested
             && !string.IsNullOrEmpty(RelayManager.CurrentJoinCode))
+        {
             _pendingReconnectCode = RelayManager.CurrentJoinCode;
+            HostSceneCurtain.Instance?.SetJoinStatus("Восстанавливаем соединение…");
+        }
         try
         {
             if (manager != null)
@@ -216,6 +227,8 @@ public partial class LobbyUI : MonoBehaviour
         if (_isConnecting) return;
         _isConnecting = true;
         SetInteractable(false);
+        TrySubscribeDisconnect();
+        lobbyPanel.SetActive(false);
         int attempts = automaticReconnect ? 3 : 1;
 
         for (int attempt = 1; attempt <= attempts; attempt++)
@@ -223,6 +236,7 @@ public partial class LobbyUI : MonoBehaviour
             statusText.text = automaticReconnect
                 ? $"Восстанавливаем соединение ({attempt}/{attempts})…"
                 : "Подключаемся…";
+            HostSceneCurtain.Instance.SetJoinStatus(statusText.text);
             try
             {
                 if (GameNetworkManager.Instance != null)
@@ -244,10 +258,10 @@ public partial class LobbyUI : MonoBehaviour
                 await WaitForPlayerRegistration();
                 _sessionClientId = NetworkManager.Singleton.LocalClientId;
                 _hasSessionClientId = true;
-                lobbyPanel.SetActive(false);
-                statusText.text = "Подключено.";
-                ShowGameUI();
+                _waitingForInitialScene = true;
                 _isConnecting = false;
+                OpenInitialSceneWhenReady();
+                HostSceneCurtain.Instance?.SetJoinStatus(null);
                 Debug.Log(automaticReconnect
                     ? "[Lobby] Client reconnected." : "[Lobby] Client connected.");
                 return;
@@ -266,12 +280,23 @@ public partial class LobbyUI : MonoBehaviour
                         ? $"Не удалось восстановить соединение: {ex.Message}"
                         : $"Не удалось подключиться: {ex.Message}";
                     _isConnecting = false;
+                    HostSceneCurtain.Instance?.SetJoinStatus(null);
+                    lobbyPanel.SetActive(true);
                     SetInteractable(true);
                     return;
                 }
                 await System.Threading.Tasks.Task.Delay(1000 * attempt);
             }
         }
+    }
+
+    private void OpenInitialSceneWhenReady()
+    {
+        if (!_waitingForInitialScene || HostSceneCurtain.IsLocalSynchronizing
+            || NetworkManager.Singleton?.IsConnectedClient != true) return;
+        _waitingForInitialScene = false;
+        statusText.text = "Подключено.";
+        ShowGameUI();
     }
 
     private void SaveNickname()

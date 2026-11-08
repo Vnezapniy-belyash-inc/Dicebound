@@ -109,7 +109,7 @@ public class EffectPaintTool : MonoBehaviour
         _lastStrokeCell = cell;
         if (cell.x < 0)
         {
-            DiceUI.Instance?.ShowToolNotice("Выберите клетку внутри карты.");
+            DiceUI.Instance?.ShowToolNotice("Выберите клетку внутри карты.", TableNoticeKind.Warning);
             return;
         }
 
@@ -120,7 +120,7 @@ public class EffectPaintTool : MonoBehaviour
         var existing = CellMarker.FindAtCell(cell, gm);
         if (IsEraseMode && existing.Count == 0)
         {
-            DiceUI.Instance?.ShowToolNotice("На этой клетке нет отметки для стирания.");
+            DiceUI.Instance?.ShowToolNotice("На этой клетке нет отметки для стирания.", TableNoticeKind.Warning);
             return;
         }
         if (!nm.IsHost)
@@ -128,7 +128,7 @@ public class EffectPaintTool : MonoBehaviour
             foreach (var marker in existing)
                 if (marker.SpawnerClientId != nm.LocalClientId)
                 {
-                    DiceUI.Instance?.ShowToolNotice("Отметку другого игрока может изменить только GM.");
+                    DiceUI.Instance?.ShowToolNotice("Отметку другого игрока может изменить только GM.", TableNoticeKind.Warning);
                     return;
                 }
         }

@@ -10,7 +10,7 @@ public class DiceboundStabilityTests
 {
     private static Type RuntimeType(string name) => Type.GetType(name + ", Assembly-CSharp", true);
     [UnityTest]
-    public IEnumerator AutomaticSyncKeepsInterfaceVisibleAndOnlyShowsTableAfterMapAndFogAreReady()
+    public IEnumerator AutomaticSyncCoversTheTableUntilEveryStageIsReady()
     {
         UnityEditor.SceneManagement.EditorSceneManager.NewScene(UnityEditor.SceneManagement.NewSceneSetup.EmptyScene,
             UnityEditor.SceneManagement.NewSceneMode.Single);
@@ -29,17 +29,23 @@ public class DiceboundStabilityTests
             type.GetField("_syncPending", flags).SetValue(curtain, true);
             type.GetMethod("ApplyCurtainState", flags).Invoke(curtain, null);
             var overlay = (GameObject)type.GetField("_overlayRoot", flags).GetValue(curtain);
-            Assert.That(overlay.activeSelf, Is.False, "Sync status must not cover the interface.");
+            var loadingScreen = (RectTransform)type.GetField("_loadingScreen", flags).GetValue(curtain);
+            Assert.That(loadingScreen.gameObject.activeSelf, Is.True);
+            Assert.That(overlay.activeSelf, Is.False, "Automatic loading has its own full-screen UI.");
             Assert.That(camera.enabled, Is.False, "Unapplied fog must not expose the table.");
             Assert.That(RuntimeType("GameplayInputGate").GetProperty("AllowsWorldPointerInput").GetValue(null), Is.False);
             type.GetField("_syncStages", flags).SetValue(curtain, (byte)13);
             type.GetMethod("ApplyCurtainState", flags).Invoke(curtain, null);
-            Assert.That(camera.enabled, Is.True, "Map, geometry and fog are sufficient for viewing while portraits finish.");
-            Assert.That(overlay.activeSelf, Is.False);
+            Assert.That(camera.enabled, Is.False, "The table stays hidden while portraits and other stages finish.");
+            Assert.That(loadingScreen.gameObject.activeSelf, Is.True);
+            type.GetField("_syncPending", flags).SetValue(curtain, false);
+            type.GetMethod("ApplyCurtainState", flags).Invoke(curtain, null);
+            Assert.That(camera.enabled, Is.True);
+            Assert.That(loadingScreen.gameObject.activeSelf, Is.False);
             type.GetField("_curtainDown", flags).SetValue(curtain, true);
             type.GetMethod("ApplyCurtainState", flags).Invoke(curtain, null);
             Assert.That(camera.enabled, Is.False);
-            Assert.That(overlay.activeSelf, Is.True, "Only the manual master curtain covers the full screen.");
+            Assert.That(overlay.activeSelf, Is.True, "The manual master curtain remains separate.");
         }
         finally
         {
@@ -252,9 +258,8 @@ public class DiceboundStabilityTests
             return total;
         }
         int slow = Run(30), fast = Run(1000);
-        Assert.That(slow, Is.GreaterThan(100 * 1024));
-        Assert.That(fast, Is.LessThanOrEqualTo(134 * 1024));
-        Assert.That(Math.Abs(fast - slow), Is.LessThan(12 * 1024));
+        Assert.That(slow, Is.InRange(170_000, 180_000), "The per-frame cap still applies at 30 FPS.");
+        Assert.That(fast, Is.InRange(256 * 1024, 262 * 1024), "The per-recipient cap plus burst still applies at high FPS.");
     }
     [Test]
     public void LargeMapKeepsAspectAndPixelsWithBoundedWorkingTexture()
@@ -272,5 +277,28 @@ public class DiceboundStabilityTests
             Assert.That((Color32)resized.GetPixel(200, 2), Is.EqualTo(new Color32(30, 80, 150, 255)));
         }
         finally { UnityEngine.Object.DestroyImmediate(source); if (resized != null) UnityEngine.Object.DestroyImmediate(resized); }
+    }
+
+    [Test]
+    public void ResizingArgbImagePreservesColorAndTransparency()
+    {
+        var source = new Texture2D(4, 2, TextureFormat.ARGB32, false);
+        Texture2D resized = null;
+        try
+        {
+            var color = new Color32(220, 120, 30, 175);
+            var pixels = new Color32[8];
+            System.Array.Fill(pixels, color);
+            source.SetPixels32(pixels);
+            source.Apply();
+            resized = (Texture2D)RuntimeType("MapTextureUtility").GetMethod("ResizeTo")
+                .Invoke(null, new object[] { source, 2 });
+            Assert.That((Color32)resized.GetPixel(0, 0), Is.EqualTo(color));
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(source);
+            if (resized != null) UnityEngine.Object.DestroyImmediate(resized);
+        }
     }
 }

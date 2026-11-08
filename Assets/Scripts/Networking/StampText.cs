@@ -24,27 +24,37 @@ public static class StampText
             ? normalized : null;
     }
 
-    // Measure real glyph widths; split at a word boundary, or between complete graphemes for a long word.
-    public static string Wrap(string text, Func<string, float> measure, float preferredWidth)
+    // The input has already been normalized to single spaces between words.
+    public static string Wrap(string text, Func<string, float> measure, float width, out int lineCount)
     {
-        if (measure(text) <= preferredWidth) return text;
-        int split = -1; float best = float.PositiveInfinity;
-        for (int i = 1; i < text.Length - 1; i++)
-            if (text[i] == ' ')
-            {
-                float width = Math.Max(measure(text.Substring(0, i)), measure(text.Substring(i + 1)));
-                if (width < best) { split = i; best = width; }
-            }
-        bool wordBoundary = split > 0;
-        if (split < 0 || best > preferredWidth)
+        int[] elements = StringInfo.ParseCombiningCharacters(text);
+        var result = new StringBuilder(text.Length);
+        lineCount = 0;
+        int first = 0;
+        while (first < elements.Length)
         {
-            foreach (int i in StringInfo.ParseCombiningCharacters(text))
+            int start = elements[first];
+            int lastSpace = -1;
+            int next = first + 1;
+            while (next <= elements.Length)
             {
-                if (i == 0) continue;
-                float width = Math.Max(measure(text.Substring(0, i)), measure(text.Substring(i)));
-                if (width < best) { split = i; best = width; wordBoundary = text[i] == ' '; }
+                int end = next == elements.Length ? text.Length : elements[next];
+                if (measure(text.Substring(start, end - start).TrimEnd()) > width) break;
+                if (end < text.Length && text[end] == ' ') lastSpace = next;
+                next++;
             }
+
+            if (next <= elements.Length)
+                next = lastSpace > first && lastSpace < next ? lastSpace : Math.Max(first + 1, next - 1);
+            else
+                next = elements.Length;
+
+            int lineEnd = next == elements.Length ? text.Length : elements[next];
+            if (lineCount++ > 0) result.Append('\n');
+            result.Append(text.Substring(start, lineEnd - start).TrimEnd());
+            first = next;
+            if (first < elements.Length && text[elements[first]] == ' ') first++;
         }
-        return split < 0 ? text : text.Substring(0, split).TrimEnd() + "\n" + text.Substring(split + (wordBoundary ? 1 : 0)).TrimStart();
+        return result.ToString();
     }
 }

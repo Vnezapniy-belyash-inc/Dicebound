@@ -8,14 +8,19 @@ public static class TokenConditionIcons
 
     public static bool Draw(Rect rect, string id)
     {
+        GUI.DrawTexture(rect, GetTexture(id), ScaleMode.ScaleToFit, true);
+        GUI.Label(rect, new GUIContent("", TokenConditionCatalog.DisplayName(id)), GUIStyle.none);
+        return rect.Contains(Event.current.mousePosition);
+    }
+
+    public static Texture2D GetTexture(string id)
+    {
         if (!Textures.TryGetValue(id, out var texture) || texture == null)
         {
             texture = Create(id);
             Textures[id] = texture;
         }
-        GUI.DrawTexture(rect, texture, ScaleMode.ScaleToFit, true);
-        GUI.Label(rect, new GUIContent("", TokenConditionCatalog.DisplayName(id)), GUIStyle.none);
-        return rect.Contains(Event.current.mousePosition);
+        return texture;
     }
 
     private static Texture2D Create(string id)

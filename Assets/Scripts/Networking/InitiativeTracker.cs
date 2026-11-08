@@ -125,7 +125,7 @@ public partial class InitiativeTracker : NetworkBehaviour
         {
             _awaitingInitiativeTokenId = null;
             _awaitingInitiativeTokenIds.Clear();
-            DiceUI.Instance?.ShowToolNotice("Назначение инициативы истекло. Нажмите 🎲 ещё раз.");
+            DiceUI.Instance?.ShowToolNotice("Назначение инициативы истекло. Нажмите 🎲 ещё раз.", TableNoticeKind.Warning);
             return;
         }
         if (dieType != "d20") return;
@@ -165,7 +165,7 @@ public partial class InitiativeTracker : NetworkBehaviour
         if (!IsHost || FogManager.Instance?.Preview == true || string.IsNullOrEmpty(tokenId) || !ContainsToken(tokenId)) return;
         if (_awaitingInitiativeTokenIds.Count > 0 || !string.IsNullOrEmpty(_awaitingInitiativeTokenId))
         {
-            DiceUI.Instance?.ShowToolNotice("Дождитесь текущего броска инициативы или отмените его.");
+            DiceUI.Instance?.ShowToolNotice("Дождитесь текущего броска инициативы или отмените его.", TableNoticeKind.Warning);
             return;
         }
         ArmInitiativeFromJournal(tokenId);
@@ -173,7 +173,7 @@ public partial class InitiativeTracker : NetworkBehaviour
         if (NetworkDiceManager.Instance?.RollInitiativeGroup(new[] { tokenId }) != true)
         {
             CancelInitiativeFromJournal();
-            DiceUI.Instance?.ShowToolNotice("Не удалось бросить d20: сетевые кости недоступны.");
+            DiceUI.Instance?.ShowToolNotice("Не удалось бросить d20: сетевые кости недоступны.", TableNoticeKind.Error);
         }
     }
 
@@ -199,10 +199,10 @@ public partial class InitiativeTracker : NetworkBehaviour
         {
             _awaitingInitiativeTokenIds.Clear();
             _awaitingInitiativeTokenId = null;
-            DiceUI.Instance?.ShowToolNotice($"Добавлено в инициативу: {eligible.Count}, но сетевые кости недоступны. Броски можно назначить кнопкой d20 в трекере.");
+            DiceUI.Instance?.ShowToolNotice($"Добавлено в инициативу: {eligible.Count}, но сетевые кости недоступны. Броски можно назначить кнопкой d20 в трекере.", TableNoticeKind.Warning);
             return eligible.Count;
         }
-        DiceUI.Instance?.ShowToolNotice($"Добавлено в инициативу: {eligible.Count}. Брошены групповые d20; результаты назначатся по порядку списка токенов.");
+        DiceUI.Instance?.ShowToolNotice($"Добавлено в инициативу: {eligible.Count}. Брошены групповые d20; результаты назначатся по порядку списка токенов.", TableNoticeKind.Success);
         return eligible.Count;
     }
 
@@ -445,7 +445,7 @@ public partial class InitiativeTracker : NetworkBehaviour
             > MaxStateBytes)
         {
             Debug.LogError("[Initiative] State exceeds network string capacity");
-            DiceUI.Instance?.ShowToolNotice("Список инициативы слишком большой.");
+            DiceUI.Instance?.ShowToolNotice("Список инициативы слишком большой.", TableNoticeKind.Warning);
             return;
         }
         _stateRevision++;
@@ -535,7 +535,7 @@ public partial class InitiativeTracker : NetworkBehaviour
         if (System.Text.Encoding.UTF8.GetByteCount(SerializeData()) > MaxStateBytes)
         {
             _entries.RemoveAt(_entries.Count - 1);
-            DiceUI.Instance?.ShowToolNotice("Список инициативы слишком большой.");
+            DiceUI.Instance?.ShowToolNotice("Список инициативы слишком большой.", TableNoticeKind.Warning);
             return;
         }
         int activeId = ActiveId;

@@ -138,7 +138,7 @@ public sealed class SceneArrivalPicker : MonoBehaviour, IPointerClickHandler
             if (!IsOpen) return;
             if (_xInput != null && _yInput != null && int.TryParse(_xInput.text, out int x) && int.TryParse(_yInput.text, out int y) && Inside(x, y))
             { _cell = new Vector2Int(x, y); DrawPreview(); }
-            else { DrawPreview(); DiceUI.Instance?.ShowToolNotice("Координаты должны находиться в пределах сетки; отсчёт начинается с нуля."); }
+            else { DrawPreview(); DiceUI.Instance?.ShowToolNotice("Координаты должны находиться в пределах сетки; отсчёт начинается с нуля.", TableNoticeKind.Warning); }
         });
         return input;
     }

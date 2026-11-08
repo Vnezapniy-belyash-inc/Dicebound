@@ -1,9 +1,11 @@
+using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
 public partial class TokenController
 {
     private static TokenController _keyboardToken;
+    private Vector3 KeyboardStepPosition => IsPredictingStep ? DisplayPosition : CommittedPosition;
 
     public static bool ArrowKeysControlToken => _keyboardToken != null
         && _keyboardToken.IsSpawned && !_keyboardToken.IsServer
@@ -33,7 +35,8 @@ public partial class TokenController
         if (direction != Vector2Int.zero)
         {
             var grid=FindAnyObjectByType<GridManager>();
-            if(grid!=null)RequestKeyboardStep(ScreenDirectionToGridStep(Camera.main,grid.GridRotation,CommittedPosition,direction));
+            if (grid != null)
+                RequestKeyboardStep(ScreenDirectionToGridStep(Camera.main, grid.GridRotation, KeyboardStepPosition, direction));
         }
     }
 
@@ -58,17 +61,46 @@ public partial class TokenController
 
     public bool RequestKeyboardStep(Vector2Int direction)
     {
-        if (!ArrowKeysControlToken || _keyboardToken != this || IsLocalDragActiveAny()
-            || Mathf.Abs(direction.x) + Mathf.Abs(direction.y) != 1) return false;
+        if (!ArrowKeysControlToken || _keyboardToken != this || !IsCardinalStep(direction)) return false;
         var grid = FindAnyObjectByType<GridManager>();
         if (grid == null) return false;
-        var cell = grid.GetGridPosition(CommittedPosition) + direction;
-        if (cell.x < 0 || cell.y < 0 || cell.x >= grid.Width || cell.y >= grid.Height) return false;
+        Vector3 position = KeyboardStepPosition;
+        Vector2Int from = grid.GetGridPosition(position);
+        Vector2Int to = from + direction;
+        if (from.x < 0 || !IsStepCellInBounds(grid, to)) return false;
         int gesture = NetworkDraggable.NextGesture();
-        if (!BeginDrag(gesture)) return false;
-        // Reuse the reliable drag lease and completion: the server checks policy, ownership,
-        // walls, doors, occupancy and curtain state using the actual RPC sender.
-        EndDrag(gesture, grid.GetCellCenter(cell.x, cell.y, CommittedPosition.y));
+        if (!PredictStep(gesture, grid.GetCellCenter(to.x, to.y, position.y))) return false;
+        KeyboardStepRpc(gesture, from, direction);
         return true;
     }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void KeyboardStepRpc(int gesture, Vector2Int from, Vector2Int direction, RpcParams rpcParams = default)
+    {
+        ulong sender = rpcParams.Receive.SenderClientId;
+        var grid = FindAnyObjectByType<GridManager>();
+        // If a preceding prediction failed or the master moved the token, discard steps
+        // based on the old cell instead of applying them from an unintended position.
+        if (SceneFileStore.MovementPolicy != PlayerMovementPolicy.Step || grid == null
+            || !IsStepCellInBounds(grid, from) || !IsCardinalStep(direction)
+            || grid.GetGridPosition(CommittedPosition) != from)
+        {
+            RejectFinishRpc(gesture, RpcTarget.Single(sender, RpcTargetUse.Temp));
+            return;
+        }
+        Vector2Int to = from + direction;
+        if (!IsStepCellInBounds(grid, to) || !TryBeginServerDrag(sender, gesture))
+        {
+            RejectFinishRpc(gesture, RpcTarget.Single(sender, RpcTargetUse.Temp));
+            return;
+        }
+        FinishOnServer(sender, gesture, grid.GetCellCenter(to.x, to.y, CommittedPosition.y),
+            Vector3.zero, Vector3.zero, false);
+    }
+
+    private static bool IsCardinalStep(Vector2Int step) =>
+        step == Vector2Int.up || step == Vector2Int.down || step == Vector2Int.left || step == Vector2Int.right;
+
+    private static bool IsStepCellInBounds(GridManager grid, Vector2Int cell) =>
+        cell.x >= 0 && cell.y >= 0 && cell.x < grid.Width && cell.y < grid.Height;
 }

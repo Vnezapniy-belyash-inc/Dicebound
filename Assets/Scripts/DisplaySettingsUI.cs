@@ -8,16 +8,6 @@ public sealed partial class DisplaySettingsUI : MonoBehaviour
 {
     private const string WidthKey = "Display.Width", HeightKey = "Display.Height", ModeKey = "Display.Mode";
     public static bool IsOpen { get; private set; }
-    public static bool IsPointerOverButton
-    {
-        get
-        {
-            var mouse = UnityEngine.InputSystem.Mouse.current;
-            if (mouse == null) return false;
-            float scale = Mathf.Min(LocalUiScale.Value, Mathf.Min(Screen.width / 600f, Screen.height / 460f));
-            return new Rect(Screen.width - 144 * scale, 12 * scale, 132 * scale, 28 * scale).Contains(mouse.position.ReadValue());
-        }
-    }
     private readonly List<Vector2Int> _resolutions = new();
     private readonly FullScreenMode[] _modes = { FullScreenMode.Windowed, FullScreenMode.FullScreenWindow, FullScreenMode.ExclusiveFullScreen };
     private readonly string[] _modeNames = { "Оконный", "Полноэкранный без рамки", "Полноэкранный" };
@@ -30,8 +20,17 @@ public sealed partial class DisplaySettingsUI : MonoBehaviour
     private Vector2 _scroll;
     private float _nextWindowCheck;
     public static DisplaySettingsUI Instance { get; private set; }
-    public static void OpenCampaign() { if (Instance != null) { Instance._section = 2; Instance.SetOpen(true); } }
-    public static void OpenAtlas() { if(Instance!=null){Instance.SelectCurrent();Instance.SetOpen(true);} }
+    public static void OpenAtlas() => Instance?.OpenSection(0);
+    public static void OpenControls() => Instance?.OpenSection(1);
+    public static void OpenCampaign() => Instance?.OpenSection(2);
+
+    private void OpenSection(int section)
+    {
+        if (!_pending) SelectCurrent();
+        _section = section;
+        SetOpen(true);
+        UpdateAtlasSettings();
+    }
     private LocalUiScale _uiScale;
     private GameObject _inputBlocker;
 

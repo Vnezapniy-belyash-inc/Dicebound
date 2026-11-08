@@ -6,7 +6,7 @@ using UnityEngine.InputSystem;
 public sealed class ActiveToolUI : MonoBehaviour
 {
     private static float Left => (DiceUI.Instance?.ToolsPanelPixelWidth ?? 0) + 24;
-    private static float Available => Screen.width - Left - 24 - Mathf.Max(DmPanelUI.Instance?.PanelPixelWidth ?? 0, CharacterSheetUI.Instance?.PanelPixelWidth ?? 0);
+    private static float Available => Screen.width - Left - 24 - (DmPanelUI.Instance?.PanelPixelWidth ?? 0);
     private static bool Visible => Available >= 330 && NetworkManager.Singleton?.IsHost == true &&
         (SceneEditor.IsEditing || FogManager.IsManualEditing || FogManager.Instance?.Preview == true);
     private static float Scale => Mathf.Min(LocalUiScale.Value, Available / 620f);

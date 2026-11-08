@@ -13,8 +13,86 @@ public static class AtlasUi
     public static readonly Color Copper = new Color(.66f,.39f,.20f,1);
     public static readonly Color Light = new Color(.96f,.93f,.83f,1);
     private static Font _body, _title;
+    private static TMPro.TMP_FontAsset _fileBrowserBody, _fileBrowserTitle;
+    private static bool _fileBrowserFontsInitialized;
     public static Font Body => _body != null ? _body : _body = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
     public static Font Title => _title != null ? _title : _title = Font.CreateDynamicFontFromOSFont(new[]{"Georgia","Times New Roman"},32);
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void RegisterFileBrowserStyle()
+    {
+        SimpleFileBrowser.FileBrowser.StyleSurface -= StyleFileBrowserSurface;
+        SimpleFileBrowser.FileBrowser.StyleSurface += StyleFileBrowserSurface;
+        SimpleFileBrowser.FileBrowser.StyleText -= StyleFileBrowserText;
+        SimpleFileBrowser.FileBrowser.StyleText += StyleFileBrowserText;
+        SimpleFileBrowser.FileBrowser.StyleIcon -= StyleFileBrowserIcon;
+        SimpleFileBrowser.FileBrowser.StyleIcon += StyleFileBrowserIcon;
+    }
+
+    private static void StyleFileBrowserSurface(Image image, int radius, bool outline)
+    {
+        VttUiSkin.Surface(image, image.color, radius, false);
+        if (!outline || image.transform.Find("AtlasOutline") != null) return;
+
+        image.gameObject.AddComponent<AtlasGradient>().bottom = .97f;
+        var edge = Node(image.transform, "AtlasOutline");
+        Fill(edge);
+        edge.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
+        var border = edge.gameObject.AddComponent<AtlasBorder>();
+        border.radius = radius;
+        border.color = new Color(.77f, .70f, .57f);
+        border.raycastTarget = false;
+    }
+
+    private static void StyleFileBrowserText(TMPro.TMP_Text text, bool heading)
+    {
+        if (!_fileBrowserFontsInitialized)
+        {
+            _fileBrowserFontsInitialized = true;
+            _fileBrowserBody = CreateFileBrowserFont(Body);
+            _fileBrowserTitle = CreateFileBrowserFont(Title);
+        }
+        var font = heading && _fileBrowserTitle != null ? _fileBrowserTitle : _fileBrowserBody;
+        if (font != null) text.font = font;
+        if (heading) text.fontSize += 4;
+    }
+
+    private static TMPro.TMP_FontAsset CreateFileBrowserFont(Font source)
+    {
+        if (source == null) return null;
+        foreach (string family in source.fontNames)
+        {
+            var font = TMPro.TMP_FontAsset.CreateFontAsset(family, "Regular");
+            if (font != null) return font;
+        }
+        return null;
+    }
+
+    private static void StyleFileBrowserIcon(Image image, string key, Color tint)
+    {
+        var glyph = image.GetComponentInChildren<AtlasGlyph>(true);
+        var sprite = key == "map" || key == "menu" ? ReferenceIcon(key) : null;
+        image.enabled = sprite != null;
+        if (sprite != null)
+        {
+            image.sprite = sprite;
+            image.color = tint;
+            if (glyph != null) glyph.enabled = false;
+            return;
+        }
+        if (glyph == null)
+        {
+            var node = Node(image.transform, "AtlasGlyph");
+            Fill(node);
+            glyph = node.gameObject.AddComponent<AtlasGlyph>();
+            glyph.raycastTarget = false;
+        }
+        glyph.rectTransform.localRotation = Quaternion.Inverse(image.transform.localRotation);
+        glyph.enabled = true;
+        glyph.key = key;
+        glyph.color = tint;
+        glyph.SetVerticesDirty();
+    }
 
     public static void BrandImage(Transform parent, string resource, float x, float y, float width, float height)
     {
@@ -104,6 +182,8 @@ public static class AtlasUi
         var c=b.colors;c.highlightedColor=new Color(.86f,.83f,.73f);c.selectedColor=new Color(.80f,.79f,.65f);c.pressedColor=new Color(.68f,.71f,.56f);c.disabledColor=new Color(.6f,.6f,.6f,.5f);c.fadeDuration=.14f;
         if(dark){c.normalColor=new Color(.89f,.87f,.72f,.03f);c.highlightedColor=new Color(.72f,.77f,.64f,.14f);c.selectedColor=c.highlightedColor;c.pressedColor=new Color(.72f,.77f,.64f,.24f);}
         b.colors=c;
+        // Runtime-created buttons should start at their normal tint instead of fading from white.
+        b.targetGraphic.CrossFadeColor(c.normalColor * c.colorMultiplier, 0f, true, true);
         if(action!=null)b.onClick.AddListener(action);
         if(icon!=null){var sprite=ReferenceIcon(icon)??VttUiSkin.Icon(icon);if(sprite!=null){var ir=Node(rt,"Icon");ir.anchorMin=ir.anchorMax=new Vector2(0,.5f);ir.pivot=new Vector2(0,.5f);ir.anchoredPosition=new Vector2(10,0);ir.sizeDelta=new Vector2(19,19);var im=ir.gameObject.AddComponent<Image>();im.sprite=sprite;im.color=dark||primary?Light:Ink;im.raycastTarget=false;}}
         UiOverflowTooltip.Attach(t,b.gameObject);return b;
@@ -141,6 +221,7 @@ public static class AtlasUi
         var button=Button(parent,label,action,dark:true,height:72);
         button.transform.Find("Border").gameObject.SetActive(false);
         button.targetGraphic.canvasRenderer.cullTransparentMesh=false;var colors=button.colors;colors.normalColor=Color.clear;button.colors=colors;
+        button.targetGraphic.CrossFadeColor(Color.clear, 0f, true, true);
         var text=button.GetComponentInChildren<Text>();text.fontSize=12;text.alignment=TextAnchor.MiddleCenter;Fill(text.rectTransform,2,38,2,4);
         var icon=Node(button.transform,"Icon");icon.anchorMin=icon.anchorMax=new Vector2(.5f,1);icon.pivot=new Vector2(.5f,1);icon.sizeDelta=new Vector2(22,22);icon.anchoredPosition=new Vector2(0,-8);
         var picture=icon.gameObject.AddComponent<Image>();picture.sprite=ReferenceIcon(key);picture.color=Light;picture.raycastTarget=false;

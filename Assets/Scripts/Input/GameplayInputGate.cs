@@ -22,6 +22,9 @@ public static class GameplayInputGate
         {
             if (FunEffects.IsStampInputOpen) return true;
             if (TokenController.IsMenuTextFocused) return true;
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
+            if (CharacterSheetUI.Instance?.HasPinnedKeyboardFocus == true) return true;
+#endif
             var es = EventSystem.current;
             if (es == null) return false;
 
@@ -40,8 +43,8 @@ public static class GameplayInputGate
     /// <summary>True when the pointer is over any UI element (EventSystem raycast).</summary>
     public static bool IsPointerOverUI =>
         ActiveToolUI.IsPointerOverPanel || MovementReviewUI.IsOpen || MovementReviewUI.IsPointerOverButton || FunEffects.IsInputOpen ||
-        HostSceneCurtain.IsPointerOverSyncPanel ||
-        PublicReferenceLibrary.IsOpen || PublicReferenceLibrary.IsPointerOverButton || SceneArrivalPicker.IsOpen || DisplaySettingsUI.IsOpen || DisplaySettingsUI.IsPointerOverButton ||
+        HostSceneCurtain.IsLoadingScreenVisible ||
+        PublicReferenceLibrary.IsOpen || PublicReferenceLibrary.IsPointerOverButton || SceneArrivalPicker.IsOpen || DisplaySettingsUI.IsOpen ||
         TokenController.IsPointerOverMenu ||
         EventSystem.current != null && EventSystem.current.IsPointerOverGameObject();
 
@@ -50,19 +53,20 @@ public static class GameplayInputGate
         HostSceneCurtain.IsBlockingLocalPlayer;
 
     /// <summary>IMGUI overlays (measurement labels, token menus) — blocked for blinded clients.</summary>
-    public static bool AllowsImGuiOverlays => !IsModalOpen && !FunEffects.IsStampInputOpen && !IsHostCurtainBlocking;
+    public static bool AllowsImGuiOverlays => !IsModalOpen && !FunEffects.IsStampInputOpen && !IsHostCurtainBlocking
+        && !HostSceneCurtain.IsLoadingScreenVisible;
 
     /// <summary>
     /// Keyboard shortcuts: panel toggles, map rotate, camera movement keys, debug keys, etc.
     /// </summary>
     public static bool AllowsKeyboardHotkeys =>
         LastToolExitFrame != Time.frameCount && !IsModalOpen && !TokenController.IsMenuOpen && !FunEffects.IsInputOpen &&
-        !IsTextInputFocused && !IsHostCurtainBlocking && !HostSceneCurtain.IsLocalSynchronizing;
+        !IsTextInputFocused && !IsHostCurtainBlocking && !HostSceneCurtain.IsLoadingScreenVisible;
 
     /// <summary>
     /// Mouse actions on the game world: dice drag, map pan, measurement, pings, token menus.
     /// Blocked while typing or when the cursor is over UI.
     /// </summary>
     public static bool AllowsWorldPointerInput =>
-        LastToolExitFrame != Time.frameCount && !IsModalOpen && !TokenController.IsMenuOpen && !IsTextInputFocused && !IsPointerOverUI && !IsHostCurtainBlocking && !HostSceneCurtain.IsLocalSynchronizing;
+        LastToolExitFrame != Time.frameCount && !IsModalOpen && !TokenController.IsMenuOpen && !IsTextInputFocused && !IsPointerOverUI && !IsHostCurtainBlocking;
 }

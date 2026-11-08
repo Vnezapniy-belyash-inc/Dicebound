@@ -555,6 +555,7 @@ namespace SimpleFileBrowser
 			text.color = textColor;
 			text.font = m_font;
 			text.fontSize = m_fontSize;
+			FileBrowser.ApplyTextStyle( text );
 		}
 
 		public void ApplyTo( TMP_InputField inputField )

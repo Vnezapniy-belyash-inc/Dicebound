@@ -1,13 +1,10 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
-#if UNITY_EDITOR
-using UnityEditor;
-#endif
 
 /// <summary>
 /// Контроллер карты: загрузка PNG, масштаб, drag (средняя кнопка), rotate (R).
@@ -190,7 +187,7 @@ public class MapController : NetworkBehaviour
                     throw new FormatException("Выберите непустое изображение до 96 МБ.");
                 ApplyImage(File.ReadAllBytes(path));
             }
-            catch (Exception ex) { DiceUI.Instance?.ShowToolNotice("Карта не загружена: " + ex.Message); }
+            catch (Exception ex) { DiceUI.Instance?.ShowToolNotice("Карта не загружена: " + ex.Message, TableNoticeKind.Error); }
         });
     }
 
@@ -198,14 +195,14 @@ public class MapController : NetworkBehaviour
     {
         if (!IsHost) return;
         try { name = SceneFileStore.ValidateNewMapAssetName(name); }
-        catch (Exception ex) { DiceUI.Instance?.ShowToolNotice("Каталог карт: " + ex.Message); return; }
+        catch (Exception ex) { DiceUI.Instance?.ShowToolNotice("Каталог карт: " + ex.Message, TableNoticeKind.Error); return; }
         PickImageFile(path =>
         {
             if (string.IsNullOrEmpty(path)) return;
             byte[] data = File.ReadAllBytes(path);
             if (data.Length == 0 || data.Length > 96 * 1024 * 1024)
             {
-                DiceUI.Instance?.ShowToolNotice("Исходная карта превышает 96 МБ.");
+                DiceUI.Instance?.ShowToolNotice("Исходная карта превышает 96 МБ.", TableNoticeKind.Warning);
                 return;
             }
             if (!ApplyImageInternal(data)) return;
@@ -215,9 +212,9 @@ public class MapController : NetworkBehaviour
             {
                 SceneFileStore.AddCurrentMapAsset(name);
                 DmPanelUI.Instance?.RefreshMapCatalog();
-                DiceUI.Instance?.ShowToolNotice("Карта добавлена в каталог: " + name);
+                DiceUI.Instance?.ShowToolNotice("Карта добавлена в каталог: " + name, TableNoticeKind.Success);
             }
-            catch (Exception ex) { DiceUI.Instance?.ShowToolNotice("Каталог карт: " + ex.Message); }
+            catch (Exception ex) { DiceUI.Instance?.ShowToolNotice("Каталог карт: " + ex.Message, TableNoticeKind.Error); }
         });
     }
 
@@ -229,18 +226,27 @@ public class MapController : NetworkBehaviour
             if (paths == null || paths.Length == 0) return;
             try
             {
-                int count = ImportImagePathsToLibrary(paths);
+                var images = new List<string>();
+                var unique = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (string path in paths)
+                {
+                    var candidates = Directory.Exists(path) ? CollectImagePathsFromFolder(path) : new[] { path };
+                    foreach (string image in candidates)
+                        if (unique.Add(image)) images.Add(image);
+                }
+                if (images.Count == 0) throw new FormatException("В выбранных папках нет изображений.");
+                int count = ImportImagePathsToLibrary(images.ToArray());
                 ReportCatalogImport("В каталог добавлено карт: " + count
-                    + ". Сохраните сессию, чтобы записать изменения.");
+                    + ". Сохраните сессию, чтобы записать изменения.", TableNoticeKind.Success);
             }
-            catch (Exception ex) { ReportCatalogImport("Каталог карт: " + ex.Message); }
+            catch (Exception ex) { ReportCatalogImport("Каталог карт: " + ex.Message, TableNoticeKind.Error); }
         });
     }
 
-    private static void ReportCatalogImport(string message)
+    private static void ReportCatalogImport(string message, TableNoticeKind kind)
     {
         DmPanelUI.Instance?.ShowMapCatalogNotice(message);
-        DiceUI.Instance?.ShowToolNotice(message);
+        DiceUI.Instance?.ShowToolNotice(message, kind);
     }
 
     public int ImportImagePathsToLibrary(string[] paths)
@@ -305,16 +311,10 @@ public class MapController : NetworkBehaviour
 
     private static void PickImageFiles(Action<string[]> onPicked)
     {
-#if UNITY_EDITOR
-        string folder = EditorUtility.OpenFolderPanel("Выберите папку с картами", "", "");
-        if (string.IsNullOrEmpty(folder)) { onPicked(null); return; }
-        onPicked(CollectImagePathsFromFolder(folder));
-#else
         SimpleFileBrowser.FileBrowser.ShowLoadDialog(
             paths => onPicked(paths), () => onPicked(null),
-            SimpleFileBrowser.FileBrowser.PickMode.Files, true, null, null,
-            "Выберите несколько карт", "Импортировать");
-#endif
+            SimpleFileBrowser.FileBrowser.PickMode.FilesAndFolders, true, null, null,
+            "Выберите карты или папки с картами", "Импортировать", showImagePreview: true);
     }
 
     private static string[] CollectImagePathsFromFolder(string folder)
@@ -333,16 +333,11 @@ public class MapController : NetworkBehaviour
 
     private static void PickImageFile(Action<string> onPicked)
     {
-#if UNITY_EDITOR
-        string p = EditorUtility.OpenFilePanel("Выберите изображение", "", "png,jpg,jpeg,bmp,tga");
-        onPicked(string.IsNullOrEmpty(p) ? null : p);
-#else
         SimpleFileBrowser.FileBrowser.ShowLoadDialog(
             (paths) => onPicked(paths.Length > 0 ? paths[0] : null),
             () => onPicked(null),
             SimpleFileBrowser.FileBrowser.PickMode.Files,
-            false, null, null, "Выберите изображение", "Выбрать");
-#endif
+            false, null, null, "Выберите карту", "Выбрать", showImagePreview: true);
     }
 
     /// <summary>Хост загружает картинку и рассылает клиентам.</summary>
@@ -352,11 +347,11 @@ public class MapController : NetworkBehaviour
         if (pngData == null || pngData.Length == 0 || pngData.Length > 96 * 1024 * 1024)
         {
             Debug.LogError("[Map] Source image exceeds 96 MB");
-            DiceUI.Instance?.ShowToolNotice("Исходная карта превышает 96 МБ.");
+            DiceUI.Instance?.ShowToolNotice("Исходная карта превышает 96 МБ.", TableNoticeKind.Warning);
             return;
         }
         if (!ApplyImageInternal(pngData))
-        { DiceUI.Instance?.ShowToolNotice("Не удалось прочитать карту. Прежняя карта сохранена."); return; }
+        { DiceUI.Instance?.ShowToolNotice("Не удалось прочитать карту. Прежняя карта сохранена.", TableNoticeKind.Error); return; }
         MapSync.Instance?.SendMapToAll(_currentImageBytes);
         SceneFileStore.ResetCurrentMapAssetLink();
     }
@@ -402,7 +397,7 @@ public class MapController : NetworkBehaviour
                 stored = jpeg; break;
             }
             int next = Mathf.Max(tex.width, tex.height) / 2;
-            if (next < 64) { Destroy(tex); DiceUI.Instance?.ShowToolNotice("Не удалось подготовить карту для передачи."); return false; }
+            if (next < 64) { Destroy(tex); DiceUI.Instance?.ShowToolNotice("Не удалось подготовить карту для передачи.", TableNoticeKind.Error); return false; }
             var smaller = MapTextureUtility.ResizeTo(tex, next); Destroy(tex); tex = smaller;
             stored = tex.EncodeToPNG();
         }
@@ -428,7 +423,7 @@ public class MapController : NetworkBehaviour
     public void SetScale(float scale)
     {
         if (!IsHost) return;
-        if (!SceneValidation.Finite(scale)) { DiceUI.Instance?.ShowToolNotice("Введите конечное число масштаба от 0,1 до 50."); return; }
+        if (!SceneValidation.Finite(scale)) { DiceUI.Instance?.ShowToolNotice("Введите конечное число масштаба от 0,1 до 50.", TableNoticeKind.Warning); return; }
         scale = Mathf.Clamp(scale, minScale, maxScale);
         if (IsServer) _netScale.Value = scale;
         else RequestScaleServerRpc(scale);

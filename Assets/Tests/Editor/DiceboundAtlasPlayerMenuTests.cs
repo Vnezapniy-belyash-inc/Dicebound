@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Reflection;
 using NUnit.Framework;
@@ -75,7 +75,7 @@ public class DiceboundAtlasPlayerMenuTests
         _type.GetMethod("NativeToggleJournal",Private).Invoke(_ui,null);
         Assert.That(Field<RectTransform>("_nativeDrawer").gameObject.activeSelf,Is.False);
         Assert.That(Field<GameObject>("_logPanelGO").activeSelf,Is.True);
-        string section=host?"NativeOpenTokens":"NativeSessionMenu";
+        string section=host?"NativeOpenTokens":"NativeOpenPeople";
         object[] args=host?new object[]{false}:null;
         _type.GetMethod(section,Private).Invoke(_ui,args);
         Assert.That(Field<GameObject>("_logPanelGO").activeSelf,Is.False);
@@ -85,6 +85,198 @@ public class DiceboundAtlasPlayerMenuTests
         _type.GetMethod(section,Private).Invoke(_ui,args);
         Assert.That(Field<RectTransform>("_nativeDrawer").gameObject.activeSelf,Is.False);
     }
+
+    [Test]
+    public void JournalAndExitAreInPlayerMenuAndSettingsGearClosesTheDrawer()
+    {
+        _type.GetMethod("NativeBuildPlayerMenu", Private).Invoke(_ui, null);
+        var menu = Field<RectTransform>("_nativePlayerContent");
+        Assert.That(menu.Find("Button Выход/Icon"), Is.Not.Null);
+        Assert.That(Field<RectTransform>("_nativeRoot").Find("SessionDock"), Is.Null);
+        menu.Find("Button Журнал и чат").GetComponent<Button>().onClick.Invoke();
+        Assert.That(Field<GameObject>("_logPanelGO").activeSelf, Is.True);
+        Assert.That(((RectTransform)Field<GameObject>("_logPanelGO").transform).anchorMin,
+            Is.EqualTo(new Vector2(1, 0)));
+        menu.Find("Button Управление").GetComponent<Button>().onClick.Invoke();
+        Assert.That(Field<GameObject>("_logPanelGO").activeSelf, Is.False);
+
+        _type.GetMethod("NativeOpenPeople", Private).Invoke(_ui, null);
+        var gear = Field<Button>("_nativeSettingsButton");
+        Assert.That(gear.transform.Find("Icon").GetComponent<Image>().sprite, Is.Not.Null);
+        Assert.That(gear.GetComponentInChildren<Text>().text, Is.Empty);
+        gear.onClick.Invoke();
+        Assert.That(Field<RectTransform>("_nativeDrawer").gameObject.activeSelf, Is.False);
+    }
+
+    [Test]
+    public void PlayerCanCollapseAndRestoreInitiativeBeforeCombatStarts()
+    {
+        var trackerType = Type.GetType("InitiativeTracker, Assembly-CSharp", true);
+        var singleton = trackerType.GetProperty("Instance");
+        var previous = singleton.GetValue(null);
+        var trackerObject = new GameObject("Empty initiative regression");
+        trackerObject.SetActive(false);
+        try
+        {
+            singleton.SetValue(null, trackerObject.AddComponent(trackerType));
+            _type.GetMethod("NativeUpdateInitiative", Private).Invoke(_ui, null);
+            var strip = Field<RectTransform>("_nativeInitiative");
+            var toggle = strip.Find("Initiative/ToggleInitiativeStrip").GetComponent<Button>();
+            Assert.That(toggle.GetComponentInChildren<Text>(true).text, Is.EqualTo("▴"));
+            toggle.onClick.Invoke();
+            Assert.That(strip.gameObject.activeSelf, Is.False);
+
+            var show = Field<Button>("_nativeShowInitiative");
+            Assert.That(show.gameObject.activeSelf, Is.True);
+            Assert.That(show.GetComponentInChildren<Text>(true).text, Is.EqualTo("Показать инициативу"));
+            show.onClick.Invoke();
+            Assert.That(strip.gameObject.activeSelf, Is.True);
+            Assert.That(show.gameObject.activeSelf, Is.False);
+        }
+        finally
+        {
+            singleton.SetValue(null, previous);
+            UnityEngine.Object.DestroyImmediate(trackerObject);
+        }
+    }
+
+    [Test]
+    public void RollResultsShowOnTheTableAndStillEnterTheJournal()
+    {
+        var show = _type.GetMethod("ShowResult");
+        show.Invoke(_ui, new object[] { "d20", 17, 42UL, "Алиса" });
+        show.Invoke(_ui, new object[] { "d6", 4, 42UL, "Алиса" });
+        Assert.That(Field<RectTransform>("_nativeNoticePanel").gameObject.activeSelf, Is.True);
+        Assert.That(Field<Text>("_nativeNotice").text, Is.EqualTo("Алиса · d20 = 17 · d6 = 4"));
+        Assert.That(Field<Image>("_nativeNoticeDie").enabled, Is.True);
+        var rolls = Field<RectTransform>("_feedContent").GetComponentsInChildren<Text>(true).Select(text => text.text);
+        Assert.That(rolls.Any(line => line.Contains("d20=17")), Is.True);
+        Assert.That(rolls.Any(line => line.Contains("d6=4")), Is.True);
+
+        var noticeKind = Type.GetType("TableNoticeKind, Assembly-CSharp", true);
+        _type.GetMethod("ShowToolNotice").Invoke(_ui, new[] { "Не удалось создать кубик", Enum.Parse(noticeKind, "Error") });
+        Assert.That(Field<Text>("_nativeNoticeGlyph").text, Is.EqualTo("×"));
+        Assert.That(Field<Text>("_nativeNoticeGlyph").color, Is.EqualTo(Color.white));
+        var badge = Field<Image>("_nativeNoticeBadge");
+        Assert.That(badge.color.r, Is.GreaterThan(badge.color.g * 2));
+        Assert.That(badge.raycastTarget, Is.False);
+    }
+    [Test]
+    public void JournalFiltersAreExclusiveAndClearUnreadWhenChatBecomesVisible()
+    {
+        _root.SetActive(true);
+        Field<RectTransform>("_nativeRoot").gameObject.SetActive(true);
+        _type.GetMethod("NativeBuildPlayerMenu", Private).Invoke(_ui, null);
+        var entryType = Type.GetType("LobbyChat+Entry, Assembly-CSharp", true);
+        var constructor = entryType.GetConstructors(Private).Single();
+        var entry = constructor.Invoke(new object[] { 42UL, DateTime.UtcNow.Ticks, "Алиса", "Привет!", Array.Empty<byte>() });
+        _type.GetMethod("ReceiveChatMessage", Private).Invoke(_ui, new[] { entry });
+        _type.GetMethod("ShowResult").Invoke(_ui, new object[] { "d20", 17, 42UL, "Алиса" });
+
+        var badge = Field<Text>("_playerUnread");
+        Assert.That(badge.text, Is.EqualTo("1"));
+        var panel = Field<GameObject>("_logPanelGO");
+        var filter = panel.transform.Find("JournalBody/RollFilterRow/RollsOnly").GetComponent<Toggle>();
+        var messages = panel.transform.Find("JournalBody/RollFilterRow/MessagesOnly").GetComponent<Toggle>();
+        filter.isOn = true;
+        _type.GetMethod("NativeToggleJournal", Private).Invoke(_ui, null);
+
+        var content = Field<RectTransform>("_feedContent");
+        Assert.That(content.Find("Message").gameObject.activeSelf, Is.False);
+        Assert.That(content.Find("Roll").gameObject.activeSelf, Is.True);
+        Assert.That(badge.transform.parent.gameObject.activeSelf, Is.True);
+
+        messages.isOn = true;
+        Assert.That(filter.isOn, Is.False);
+        Assert.That(content.Find("Message").gameObject.activeSelf, Is.True);
+        Assert.That(content.Find("Roll").gameObject.activeSelf, Is.False);
+        Assert.That(badge.transform.parent.gameObject.activeSelf, Is.False);
+
+        filter.isOn = true;
+        Assert.That(messages.isOn, Is.False);
+        Assert.That(content.Find("Message").gameObject.activeSelf, Is.False);
+        Assert.That(content.Find("Roll").gameObject.activeSelf, Is.True);
+
+        filter.isOn = false;
+        Assert.That(content.Find("Message").gameObject.activeSelf, Is.True);
+        Assert.That(content.Find("Roll").gameObject.activeSelf, Is.True);
+    }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public void JournalFillsTheRightSideBelowTheInitiativeStrip(bool host)
+    {
+        var root = Field<RectTransform>("_nativeRoot");
+        root.anchorMin = root.anchorMax = Vector2.zero;
+        root.sizeDelta = new Vector2(1600, 900);
+        _type.GetField("_nativeHost", Private).SetValue(_ui, host);
+        _type.GetMethod("NativeLayout", Private).Invoke(_ui, null);
+
+        var journal = (RectTransform)Field<GameObject>("_logPanelGO").transform;
+        var initiative = Field<RectTransform>("_nativeInitiative");
+        float initiativeBottom = root.rect.height + initiative.offsetMin.y;
+        Assert.That(journal.anchoredPosition.y, Is.EqualTo(16));
+        Assert.That(journal.rect.height, Is.GreaterThan(520));
+        Assert.That(journal.anchoredPosition.y + journal.rect.height, Is.LessThan(initiativeBottom));
+    }
+
+    [Test]
+    public void ChatComposerUsesCompactSideButtonsAndSubmitsThroughTheInputField()
+    {
+        var input = Field<InputField>("_chatInput");
+        var attach = Field<Button>("_chatAttach");
+        var send = Field<Button>("_chatSend");
+        Assert.That(attach.transform.parent.GetSiblingIndex(), Is.LessThan(input.transform.GetSiblingIndex()));
+        Assert.That(send.transform.parent.GetSiblingIndex(), Is.GreaterThan(input.transform.GetSiblingIndex()));
+        Assert.That(attach.transform.parent.GetComponent<LayoutElement>().preferredWidth, Is.EqualTo(36));
+        Assert.That(send.transform.parent.GetComponent<LayoutElement>().preferredWidth, Is.EqualTo(36));
+        Assert.That(LayoutUtility.GetFlexibleHeight((RectTransform)input.transform.parent), Is.Zero);
+        Assert.That(LayoutUtility.GetFlexibleHeight((RectTransform)Field<Toggle>("_feedFilter").transform.parent),
+            Is.Zero);
+
+        input.text = "Черновик";
+        input.onEndEdit.Invoke(input.text);
+        Assert.That(Field<Text>("_chatStatus").text, Is.Empty);
+        input.onSubmit.Invoke(input.text);
+        Assert.That(Field<Text>("_chatStatus").text, Does.Contain("не отправлено"));
+        Assert.That(input.text, Is.EqualTo("Черновик"));
+    }
+
+    [Test]
+    public void JournalAppendsNewestEntriesAndOpensImageAtItsReceivedResolution()
+    {
+        _root.SetActive(true);
+        Field<RectTransform>("_nativeRoot").gameObject.SetActive(true);
+        _type.GetMethod("NativeToggleJournal", Private).Invoke(_ui, null);
+        var source = new Texture2D(512, 256, TextureFormat.RGBA32, false);
+        try
+        {
+            var chat = Type.GetType("LobbyChat, Assembly-CSharp", true);
+            var image = chat.GetMethod("PackImage", BindingFlags.Static | BindingFlags.NonPublic)
+                .Invoke(null, new object[] { source });
+            Assert.That(image, Is.Not.Null);
+            var add = _type.GetMethod("AddFeedRow", Private);
+            add.Invoke(_ui, new[] { (object)2L, "Бросок", true, null, null });
+            add.Invoke(_ui, new[] { (object)1L, "История", false, "Ранее", null });
+            add.Invoke(_ui, new[] { (object)3L, "Новое", false, "Фото", image });
+            var content = Field<RectTransform>("_feedContent");
+            Assert.That(content.GetChild(0).name, Is.EqualTo("Message"));
+            Assert.That(content.GetChild(1).name, Is.EqualTo("Roll"));
+            var thumbnail = content.GetChild(2).Find("ImageSlot/Attachment").GetComponent<RawImage>();
+            Assert.That(thumbnail.texture.width, Is.EqualTo(160));
+            Assert.That(content.GetChild(2).Find("CardBorder"), Is.Not.Null);
+
+            thumbnail.GetComponent<Button>().onClick.Invoke();
+            Assert.That(Field<GameObject>("_feedImageModal").activeInHierarchy, Is.True);
+            Assert.That(Field<RawImage>("_feedImageViewer").texture.width, Is.EqualTo(512));
+            Field<GameObject>("_feedImageModal").GetComponentInChildren<Button>().onClick.Invoke();
+            Assert.That(Field<GameObject>("_feedImageModal").activeSelf, Is.False);
+            Assert.That(Field<RawImage>("_feedImageViewer").texture, Is.Null);
+            Assert.That(Field<GameObject>("_logPanelGO").activeSelf, Is.True);
+        }
+        finally { UnityEngine.Object.DestroyImmediate(source); }
+    }
+
     [Test] public void PlayerCreationIsOneClickWithoutOpeningAForm()
     {
         _type.GetMethod("NativeBuildPlayerMenu",Private).Invoke(_ui,null);
@@ -143,12 +335,16 @@ public class DiceboundAtlasPlayerMenuTests
         Assert.That(close.colors.highlightedColor.a,Is.GreaterThan(close.colors.normalColor.a));
         Assert.That(drawer.Find("HeadingDivider"),Is.Not.Null);
     }
-    [Test] public void MasterKeepsMovementRequestsButOmitsPlayerSheetAndMenuToggle()
+    [Test] public void MasterKeepsPendingRequestsInRailAndLeavesJournalAtBottom()
     {
         _type.GetField("_nativeHost",Private).SetValue(_ui,true);_type.GetMethod("NativeLayout",Private).Invoke(_ui,null);
         Assert.That(Field<Button>("_nativeMenuButton").gameObject.activeSelf,Is.False);
         Assert.That(Field<RectTransform>("_nativeRail").GetComponentsInChildren<Text>(true).Any(t=>t.text=="Мой лист"),Is.False);
-        Assert.That(Field<Button>("_movementRequestsButton").gameObject.activeSelf,Is.True);
+        var requests = Field<Button>("_movementRequestsButton");
+        Assert.That(requests.transform.IsChildOf(Field<RectTransform>("_nativeRail")), Is.True);
+        Assert.That(requests.gameObject.activeSelf, Is.False);
+        Assert.That(((RectTransform)Field<GameObject>("_logPanelGO").transform).anchoredPosition,
+            Is.EqualTo(new Vector2(-16, 16)));
         _type.GetField("_nativeHost",Private).SetValue(_ui,false);_type.GetMethod("NativeLayout",Private).Invoke(_ui,null);
         Assert.That(Field<Button>("_nativeMenuButton").gameObject.activeSelf,Is.True);
     }

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Text;
 using Unity.Collections;
@@ -246,7 +246,7 @@ public sealed partial class SceneEditor : MonoBehaviour
         {
             if (HostSceneCurtain.IsCurtainDown) HostSceneCurtain.Instance?.ToggleCurtainOnHost();
         }
-        else DiceUI.Instance?.ShowToolNotice("Не все игроки получили сцену. Стол оставлен закрытым; повторите загрузку или попросите игроков переподключиться.");
+        else DiceUI.Instance?.ShowToolNotice("Не все игроки получили сцену. Стол оставлен закрытым; повторите загрузку или попросите игроков переподключиться.", TableNoticeKind.Error);
     }
     private void FinishStroke()
     {

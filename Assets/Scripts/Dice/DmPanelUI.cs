@@ -170,7 +170,6 @@ public partial class DmPanelUI : MonoBehaviour
             new Vector2(0, 1), new Vector2(0, 1), new Vector2(180, 26), new Vector2(0, -2), true);
         Button(parent, "Поля игрокам…", 94, 26, 176, -2, OpenStatBlockVisibilityPanel, VttUiSkin.Button);
         Button(parent, "Новый", 64, 26, 276, -2, RequestNewStatBlock, VttUiSkin.Button);
-        Button(parent, "Импорт листа", 100, 26, 248, -30, RequestCharacterImport, VttUiSkin.Button);
         var viewport = Box(parent, "StatBlockViewport", new Color(0, 0, 0, 0.01f), 0, false);
         Place(viewport, new Vector2(0, 1), new Vector2(0, 1), new Vector2(236, 66), new Vector2(0, -30));
         Button(parent, "Сбросить правки", 100, 26, 248, -64, ReloadSelectedStatBlock, VttUiSkin.Button);
@@ -498,82 +497,6 @@ public partial class DmPanelUI : MonoBehaviour
         UpdateStatBlockVisibilityLabels();
     }
 
-    private void ImportCharacterDataToStatBlock()
-    {
-        var character = FindAnyObjectByType<CharacterData>();
-        if (character == null)
-        {
-            _statBlockHint.text = "Лист персонажа не найден в сцене.";
-            return;
-        }
-
-        ClearStatBlockInputs();
-        _statBlockInputs[0].text = string.IsNullOrWhiteSpace(character.characterName)
-            ? character.className : character.characterName;
-        _statBlockInputs[1].text = character.className ?? string.Empty;
-        _statBlockInputs[2].text = "Средний";
-        _statBlockInputs[3].text = "Не задано";
-        _statBlockInputs[4].text = character.armorClass.ToString();
-        _statBlockInputs[5].text = character.maxHP.ToString();
-        _statBlockInputs[6].text = string.Empty;
-        _statBlockInputs[7].text = string.Join(",", character.strength, character.dexterity,
-            character.constitution, character.intelligence, character.wisdom, character.charisma);
-        _statBlockInputs[8].text = "Уровень " + character.level;
-        _statBlockInputs[9].text = string.Join("\n", new[]
-        {
-            BuildCharacterStatDetails(character),
-            character.otherProficiencies, character.featuresAndTraits, character.extraAbilities,
-            character.traits, character.equipment, character.treasure,
-            character.note1, character.note2, character.note3, character.note4, character.note5, character.note6
-        }.Where(value => !string.IsNullOrWhiteSpace(value)));
-        var actionLines = new List<string>();
-        AppendCharacterActionLines(actionLines, "Атаки и заклинания", character.attacksAndSpells);
-        AppendCharacterActionLines(actionLines, "Особенности", character.featuresAndTraits);
-        _statBlockInputs[10].text = string.Join("\n", actionLines);
-        _statBlockHint.text = "Поля листа скопированы. Проверьте их и сохраните статблок.";
-    }
-
-    private static string BuildCharacterStatDetails(CharacterData character)
-    {
-        var lines = new List<string> { "Бонус мастерства: " + CharacterData.ModString(character.proficiencyBonus) };
-        lines.Add("Спасброски: " + string.Join(", ", new[]
-        {
-            "СИЛ " + CharacterData.ModString(character.StrSave), "ЛОВ " + CharacterData.ModString(character.DexSave),
-            "ТЕЛ " + CharacterData.ModString(character.ConSave), "ИНТ " + CharacterData.ModString(character.IntSave),
-            "МДР " + CharacterData.ModString(character.WisSave), "ХАР " + CharacterData.ModString(character.ChaSave)
-        }));
-        var skills = new List<string>();
-        int perception = 10 + character.WisMod, insight = 10 + character.WisMod, analysis = 10 + character.IntMod;
-        foreach (var skill in character.skills ?? Array.Empty<CharacterData.SkillEntry>())
-        {
-            if (skill == null || string.IsNullOrWhiteSpace(skill.name)) continue;
-            int bonus = character.GetSkillBonus(skill);
-            skills.Add(skill.name + " " + CharacterData.ModString(bonus) + (skill.expertise ? " (экспертиза)" : ""));
-            if (skill.name == "Восприятие") perception = 10 + bonus;
-            else if (skill.name == "Проницательность") insight = 10 + bonus;
-            else if (skill.name == "Анализ") analysis = 10 + bonus;
-        }
-        if (skills.Count > 0) lines.Add("Навыки: " + string.Join(", ", skills));
-        lines.Add($"Пассивные чувства: Восприятие {perception}, Проницательность {insight}, Анализ {analysis}");
-        return string.Join("\n", lines);
-    }
-
-    private static void AppendCharacterActionLines(List<string> output, string title, string source)
-    {
-        if (string.IsNullOrWhiteSpace(source)) return;
-        foreach (string raw in source.Split('\n'))
-        {
-            string line = raw.Trim();
-            if (line.Length == 0) continue;
-            // The statblock editor uses "name: description" rows.
-            int separator = line.IndexOf(':');
-            output.Add(StatBlockActionText.Format(new[] { new StatBlockAction {
-                name = separator > 0 ? line.Substring(0, separator) : title,
-                description = separator > 0 ? line.Substring(separator + 1).TrimStart() : line
-            } }));
-        }
-    }
-
     private void UpdateStatBlockVisibilityLabels()
     {
         if (_statBlockVisibilityLabels == null) return;
@@ -819,7 +742,7 @@ public partial class DmPanelUI : MonoBehaviour
         _transitionXInput.text = cell.x.ToString();
         _transitionYInput.text = cell.y.ToString();
         _transitionPickingCell = false;
-        DiceUI.Instance?.ShowToolNotice($"Клетка перехода выбрана: {cell.x}, {cell.y}.");
+        DiceUI.Instance?.ShowToolNotice($"Клетка перехода выбрана: {cell.x}, {cell.y}.", TableNoticeKind.Success);
     }
 
     private CampaignScene[] GetTransitionTargets()
@@ -894,14 +817,14 @@ public partial class DmPanelUI : MonoBehaviour
     {
         if (string.IsNullOrEmpty(_editingTransitionId))
         {
-            DiceUI.Instance?.ShowToolNotice("Сначала нажмите на переход, который нужно изменить.");
+            DiceUI.Instance?.ShowToolNotice("Сначала нажмите на переход, который нужно изменить.", TableNoticeKind.Warning);
             return;
         }
         RefreshTransitionTargetLabel();
         if (string.IsNullOrEmpty(_selectedTransitionTargetId)) return;
         if (!int.TryParse(_transitionXInput.text, out int x) || !int.TryParse(_transitionYInput.text, out int y))
         {
-            DiceUI.Instance?.ShowToolNotice("Введите целые координаты клетки.");
+            DiceUI.Instance?.ShowToolNotice("Введите целые координаты клетки.", TableNoticeKind.Warning);
             return;
         }
         SceneFileStore.UpdateSceneTransition(_editingTransitionId, _transitionTitleInput.text,
@@ -921,7 +844,7 @@ public partial class DmPanelUI : MonoBehaviour
         string[] tokenIds = _selectedTokenTransferIds.ToArray();
         if (tokenIds.Length == 0)
         {
-            DiceUI.Instance?.ShowToolNotice("Выберите хотя бы один токен.");
+            DiceUI.Instance?.ShowToolNotice("Выберите хотя бы один токен.", TableNoticeKind.Warning);
             return;
         }
         string targetId = _selectedTransitionTargetId;
@@ -946,7 +869,7 @@ public partial class DmPanelUI : MonoBehaviour
         var transition = Array.Find(SceneFileStore.GetActiveSceneTransitions(), item => item.id == _editingTransitionId);
         if (transition == null)
         {
-            DiceUI.Instance?.ShowToolNotice("Сначала нажмите ✎ у сохранённого перехода в списке.");
+            DiceUI.Instance?.ShowToolNotice("Сначала нажмите ✎ у сохранённого перехода в списке.", TableNoticeKind.Warning);
             return;
         }
         var target = Array.Find(SceneFileStore.GetCampaignScenes(), item => item.sceneId == transition.targetSceneId);

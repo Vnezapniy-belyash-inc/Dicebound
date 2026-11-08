@@ -8,11 +8,12 @@ using UnityEngine.UI;
 /// Clients see an opaque full-screen panel and cannot interact with or view the scene.
 /// Sync uses CustomMessagingManager (no runtime NetworkObject spawn).
 /// </summary>
-public class HostSceneCurtain : MonoBehaviour
+public partial class HostSceneCurtain : MonoBehaviour
 {
     private const string MSG_STATE = "HostSceneCurtainState";
 
     public static HostSceneCurtain Instance { get; private set; }
+    internal event System.Action LocalSyncCompleted;
 
     private bool _curtainDown;
     private bool _syncPending;
@@ -47,7 +48,6 @@ public class HostSceneCurtain : MonoBehaviour
     private GameObject _overlayRoot;
     private Text _overlayLabel;
     private Text _tipLabel;
-    private GameObject _curtainExitButton;
     private bool HasVisibleClientOverlay => _clientCanvas != null && _clientCanvas.isActiveAndEnabled
         && _overlayRoot != null && _overlayRoot.activeInHierarchy;
     private Texture2D _curtainTexture;
@@ -80,13 +80,6 @@ public class HostSceneCurtain : MonoBehaviour
 
     public static bool IsLocalSynchronizing => Instance != null && Instance._syncPending
         && NetworkManager.Singleton != null && !NetworkManager.Singleton.IsHost;
-    private bool CanViewSynchronizedScene => (_syncStages & 13) == 13;
-    private Rect SyncPanelRect => new Rect(Mathf.Max(8f, Screen.width - 458f * LocalUiScale.Value),
-        12f, Mathf.Min(Screen.width - 16f, 446f * LocalUiScale.Value), 286f * LocalUiScale.Value);
-    public static bool IsPointerOverSyncPanel => IsLocalSynchronizing && !IsBlockingLocalPlayer
-        && UnityEngine.InputSystem.Mouse.current != null && Instance.SyncPanelRect.Contains(
-            new Vector2(UnityEngine.InputSystem.Mouse.current.position.ReadValue().x,
-                Screen.height - UnityEngine.InputSystem.Mouse.current.position.ReadValue().y));
 
     public static void EnsureInstance()
     {
@@ -210,6 +203,7 @@ public class HostSceneCurtain : MonoBehaviour
 
         if (nm.IsHost)
         {
+            SetLoadingScreenVisible(false);
             SetClientOverlayVisible(false);
             RestoreCameras();
             SetHostIndicatorVisible(_curtainDown);
@@ -217,11 +211,12 @@ public class HostSceneCurtain : MonoBehaviour
         }
 
         SetHostIndicatorVisible(false);
-        SetClientOverlayVisible(_curtainDown);
-        if (_curtainExitButton != null) _curtainExitButton.SetActive(_syncPending);
+        bool loading = IsLoadingScreenVisible;
+        SetLoadingScreenVisible(loading);
+        SetClientOverlayVisible(_curtainDown && !loading);
         if (_overlayLabel != null)
             _overlayLabel.text = "Мастер готовит сцену...";
-        if (_curtainDown || _syncPending && !CanViewSynchronizedScene)
+        if (_curtainDown || loading)
             BlockSceneCameras();
         else
             RestoreCameras();
@@ -250,15 +245,18 @@ public class HostSceneCurtain : MonoBehaviour
             foreach (ulong client in _synchronizingClients)
                 if (nm.ConnectedClients.ContainsKey(client)) SendStateToClient(client, _curtainDown);
         }
-        if (!IsLocalSynchronizing) return;
-        int bytes = MapSync.Instance?.LocalReceivedBytes ?? 0;
-        int objects = LateJoinSync.Instance?.LocalWorldObjectCount ?? 0;
-        if (bytes != _lastLocalBytes || objects != _lastLocalObjects)
+        if (IsLocalSynchronizing)
         {
-            _lastLocalBytes = bytes;
-            _lastLocalObjects = objects;
-            _lastProgressAt = Time.unscaledTime;
+            int bytes = MapSync.Instance?.LocalReceivedBytes ?? 0;
+            int objects = LateJoinSync.Instance?.LocalWorldObjectCount ?? 0;
+            if (bytes != _lastLocalBytes || objects != _lastLocalObjects)
+            {
+                _lastLocalBytes = bytes;
+                _lastLocalObjects = objects;
+                _lastProgressAt = Time.unscaledTime;
+            }
         }
+        if (IsLoadingScreenVisible) UpdateLoadingScreen();
     }
 
     private void TryRegisterHandler()
@@ -292,6 +290,7 @@ public class HostSceneCurtain : MonoBehaviour
         reader.ReadValueSafe(out bool down);
         bool pending = false;
         if (reader.TryBeginRead(sizeof(bool))) reader.ReadValueSafe(out pending);
+        bool completed = _syncPending && !pending;
         if (pending && !_syncPending) BeginLocalSync();
         _syncPending = pending;
         if (reader.TryBeginRead(sizeof(byte) + 2 * sizeof(int)))
@@ -306,6 +305,7 @@ public class HostSceneCurtain : MonoBehaviour
             _portraitsTotal = portraitsTotal;
         }
         SetCurtainDown(down);
+        if (completed) LocalSyncCompleted?.Invoke();
     }
 
     private void BroadcastState(bool down)
@@ -350,13 +350,11 @@ public class HostSceneCurtain : MonoBehaviour
 
     private void BlockSceneCameras()
     {
-        RestoreCameras();
-
         var cameras = FindObjectsByType<Camera>(FindObjectsInactive.Exclude);
         foreach (var cam in cameras)
         {
             if (cam == null || !cam.enabled || cam.targetTexture != null) continue;
-            _blockedCameras.Add(cam);
+            if (!_blockedCameras.Contains(cam)) _blockedCameras.Add(cam);
             cam.enabled = false;
         }
     }
@@ -438,29 +436,6 @@ public class HostSceneCurtain : MonoBehaviour
         tipTextRect.offsetMin = new Vector2(12, 8);
         tipTextRect.offsetMax = new Vector2(-12, -8);
 
-        _curtainExitButton = new GameObject("ExitToLobby", typeof(RectTransform), typeof(Image), typeof(Button));
-        _curtainExitButton.transform.SetParent(_overlayRoot.transform, false);
-        _curtainExitButton.GetComponent<Image>().color = new Color(.15f, .18f, .23f, 1);
-        _curtainExitButton.GetComponent<Button>().onClick.AddListener(() => { _ = GameNetworkManager.Instance?.ShutdownAndReset(); });
-        var exitRect = _curtainExitButton.GetComponent<RectTransform>();
-        exitRect.anchorMin = exitRect.anchorMax = new Vector2(1, 0);
-        exitRect.pivot = new Vector2(1, 0);
-        exitRect.sizeDelta = new Vector2(200, 36);
-        exitRect.anchoredPosition = new Vector2(-16, 16);
-        var exitText = new GameObject("Text", typeof(RectTransform), typeof(Text));
-        exitText.transform.SetParent(_curtainExitButton.transform, false);
-        var exitLabel = exitText.GetComponent<Text>();
-        exitLabel.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-        exitLabel.fontSize = 16;
-        exitLabel.alignment = TextAnchor.MiddleCenter;
-        exitLabel.color = Color.white;
-        exitLabel.text = "Выйти в лобби";
-        exitLabel.raycastTarget = false;
-        var exitTextRect = exitText.GetComponent<RectTransform>();
-        exitTextRect.anchorMin = Vector2.zero; exitTextRect.anchorMax = Vector2.one;
-        exitTextRect.offsetMin = exitTextRect.offsetMax = Vector2.zero;
-        _curtainExitButton.SetActive(false);
-
         // RawImage stretches the entire meme to any screen aspect ratio, including its caption.
         if (_curtainTexture != null) return;
 
@@ -539,11 +514,7 @@ public class HostSceneCurtain : MonoBehaviour
     {
         var nm = NetworkManager.Singleton;
         if (nm == null || nm.IsHost) return;
-        if (!_curtainDown)
-        {
-            if (_syncPending) DrawSyncStatus();
-            return;
-        }
+        if (!_curtainDown || IsLoadingScreenVisible) return;
 
         // The native canvas already draws the meme AND its caption. A second fullscreen
         // IMGUI image would paint over that caption; use IMGUI only when the canvas is unavailable.
@@ -567,8 +538,6 @@ public class HostSceneCurtain : MonoBehaviour
         if (_curtainTexture == null)
             GUI.Label(new Rect(0f, 0f, Screen.width, Screen.height), "Мастер готовит сцену...", style);
         DrawLoadingTip();
-        if (_syncPending && GUI.Button(new Rect(Screen.width - 216, Screen.height - 52, 200, 36), "Выйти в лобби"))
-            _ = GameNetworkManager.Instance?.ShutdownAndReset();
         GUI.color = oldColor;
     }
 
@@ -601,67 +570,6 @@ public class HostSceneCurtain : MonoBehaviour
         GUI.DrawTexture(rect, Texture2D.whiteTexture);
         GUI.color = Color.white;
         GUI.Label(rect, LoadingTips[_tipIndex], tipStyle);
-        GUI.color = previous;
-    }
-
-    private void DrawSyncStatus()
-    {
-        GUI.depth = -31900;
-        Rect panel = SyncPanelRect;
-        float scale = LocalUiScale.Value;
-        var label = new GUIStyle(GUI.skin.label) { fontSize = Mathf.RoundToInt(13 * scale), wordWrap = true };
-        label.normal.textColor = VttUiSkin.Text;
-        GUI.Box(panel, "", VttUiSkin.ImGuiPanel);
-        float x = panel.x + 12 * scale, y = panel.y + 8 * scale, width = panel.width - 24 * scale;
-        int complete = 0;
-        for (int i = 0; i < SyncStageNames.Length; i++) if ((_syncStages & (1 << i)) != 0) complete++;
-        GUI.Label(new Rect(x, y, width, 24 * scale),
-            $"Синхронизация сцены · этапы {complete}/6 · {Mathf.FloorToInt(Time.unscaledTime - _syncStartedAt)} с", label);
-        y += 28 * scale;
-        DrawProgressBar(new Rect(x, y, width, 7 * scale), complete / 6f);
-        y += 14 * scale;
-        string mapStatus = (_syncStages & 1) != 0 ? "готова" : "ожидаем данные";
-        var map = MapSync.Instance;
-        if (map != null && map.IsReceivingMap)
-            mapStatus = $"{Mathf.RoundToInt(map.LocalReceiveProgress * 100)}% · {map.LocalReceivedBytes / 1024} / {map.LocalTotalBytes / 1024} КБ"
-                + (map.LocalRetryCount > 0 ? $" · повтор {map.LocalRetryCount}/3" : "");
-        else if (map != null && map.LocalReceiveFailed) mapStatus = "не удалось получить данные · повторите запрос";
-        else if (map != null && map.LocalReceiveCancelled) mapStatus = "загрузка отменена";
-        GUI.Label(new Rect(x, y, width, 22 * scale), "Карта: " + mapStatus, label);
-        y += 24 * scale;
-        DrawProgressBar(new Rect(x, y, width, 6 * scale), (_syncStages & 1) != 0 ? 1f : map?.LocalReceiveProgress ?? 0f);
-        y += 12 * scale;
-        string objects = LateJoinSync.Instance?.LocalWorldObjectTotal >= 0
-            ? $"{LateJoinSync.Instance.LocalWorldObjectCount}/{LateJoinSync.Instance.LocalWorldObjectTotal}" : "ожидаем список";
-        GUI.Label(new Rect(x, y, width, 22 * scale), $"Токены и кубики: {objects} · портреты: {_portraitsReceived}/{_portraitsTotal}", label);
-        y += 24 * scale;
-        string states = "";
-        for (int i = 2; i < SyncStageNames.Length; i++)
-            if (i != 4) states += (states.Length == 0 ? "" : " · ") + SyncStageNames[i] + ((_syncStages & (1 << i)) != 0 ? " ✓" : " …");
-        GUI.Label(new Rect(x, y, width, 38 * scale), states, label);
-        y += 40 * scale;
-        bool stalled = Time.unscaledTime - _lastProgressAt > 20f || map != null && (map.LocalReceiveFailed || map.LocalReceiveCancelled);
-        string status = stalled ? "Новых данных пока нет. Ждём подтверждения мастера; можно повторить запрос."
-            : CanViewSynchronizedScene ? "Карта доступна для просмотра. Действия откроются после синхронизации."
-            : "Интерфейс доступен. Стол появится после загрузки карты и тумана.";
-        GUI.Label(new Rect(x, y, width, 42 * scale), status, label);
-        y += 46 * scale;
-        if (stalled && GUI.Button(new Rect(x, y, width * 0.54f, 30 * scale), "Повторить запрос", VttUiSkin.ImGuiButton))
-        {
-            LateJoinSync.RequestSynchronizationRetry();
-            _lastProgressAt = Time.unscaledTime;
-        }
-        if (GUI.Button(new Rect(x + width * 0.57f, y, width * 0.43f, 30 * scale), "Выйти в лобби", VttUiSkin.ImGuiButton))
-            _ = GameNetworkManager.Instance?.ShutdownAndReset();
-    }
-
-    private static void DrawProgressBar(Rect rect, float progress)
-    {
-        Color previous = GUI.color;
-        GUI.color = new Color(0.18f, 0.22f, 0.27f);
-        GUI.DrawTexture(rect, Texture2D.whiteTexture);
-        GUI.color = new Color(0.22f, 0.64f, 0.88f);
-        GUI.DrawTexture(new Rect(rect.x, rect.y, rect.width * Mathf.Clamp01(progress), rect.height), Texture2D.whiteTexture);
         GUI.color = previous;
     }
 }

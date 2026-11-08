@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -474,7 +474,7 @@ public static class SceneFileStore
         CampaignFileStore.Save(path, CaptureCampaign(title));
         _lastSavedState = JsonUtility.ToJson(Capture(true));
         _campaignDirty = false;
-        DiceUI.Instance?.ShowToolNotice("Сессия сохранена: " + Path.GetFileName(path));
+        DiceUI.Instance?.ShowToolNotice("Сессия сохранена: " + Path.GetFileName(path), TableNoticeKind.Success);
     }
 
     private static void UpdateCampaignScene(CampaignDefinition campaign, SceneDefinition scene, SceneBattleState battle)
@@ -509,7 +509,7 @@ public static class SceneFileStore
         bool previousDirty = _campaignDirty;
         if (_campaign.scenes.Length >= 128)
         {
-            DiceUI.Instance?.ShowToolNotice("В кампании достигнут лимит в 128 сцен.");
+            DiceUI.Instance?.ShowToolNotice("В кампании достигнут лимит в 128 сцен.", TableNoticeKind.Warning);
             return;
         }
         var current = Array.Find(_campaign.scenes, item => item.sceneId == _campaign.activeSceneId);
@@ -556,7 +556,7 @@ public static class SceneFileStore
         CaptureCampaign(_campaign?.title ?? "Кампания");
         if (_campaign.scenes.Length >= 128)
         {
-            DiceUI.Instance?.ShowToolNotice("В кампании достигнут лимит в 128 сцен.");
+            DiceUI.Instance?.ShowToolNotice("В кампании достигнут лимит в 128 сцен.", TableNoticeKind.Warning);
             return;
         }
         var current = Array.Find(_campaign.scenes, item => item.sceneId == _campaign.activeSceneId);
@@ -632,7 +632,7 @@ public static class SceneFileStore
         catch { active.scene.transitions = transitions; throw; }
         _campaignDirty = true;
         RefreshTransitionMarkers();
-        DiceUI.Instance?.ShowToolNotice("Переход добавлен: " + title);
+        DiceUI.Instance?.ShowToolNotice("Переход добавлен: " + title, TableNoticeKind.Success);
     });
 
     public static void UpdateSceneTransition(string transitionId, string title, string targetSceneId, int x, int y) => Safely(() =>
@@ -674,7 +674,7 @@ public static class SceneFileStore
         }
         RefreshTransitionMarkers();
         _campaignDirty = true;
-        DiceUI.Instance?.ShowToolNotice("Переход обновлён: " + title);
+        DiceUI.Instance?.ShowToolNotice("Переход обновлён: " + title, TableNoticeKind.Success);
     });
 
     public static void DeleteSceneTransition(string transitionId) => Safely(() =>
@@ -892,7 +892,7 @@ public static class SceneFileStore
         _campaignDirty = true;
         try { SwitchToScene(target.sceneId); }
         catch { _campaign = backup; _campaignDirty = previousDirty; throw; }
-        DiceUI.Instance?.ShowToolNotice($"В сцену «{target.title}» перенесено токенов: {moving.Length}.");
+        DiceUI.Instance?.ShowToolNotice($"В сцену «{target.title}» перенесено токенов: {moving.Length}.", TableNoticeKind.Success);
     }
 
     private static int NormalizeRound(SceneBattleState battle)
@@ -942,7 +942,7 @@ public static class SceneFileStore
         _campaign.scenes[index].title = title;
         _campaign.scenes[index].scene.title = title;
         _campaignDirty = true;
-        DiceUI.Instance?.ShowToolNotice("Сцена переименована: " + title);
+        DiceUI.Instance?.ShowToolNotice("Сцена переименована: " + title, TableNoticeKind.Success);
     });
 
     public static void DeleteActiveScene() => Safely(DeleteActiveSceneCore);
@@ -957,7 +957,7 @@ public static class SceneFileStore
         CaptureCampaign(_campaign.title);
         if (_campaign.scenes.Length <= 1)
         {
-            DiceUI.Instance?.ShowToolNotice("Нельзя удалить последнюю сцену кампании.");
+            DiceUI.Instance?.ShowToolNotice("Нельзя удалить последнюю сцену кампании.", TableNoticeKind.Warning);
             return;
         }
         int index = Array.FindIndex(_campaign.scenes, item => item.sceneId == sceneId);
@@ -979,7 +979,7 @@ public static class SceneFileStore
         try { if(sceneId==_campaign.activeSceneId)SwitchToScene(nextSceneId);else{SceneValidation.Validate(_campaign);RefreshTransitionMarkers();} }
         catch { _campaign = previousCampaign; _campaignDirty = previousDirty; throw; }
         _campaignDirty = true;
-        DiceUI.Instance?.ShowToolNotice("Сцена удалена.");
+        DiceUI.Instance?.ShowToolNotice("Сцена удалена.", TableNoticeKind.Success);
     }
 
     public static void EnsureCampaign() => Safely(() =>
@@ -1084,7 +1084,7 @@ public static class SceneFileStore
         if (File.Exists(path)) File.Replace(temporary, path, null);
         else File.Move(temporary, path);
         if (notify) _lastSavedState = JsonUtility.ToJson(Capture(true));
-        if (notify) DiceUI.Instance?.ShowToolNotice("Сцена сохранена: " + Path.GetFileName(path));
+        if (notify) DiceUI.Instance?.ShowToolNotice("Сцена сохранена: " + Path.GetFileName(path), TableNoticeKind.Success);
     }
     public static void Load(string path)
     {
@@ -1136,7 +1136,7 @@ public static class SceneFileStore
             FogManager.Instance.SaveWithHistory = campaign.exportFogHistory;
         }
         _campaignDirty = false;
-        DiceUI.Instance?.ShowToolNotice($"Сессия «{campaign.title}» загружена · сцена «{active.title}».");
+        DiceUI.Instance?.ShowToolNotice($"Сессия «{campaign.title}» загружена · сцена «{active.title}».", TableNoticeKind.Success);
         PublicReferenceLibrary.InvalidatePublishedLibrary();
         DmPanelUI.Instance?.ResetLibraryDraftsAfterLoad();
     }
@@ -1204,7 +1204,7 @@ public static class SceneFileStore
             if (!curtain && HostSceneCurtain.IsCurtainDown)
             {
                 if (applyCompleted) SceneEditor.Instance.RevealAfterMapTransfer();
-                else DiceUI.Instance?.ShowToolNotice("Сцену не удалось применить полностью. Занавес оставлен закрытым.");
+                else DiceUI.Instance?.ShowToolNotice("Сцену не удалось применить полностью. Занавес оставлен закрытым.", TableNoticeKind.Error);
             }
         }
         _currentSceneId = scene.sceneId;
@@ -1215,7 +1215,7 @@ public static class SceneFileStore
     private static void Safely(Action action)
     {
         try { action(); }
-        catch (Exception ex) { DiceUI.Instance?.ShowToolNotice("Сцена: " + ex.Message); Debug.LogWarning("[Scene] " + ex.Message); }
+        catch (Exception ex) { DiceUI.Instance?.ShowToolNotice("Сцена: " + ex.Message, TableNoticeKind.Error); Debug.LogWarning("[Scene] " + ex.Message); }
     }
     public static void LoadAutosave()
     {
@@ -1223,7 +1223,7 @@ public static class SceneFileStore
         string path = Path.Combine(Application.persistentDataPath, "autosave-campaign.json");
         bool campaign = File.Exists(path);
         if (!campaign) path = Path.Combine(Application.persistentDataPath, "autosave-scene.json");
-        if (!File.Exists(path)) { DiceUI.Instance?.ShowToolNotice("Автосохранения пока нет."); return; }
+        if (!File.Exists(path)) { DiceUI.Instance?.ShowToolNotice("Автосохранения пока нет.", TableNoticeKind.Warning); return; }
         DiceUI.Instance?.ConfirmAction("Восстановить автосохранение?",
             campaign ? "Сессия со всеми сценами, библиотеками и боем будет заменена последней сохранённой копией."
                 : "Текущая сцена будет заменена последней сохранённой копией.",

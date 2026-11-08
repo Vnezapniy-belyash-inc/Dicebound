@@ -467,7 +467,7 @@ public class LateJoinSync : MonoBehaviour
         if (manager != null && manager.IsConnectedClient
             && !manager.SpawnManager.SpawnedObjects.ContainsKey(netId)
             && !_goneWorldObjects.Contains(netId))
-            DiceUI.Instance?.ShowToolNotice("Созданный объект не загрузился. Переподключитесь.");
+            DiceUI.Instance?.ShowToolNotice("Созданный объект не загрузился. Переподключитесь.", TableNoticeKind.Error);
     }
 
     /// <summary>
@@ -778,7 +778,7 @@ public class LateJoinSync : MonoBehaviour
             if (!_goneWorldObjects.Contains(id)
                 && !manager.SpawnManager.SpawnedObjects.ContainsKey(id))
             {
-                DiceUI.Instance?.ShowToolNotice("Не все объекты карты загрузились. Переподключитесь.");
+                DiceUI.Instance?.ShowToolNotice("Не все объекты карты загрузились. Переподключитесь.", TableNoticeKind.Error);
                 yield break;
             }
         SendWorldAck(version);

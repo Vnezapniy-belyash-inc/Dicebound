@@ -58,18 +58,8 @@ public class DiceboundDragVisualTests
         Assert.That(Read<bool>("IsActive"), Is.True, "An ACK alone cannot expose an old root position.");
         Assert.That(Read<Vector3>("Position"), Is.EqualTo(new Vector3(11, 0, 5)));
 
-        var state = new NetworkTransform.NetworkTransformState();
-        object boxedState = state;
-        typeof(NetworkTransform.NetworkTransformState).GetField("NetworkTick", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(boxedState, 25);
-        object flags = typeof(NetworkTransform.NetworkTransformState).GetField("FlagStates", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(boxedState);
-        flags.GetType().GetField("IsTeleportingNextFrame", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).SetValue(flags, true);
-        flags.GetType().GetField("HasPositionChange", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).SetValue(flags, true);
-        typeof(NetworkTransform.NetworkTransformState).GetField("FlagStates", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(boxedState, flags);
-        foreach (var axis in new[] { ("PositionX", 11f), ("PositionY", 0f), ("PositionZ", 5f) })
-            typeof(NetworkTransform.NetworkTransformState).GetField(axis.Item1, BindingFlags.Instance | BindingFlags.NonPublic).SetValue(boxedState, axis.Item2);
         _root.transform.position = new Vector3(11, 0, 5);
-        transformType.GetMethod("OnNetworkTransformStateUpdated", BindingFlags.Instance | BindingFlags.NonPublic)
-            .Invoke(networkTransform, new object[] { state, boxedState });
+        ReceiveTeleport(networkTransform, 25, _root.transform.position);
         yield return null;
         Assert.That(Read<bool>("IsActive"), Is.False);
         Assert.That(body.forceRenderingOff, Is.False);
@@ -88,6 +78,100 @@ public class DiceboundDragVisualTests
         Assert.That(body.forceRenderingOff, Is.False);
         UnityEngine.Object.Destroy(_root);
         yield return null;
+        yield return new ExitPlayMode();
+    }
+
+    [UnityTest]
+    public IEnumerator ReleasedDieUsesLocalPhysicsUntilTheFinalPoseArrives()
+    {
+        yield return new EnterPlayMode();
+        _root = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        var collider = (MeshCollider)_root.AddComponent(typeof(MeshCollider));
+        collider.convex = true;
+        collider.sharedMesh = _root.GetComponent<MeshFilter>().sharedMesh;
+        _root.GetComponent<BoxCollider>().enabled = false;
+        var body = _root.AddComponent<Rigidbody>();
+        body.isKinematic = true;
+        body.useGravity = false;
+        var networkTransform = _root.AddComponent(Type.GetType("NetworkDragTransform, Assembly-CSharp", true));
+        _type = Type.GetType("NetworkDragPreview, Assembly-CSharp", true);
+        _preview = _root.AddComponent(_type);
+
+        var release = new Vector3(0, 8, 0);
+        Assert.That((bool)Call("Begin", 1), Is.True);
+        Call("WaitForFinish", 1);
+        var flight = (Rigidbody)Call("BeginPhysicalThrow", release, body, collider);
+        flight.linearVelocity = Vector3.right * 8;
+        flight.angularVelocity = Vector3.up * 5;
+        Assert.That(collider.enabled, Is.False);
+
+        Call("Complete", 1, 26, release, Quaternion.identity, false);
+        ReceiveTeleport(networkTransform, 26, release);
+        yield return new WaitForSecondsRealtime(.28f);
+        float firstPosition = flight.position.x;
+        yield return new WaitForSecondsRealtime(.12f);
+        Assert.That(flight.position.x, Is.GreaterThan(firstPosition + .3f));
+        Assert.That(Quaternion.Angle(flight.rotation, Quaternion.identity), Is.GreaterThan(1f));
+        Assert.That(Read<bool>("IsActive"), Is.True, "The launch teleport cannot end the local flight.");
+
+        flight.isKinematic = true;
+        Vector3 finalPosition = flight.position;
+        _root.transform.SetPositionAndRotation(finalPosition, flight.rotation);
+        Call("CompletePhysicalThrow", 1, 27, finalPosition);
+        yield return null;
+        Assert.That(Read<bool>("IsActive"), Is.True, "Keep showing the settled die while the final pose is in transit.");
+        ReceiveTeleport(networkTransform, 27, finalPosition);
+        yield return null;
+        Assert.That(Read<bool>("IsActive"), Is.False);
+        Assert.That(collider.enabled, Is.True);
+        Assert.That(Read<Vector3>("Position"), Is.EqualTo(finalPosition));
+        yield return new ExitPlayMode();
+    }
+
+    private static void ReceiveTeleport(Component networkTransform, int tick, Vector3 position)
+    {
+        var type = typeof(NetworkTransform.NetworkTransformState);
+        const BindingFlags privateInstance = BindingFlags.Instance | BindingFlags.NonPublic;
+        var state = new NetworkTransform.NetworkTransformState();
+        object boxedState = state;
+        type.GetField("NetworkTick", privateInstance).SetValue(boxedState, tick);
+        object flags = type.GetField("FlagStates", privateInstance).GetValue(boxedState);
+        const BindingFlags fields = privateInstance | BindingFlags.Public;
+        flags.GetType().GetField("IsTeleportingNextFrame", fields).SetValue(flags, true);
+        flags.GetType().GetField("HasPositionChange", fields).SetValue(flags, true);
+        type.GetField("FlagStates", privateInstance).SetValue(boxedState, flags);
+        type.GetField("PositionX", privateInstance).SetValue(boxedState, position.x);
+        type.GetField("PositionY", privateInstance).SetValue(boxedState, position.y);
+        type.GetField("PositionZ", privateInstance).SetValue(boxedState, position.z);
+        networkTransform.GetType().GetMethod("OnNetworkTransformStateUpdated", privateInstance)
+            .Invoke(networkTransform, new object[] { state, boxedState });
+    }
+
+    [UnityTest]
+    public IEnumerator ConsecutiveKeyboardPredictionsStayAheadOfEarlierServerReplies()
+    {
+        yield return new EnterPlayMode();
+        _root = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        _type = Type.GetType("NetworkDragPreview, Assembly-CSharp", true);
+        _preview = _root.AddComponent(_type);
+
+        Assert.That((bool)Call("PredictStep", 1, Vector3.right), Is.True);
+        Transform visual = Read<Transform>("DisplayTransform");
+        Assert.That((bool)Call("PredictStep", 2, Vector3.right * 2), Is.True);
+        Assert.That(Read<Transform>("DisplayTransform"), Is.SameAs(visual));
+        Assert.That(Read<Vector3>("Position"), Is.EqualTo(Vector3.right * 2));
+        Assert.That(_root.transform.position, Is.EqualTo(Vector3.zero));
+
+        Call("Complete", 1, 25, Vector3.right, Quaternion.identity, false);
+        Call("Reject", 1);
+        Assert.That(Read<Vector3>("Position"), Is.EqualTo(Vector3.right * 2));
+        Call("Complete", 2, 26, Vector3.right, Quaternion.identity, false);
+        Assert.That(Read<Vector3>("Position"), Is.EqualTo(Vector3.right));
+
+        Call("Stop");
+        Assert.That((bool)Call("Begin", 3), Is.True);
+        Assert.That((bool)Call("PredictStep", 4, Vector3.right), Is.False, "Keyboard input must not replace a mouse drag.");
+        Call("Stop");
         yield return new ExitPlayMode();
     }
 

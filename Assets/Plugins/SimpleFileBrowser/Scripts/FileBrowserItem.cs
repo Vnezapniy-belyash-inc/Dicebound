@@ -71,6 +71,7 @@ namespace SimpleFileBrowser
 			nameText.text = name;
 
 			IsDirectory = isDirectory;
+			RefreshFileIcon();
 		}
 		#endregion
 
@@ -170,6 +171,7 @@ namespace SimpleFileBrowser
 
 			background.color = isSelected ? skin.FileSelectedBackgroundColor : ( ( Position % 2 ) == 0 ? skin.FileNormalBackgroundColor : skin.FileAlternatingBackgroundColor );
 			nameText.color = isSelected ? skin.FileSelectedTextColor : skin.FileNormalTextColor;
+			RefreshFileIcon();
 
 			if( isHidden )
 			{
@@ -228,9 +230,16 @@ namespace SimpleFileBrowser
 			TransformComponent.sizeDelta = new Vector2( TransformComponent.sizeDelta.x, skin.FileHeight );
 			skin.ApplyTo( nameText, isSelected ? skin.FileSelectedTextColor : skin.FileNormalTextColor );
 			icon.rectTransform.sizeDelta = new Vector2( icon.rectTransform.sizeDelta.x, -skin.FileIconsPadding );
+			FileBrowser.ApplySurfaceStyle( background, 6 );
 
 			if( isInitialized )
 				SetSelected( isSelected );
+		}
+
+		private void RefreshFileIcon()
+		{
+			string key = IsDirectory ? "folder" : FileBrowser.IsImageFile( Name ) ? "map" : "file";
+			FileBrowser.ApplyIconStyle( icon, key, nameText.color );
 		}
 		#endregion
 	}

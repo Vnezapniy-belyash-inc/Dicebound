@@ -7,8 +7,14 @@ public class DiceboundStampTextTests
 {
     private static Type Runtime(string name) => Type.GetType(name + ", Assembly-CSharp", true);
     private static string Normalize(string text) => (string)Runtime("StampText").GetMethod("Normalize").Invoke(null, new object[] { text });
-    private static string Wrap(string text, float width) => (string)Runtime("StampText").GetMethod("Wrap").Invoke(null,
-        new object[] { text, new Func<string, float>(s => s.Length), width });
+
+    private static string Wrap(string text, Func<string, float> measure, float width, out int lines)
+    {
+        var arguments = new object[] { text, measure, width, 0 };
+        var wrapped = (string)Runtime("StampText").GetMethod("Wrap").Invoke(null, arguments);
+        lines = (int)arguments[3];
+        return wrapped;
+    }
 
     [TestCase("")] [TestCase("   \r\n\t")] [TestCase(null)]
     public void EmptyStampIsRejected(string text) => Assert.That(Normalize(text), Is.Null);
@@ -22,23 +28,51 @@ public class DiceboundStampTextTests
         Assert.That(Normalize("<b>текст</b>"), Is.EqualTo("<b>текст</b>"), "Markup must remain literal user text.");
     }
 
-    [TestCase("коротко", 20, "коротко")]
-    [TestCase("длинная надпись", 10, "длинная\nнадпись")]
-    [TestCase("abcdefghij", 5, "abcde\nfghij")]
-    public void StampFitsOneOrTwoLines(string text, float width, string expected)
-        => Assert.That(Wrap(text, width), Is.EqualTo(expected));
+    [Test]
+    public void StampWrapUsesMeasuredWidthAndPrefersWholeWords()
+    {
+        float Measure(string text)
+        {
+            float width = 0;
+            foreach (char c in text) width += c == 'W' ? 3 : 1;
+            return width;
+        }
+
+        Assert.That(Wrap("WW iiii", Measure, 8, out int lines), Is.EqualTo("WW\niiii"));
+        Assert.That(lines, Is.EqualTo(2));
+        Assert.That(Wrap("ii iiii", Measure, 8, out lines), Is.EqualTo("ii iiii"));
+        Assert.That(lines, Is.EqualTo(1));
+    }
 
     [Test]
-    public void LongTextNeverExceedsTwoLinesOrBreaksSurrogatePairs()
+    public void UnbrokenStampTextWrapsBetweenWholeTextElements()
     {
-        string text = "😀😀😀😀😀😀";
-        string wrapped = Wrap(text, 4);
-        Assert.That(wrapped.Split('\n').Length, Is.EqualTo(2));
-        Assert.That(wrapped.Replace("\n", ""), Is.EqualTo(text));
-        var strict = new System.Text.UTF8Encoding(false, true);
-        Assert.DoesNotThrow(() => strict.GetBytes(wrapped));
-        string longText = new string('Ж', 80);
-        Assert.That(Wrap(longText, 10).Split('\n').Length, Is.EqualTo(2));
+        const string text = "😀😀😀😀😀";
+        string wrapped = Wrap(text, value => value.Length, 4, out int lines);
+        Assert.That(wrapped, Is.EqualTo("😀😀\n😀😀\n😀"));
+        Assert.That(lines, Is.EqualTo(3));
+    }
+
+    [Test]
+    public void StampFrameGrowsWithTextAndStaysWide()
+    {
+        var effects = Runtime("FunEffects");
+        var reactionType = effects.GetNestedType("Reaction", BindingFlags.NonPublic);
+        var prepare = effects.GetMethod("PrepareStampText", BindingFlags.NonPublic | BindingFlags.Static);
+        Vector2 MeasureFrame(string text)
+        {
+            var reaction = Activator.CreateInstance(reactionType, nonPublic: true);
+            reactionType.GetField("Text").SetValue(reaction, text);
+            prepare.Invoke(null, new[] { reaction });
+            return (Vector2)reactionType.GetField("StampLayoutSize").GetValue(reaction);
+        }
+
+        var shortFrame = MeasureFrame("Да");
+        var wideFrame = MeasureFrame("WWWWW");
+        var wrappedFrame = MeasureFrame("Очень длинная надпись, которая должна занять несколько строк внутри рамки");
+        Assert.That(wideFrame.x, Is.GreaterThan(shortFrame.x));
+        Assert.That(wrappedFrame.y, Is.GreaterThan(shortFrame.y));
+        Assert.That(wrappedFrame.x / wrappedFrame.y, Is.InRange(2f, 3.6f));
     }
 
     [Test]
