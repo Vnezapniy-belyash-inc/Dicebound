@@ -19,6 +19,72 @@ public partial class TokenController : NetworkDraggable
     [Header("Appearance")]
     public Color defaultColor = new Color(0.4f, 0.45f, 0.55f);
 
+    private readonly NetworkVariable<int> _debugCasinoSkin = new(-1, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    public void SetDebugCasinoSkin(int tier)
+    {
+        if (IsServer && IsSpawned) _debugCasinoSkin.Value = Mathf.Clamp(tier, 0, 4);
+    }
+    private int _casinoSkin = -1;
+    private static readonly string[] CasinoSkinNames = { "Wood", "Bronze", "Silver", "Gold", "Diamond" };
+    private void UpdateCasinoSkin()
+    {
+        int tier = 0;
+        var session = MimicChestSession.Instance;
+        if (session != null) session.Skins.TryGetValue(ControllerClientId, out tier);
+        if (_debugCasinoSkin.Value >= 0) tier = _debugCasinoSkin.Value;
+        tier = Mathf.Clamp(tier, 0, 4);
+        if (_casinoSkin == tier || _bodyMaterial == null) return;
+        var material = Resources.Load<Material>("TokenSkins/" + CasinoSkinNames[tier]);
+        if (material == null) return;
+        _bodyMaterial.CopyPropertiesFromMaterial(material);
+        UpdateDecorativeRing(tier);
+        _casinoSkin = tier;
+        ApplyAppearance();
+    }
+    private GameObject _decorativeRing;
+    private Mesh _ringMesh;
+    private Material _ringMaterial;
+    private void CreateDecorativeRing()
+    {
+        var source = Resources.Load<Material>("TokenSkins/CartoonRing");
+        if (source == null) return;
+        _decorativeRing = new GameObject("RewardRing", typeof(MeshFilter), typeof(MeshRenderer));
+        _decorativeRing.transform.SetParent(transform, false);
+        _ringMesh = new Mesh { name = "RewardRingMesh" };
+        _ringMaterial = new Material(source);
+        _decorativeRing.GetComponent<MeshFilter>().sharedMesh = _ringMesh;
+        _decorativeRing.GetComponent<MeshRenderer>().sharedMaterial = _ringMaterial;
+        _decorativeRing.SetActive(false);
+    }
+    private void UpdateDecorativeRing(int tier)
+    {
+        if (_decorativeRing == null) return;
+        _decorativeRing.SetActive(tier > 0);
+        if (tier == 0) return;
+        const int segments = 128;
+        var vertices = new Vector3[(segments + 1) * 2];
+        var uv = new Vector2[vertices.Length];
+        var triangles = new int[segments * 6];
+        int tile = tier - 1;
+        var center = new Vector2(tile % 2 == 0 ? .245f : .735f, tile < 2 ? .755f : .265f);
+        for (int i = 0; i <= segments; i++)
+        {
+            float angle = i * Mathf.PI * 2 / segments;
+            var direction = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
+            for (int edge = 0; edge < 2; edge++)
+            {
+                float radius = edge == 0 ? .397f : .502f;
+                vertices[i * 2 + edge] = new Vector3(direction.x * radius, 1.018f, direction.y * radius);
+                uv[i * 2 + edge] = center + direction * (edge == 0 ? .158f : .239f);
+            }
+            if (i == segments) continue;
+            int t = i * 6, v = i * 2;
+            triangles[t] = v; triangles[t+1] = v+2; triangles[t+2] = v+1;
+            triangles[t+3] = v+1; triangles[t+4] = v+2; triangles[t+5] = v+3;
+        }
+        _ringMesh.Clear(); _ringMesh.vertices = vertices; _ringMesh.uv = uv;
+        _ringMesh.triangles = triangles; _ringMesh.RecalculateNormals(); _ringMesh.RecalculateBounds();
+    }
     private Material _bodyMaterial;
     private Material _portraitMaterial;
     private Texture2D _portraitTexture;
@@ -173,6 +239,7 @@ public partial class TokenController : NetworkDraggable
                 _portraitMaterial.color = Color.white;
             }
         }
+        CreateDecorativeRing();
         _appearance = new TokenAppearance(transform);
     }
 
@@ -687,6 +754,7 @@ public partial class TokenController : NetworkDraggable
 
     private void Update()
     {
+        UpdateCasinoSkin();
         UpdateDragState();
         UpdateMovementRequest();
         UpdateTokenPointer();
@@ -870,6 +938,8 @@ public partial class TokenController : NetworkDraggable
         if (_conditionTooltip != null) Destroy(_conditionTooltip.gameObject);
         CloseMenu();
         _appearance?.Dispose();
+        if (_ringMesh != null) Destroy(_ringMesh);
+        if (_ringMaterial != null) Destroy(_ringMaterial);
         if (_bodyMaterial != null) Destroy(_bodyMaterial);
         if (_portraitMaterial != null) Destroy(_portraitMaterial);
         if (_portraitTexture != null) Destroy(_portraitTexture);

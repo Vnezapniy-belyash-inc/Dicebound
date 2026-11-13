@@ -9,7 +9,7 @@ public partial class DmPanelUI
     public void OpenAtlasPage(int page)
     {
         if(!IsLocalHost||_panel==null)return;
-        DiceUI.Instance?.AtlasCloseContext();CharacterSheetUI.Instance?.SetSheetVisible(false);_panel.SetActive(true);ShowPage(Mathf.Clamp(page,0,7));
+        DiceUI.Instance?.AtlasCloseContext();CharacterSheetUI.Instance?.SetSheetVisible(false);_panel.SetActive(true);ShowPage(Mathf.Clamp(page,0,8));
     }
     private void BuildAtlasWorkspace()
     {
@@ -22,12 +22,13 @@ public partial class DmPanelUI
         var close=AtlasUi.Button(header,"×",Hide,dark:true);AtlasUi.Place((RectTransform)close.transform,858,10,44,40);
         var nav=AtlasUi.Column(panel,"WorkspaceSections",12,6);nav.gameObject.AddComponent<Image>().color=AtlasUi.Raised;
         nav.anchorMin=Vector2.zero;nav.anchorMax=new Vector2(0,1);nav.offsetMin=Vector2.zero;nav.offsetMax=new Vector2(180,-62);
-        _pages=new GameObject[8];_tabs=new Image[8];var titles=new[]{"Карта","Игроки","Бой","Токены","Сцена","Туман","Статблоки","Справочник"};
-        for(int i=0;i<8;i++){
+        _pages=new GameObject[9];_tabs=new Image[9];var titles=new[]{"Карта","Игроки","Бой","Токены","Сцена","Туман","Статблоки","Справочник","Бурмалда"};
+        for(int i=0;i<titles.Length;i++){
             int page=i;var b=AtlasUi.Button(nav,titles[i],()=>ShowPage(page),height:44);_tabs[i]=b.GetComponent<Image>();
             var content=AtlasUi.Scroll(panel,"Workspace "+titles[i],out var scroll,24);var root=(RectTransform)scroll.transform;
             root.anchorMin=Vector2.zero;root.anchorMax=Vector2.one;root.offsetMin=new Vector2(190,10);root.offsetMax=new Vector2(-12,-72);
             var heading=AtlasUi.Text(content,titles[i],27,title:true,height:44);
+            if (i == 8) { _pages[i] = root.gameObject; BuildBurmaldaPage(content); continue; }
             var pageRect=AtlasUi.Node(content,"Form "+titles[i]);AtlasUi.Height(pageRect,548);_pages[i]=root.gameObject;
             switch(i){case 0:BuildMapPage(pageRect);break;case 1:BuildPlayersPage(pageRect);break;case 2:BuildInitiativePage(pageRect);break;case 3:BuildTokensPage(pageRect);break;case 4:BuildScenePage(pageRect);break;case 5:BuildFogPage(pageRect);break;case 6:BuildStatBlockPage(pageRect);break;case 7:BuildReferencePage(pageRect);break;}
             ReflowAtlasForm(pageRect);
@@ -94,6 +95,75 @@ public partial class DmPanelUI
     {
         if(!int.TryParse(_atlasAbilities[index].text,out int score)||score<1||score>30){_atlasAbilityModifiers[index].text="—";return;}
         int modifier=Mathf.FloorToInt((score-10)/2f);_atlasAbilityModifiers[index].text=modifier>=0?"+"+modifier:modifier.ToString();
+    }
+
+    private RectTransform _burmaldaPlayers;
+    private Text _burmaldaStatus;
+    private string _burmaldaRoster;
+    private readonly Dictionary<ulong, Text> _burmaldaBalances = new();
+
+    private void BuildBurmaldaPage(Transform content)
+    {
+        AtlasUi.Text(content, "Баланс игроков", 22, title: true, height: 34);
+        AtlasUi.Text(content, "Бурмалды используются для спинов. Один спин — 5 бурмалд.", 16, AtlasUi.Muted, height: 36);
+        _burmaldaPlayers = AtlasUi.Column(content, "BurmaldaPlayers", 0, 10);
+        _burmaldaStatus = AtlasUi.Text(content, "", 16, AtlasUi.Muted, height: 34);
+        AtlasUi.Text(content, "Проверка скинов", 22, title: true, height: 38);
+        AtlasUi.Text(content, "Создаёт пять тестовых токенов: дерево, бронза, серебро, золото и алмаз.", 16, AtlasUi.Muted, height: 46);
+        AtlasUi.Button(content, "Создать 5 токенов для теста скинов", CreateBurmaldaSamples, height: 44);
+        AtlasUi.Text(content, "Тестовые токены удаляются обычным способом. Награды игроков не меняются.", 15, AtlasUi.Muted, height: 44);
+    }
+
+    private void CreateBurmaldaSamples()
+    {
+        if (!IsLocalHost || MimicChestSession.Instance == null || !MimicChestSession.Instance.IsMaster || TokenManager.Instance == null) return;
+        string[] names = { "Дерево", "Бронза", "Серебро", "Золото", "Алмаз" };
+        int created = 0;
+        for (int tier = 0; tier < names.Length; tier++)
+        {
+            var token = TokenManager.Instance.CreateTokenAsHost("Тест скина: " + names[tier], false);
+            if (token == null) continue;
+            token.SetDebugCasinoSkin(tier);
+            created++;
+        }
+        _burmaldaStatus.text = "Создано тестовых токенов: " + created + " из 5";
+    }
+
+    private void RefreshBurmalda()
+    {
+        if (_burmaldaPlayers == null || !IsLocalHost) return;
+        var session = MimicChestSession.Instance;
+        var ids = Unity.Netcode.NetworkManager.Singleton.ConnectedClientsIds.OrderBy(id => id).ToArray();
+        string roster = string.Join("|", ids.Select(id => id + ":" + PlayerColors.GetNickname(id)));
+        if (_burmaldaRoster != roster)
+        {
+            _burmaldaRoster = roster;
+            foreach (Transform child in _burmaldaPlayers) { child.gameObject.SetActive(false); Destroy(child.gameObject); }
+            _burmaldaBalances.Clear();
+            foreach (ulong id in ids)
+            {
+                ulong playerId = id;
+                var card = AtlasUi.Column(_burmaldaPlayers, "Wallet " + id, 12, 6);
+                card.gameObject.AddComponent<Image>().color = AtlasUi.Raised;
+                var name = AtlasUi.Text(card, PlayerColors.GetNickname(id) ?? "Мастер", 18, height: 28);
+                name.supportRichText = false;
+                var row = AtlasUi.Row(card, "BalanceAndGrants", 40, 8);
+                _burmaldaBalances[id] = AtlasUi.Text(row, "", 16, height: 40);
+                foreach (int amount in new[] { 5, 25, 100 })
+                {
+                    int grant = amount;
+                    var button = AtlasUi.Button(row, "+" + amount, () => {
+                        if (!IsLocalHost || MimicChestSession.Instance == null) return;
+                        MimicChestSession.Instance.Grant(playerId, grant);
+                        RefreshBurmalda();
+                    }, height: 40);
+                    AtlasUi.Width(button, 76);
+                }
+            }
+        }
+        foreach (var entry in _burmaldaBalances)
+            entry.Value.text = session != null && session.Balances.TryGetValue(entry.Key, out int balance)
+                ? balance + " бурмалд" : "Загрузка баланса…";
     }
 
 }

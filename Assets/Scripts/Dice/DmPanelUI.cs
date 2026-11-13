@@ -1513,6 +1513,7 @@ public partial class DmPanelUI : MonoBehaviour
 
     private void Refresh()
     {
+        if (_page == 8) RefreshBurmalda();
         if (_page == 0 && _mapScaleText != null)
         {
             var map = MapController.Instance;
