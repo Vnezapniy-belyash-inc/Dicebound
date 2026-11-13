@@ -151,10 +151,7 @@ internal sealed class LssWindowGrip : MonoBehaviour, IBeginDragHandler, IDragHan
 
     private static Texture2D CreateResizeCursor(Vector2 axis)
     {
-        var texture = new Texture2D(CursorSize, CursorSize, TextureFormat.RGBA32, false)
-        {
-            alphaIsTransparency = true
-        };
+        var texture = new Texture2D(CursorSize, CursorSize, TextureFormat.RGBA32, false);
         var pixels = new Color32[CursorSize * CursorSize];
         var center = Vector2.one * (CursorSize / 2 - .5f);
         var normal = new Vector2(-axis.y, axis.x);

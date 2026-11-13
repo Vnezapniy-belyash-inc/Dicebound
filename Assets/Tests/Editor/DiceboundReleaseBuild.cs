@@ -9,8 +9,8 @@ public static class DiceboundReleaseBuild
 {
     public static void BuildWindows()
     {
-        const string version = "0.5.1";
-        const string output = "Builds/0.5.1/Windows-x64/Dicebound.exe";
+        const string version = "0.5.4";
+        const string output = "Builds/0.5.4/Windows-x64/Dicebound.exe";
         PlayerSettings.bundleVersion = version;
         var icon = AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/Resources/Branding/dicebound-icon.png");
         if (icon == null) throw new Exception("Dicebound application icon is missing.");
@@ -30,7 +30,7 @@ public static class DiceboundReleaseBuild
         });
         var summary = report.summary;
         Directory.CreateDirectory("Logs");
-        File.WriteAllText("Logs/release-0.5.1-build-result.json", JsonUtility.ToJson(new Result
+        File.WriteAllText("Logs/release-0.5.4-build-result.json", JsonUtility.ToJson(new Result
         {
             version = version, result = summary.result.ToString(),
             errors = summary.totalErrors, warnings = summary.totalWarnings,
